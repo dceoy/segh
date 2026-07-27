@@ -1,0 +1,11 @@
+name: PR security
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  segh:
+    uses: ./.github/workflows/reusable-pr-security.yml

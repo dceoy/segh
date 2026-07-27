@@ -1,0 +1,94 @@
+name: Reusable PR security
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted segh revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dceoy/segh
+          ref: ${{ github.workflow_sha }}
+          path: _segh
+          persist-credentials: false
+      - name: Check out pull request data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: _target
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Install checksum-verified scanners
+        uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49 # v4.0.5
+        with:
+          aqua_version: v2.62.1
+          working_directory: _segh
+      - name: Build trusted segh binary
+        working-directory: _segh
+        run: go build -trimpath -o ../segh-bin ./cmd/segh
+      - name: Prepare changed-file and base worktrees
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_TREE: ${{ runner.temp }}/segh-base
+        run: |
+          git -C _target diff --name-only -z "$BASE_SHA" "$HEAD_SHA" -- > changed-files.zlist
+          git -C _target worktree add --detach "$BASE_TREE" "$BASE_SHA"
+      - name: Scan current and baseline files
+        env:
+          BASE_TREE: ${{ runner.temp }}/segh-base
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          set +e
+          ./segh-bin --config _segh/config/pr.yaml scan \
+            --path _target \
+            --repository "$TARGET_REPOSITORY" \
+            --changed-file-list0 changed-files.zlist \
+            --output segh-results/head/scan.json \
+            --output-directory segh-results/head
+          head_status=$?
+          ./segh-bin --config _segh/config/pr.yaml scan \
+            --path "$BASE_TREE" \
+            --repository "$TARGET_REPOSITORY" \
+            --changed-file-list0 changed-files.zlist \
+            --output segh-results/base/scan.json \
+            --output-directory segh-results/base
+          base_status=$?
+          if (( head_status > 1 || base_status > 1 )); then
+            exit 5
+          fi
+      - name: Gate new findings
+        run: |
+          ./segh-bin --config _segh/config/pr.yaml pr-gate \
+            --current segh-results/head/sarif \
+            --baseline segh-results/base/sarif \
+            --output segh-results/pr-gate.json \
+            --markdown segh-results/pr-gate.md \
+            --annotations
+      - name: Add operator summary
+        if: always()
+        run: |
+          if test -f segh-results/pr-gate.md; then
+            cat segh-results/pr-gate.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain raw SARIF and normalized results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: segh-pr-${{ github.event.pull_request.number }}
+          path: segh-results
+          if-no-files-found: error
+          retention-days: 14

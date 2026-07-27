@@ -209,6 +209,12 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# segh local build and audit outputs
+/bin/
+/coverage.out
+/segh-results/
+/segh.yaml
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

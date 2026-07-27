@@ -1,0 +1,174 @@
+{
+  "checksums": [
+    {
+      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_Linux-64bit.tar.gz",
+      "checksum": "BBB64B9695866CE4A7A8F5C9592002C5961CAB378577FA3F8A040DF362B9B2EA",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_Linux-ARM64.tar.gz",
+      "checksum": "2CA2C023109C2DB6B2B77366B6717291452D4531167377D95C79547F0C8E3467",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_macOS-64bit.tar.gz",
+      "checksum": "EE5E60DF8A98E5B89FD74A6D86F9E5C7E9A266A35002CB1E43291698B3BFEE08",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_macOS-ARM64.tar.gz",
+      "checksum": "88F208680DC05DA2B459E19B4F5AA2B4DC7C2117892BA4AAB2AE63BABA330016",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_windows-64bit.zip",
+      "checksum": "ED3CF122060F61818FE1F735FD97557954E16E10BC8B058AF9852271CF2E91B3",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-aarch64-apple-darwin.tar.gz",
+      "checksum": "ED336D0BA49DB8EF89B2B41FFFA372CE63BD032F22A56F001C265891AEC32829",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-aarch64-unknown-linux-musl.tar.gz",
+      "checksum": "D70CDAE687FEB6AAD9A09FE8D686DF8C8EFAF69A1007FA581379A2025ADC10A5",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-x86_64-apple-darwin.tar.gz",
+      "checksum": "77F5CA26C0DE20E992A3677A174FE1121EE25C36F9B1434A863F75BF077A05EB",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-x86_64-pc-windows-msvc.zip",
+      "checksum": "ACFDE570451CFDB8689FA159A138EE805BA4E241C466432750302C86254B0984",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-x86_64-unknown-linux-musl.tar.gz",
+      "checksum": "1FD052F196108D87E61FC3D98FE06B4EC758C9A1EB1466A6FD1A436FE45885F2",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-darwin-amd64.tar.gz",
+      "checksum": "F6F06D94B6241521C53D15450C5209B028270BF966F842AFB11C030C79F5BC16",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-darwin-arm64.tar.gz",
+      "checksum": "A9C54498731B3128F79E090BE6110F3E5FFFCCC617B08142ED244D4126C73F29",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-linux-amd64.tar.gz",
+      "checksum": "8DF580D2670FED8FA984AAC0507099AF8DF275E665215F5C7A2AE3943893A553",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-linux-arm64.tar.gz",
+      "checksum": "44CD40A8C76C86755375ADFEEA52CFD3533CB43D7BD647771E0AE065E166DF3A",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-windows-amd64.zip",
+      "checksum": "BD42E3EBC8CB4ECECB86941983BAAF1DC221BBB04D838E94CE63B49CC91E02BB",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-windows-arm64.zip",
+      "checksum": "947B9A5BF762D465710B376C156F0184ABB2168378B0826AF1899E0EE7183742",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_darwin_amd64.tar.gz",
+      "checksum": "979487CA20E726F6A4D2BD63A0A4C544184F589724B3D12D2BA8D0EA80889063",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_darwin_arm64.tar.gz",
+      "checksum": "BAC6371A4F810D6BDD0B65D63C3311906BDFE3BA0D76A5EA743CE24CED170FCF",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_linux_amd64.tar.gz",
+      "checksum": "83B90A05C1540EF1390DB1CD5711E5FD04BE9C1D8537FB84D39D02092D6A8DFF",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_linux_arm64.tar.gz",
+      "checksum": "3CE59D20C1D53E540C4A14E0DA1E0D96B3B294E8DDC96A3C5A7B8A637B32991E",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_windows_amd64.tar.gz",
+      "checksum": "21CA42B37260785E670C58F602B483510099E7B1988E3C6EB5005F143DC2A2AB",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_windows_arm64.tar.gz",
+      "checksum": "375CCF037552CF2CA105B9143311ED9128C669352D29FAEB6BD11024E5D0BE4A",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/rhysd/actionlint/v1.7.12/actionlint_1.7.12_darwin_amd64.tar.gz",
+      "checksum": "5B44C3BC2255115C9B69E30EFC0FECDF498FDB63C5D58E17084FD5F16324C644",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/rhysd/actionlint/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz",
+      "checksum": "ABA9CED2DEE8D27FECCA3DC7FEB1A7F9A52CAEFA1EB46F3271EA66B6E0E6953F",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/rhysd/actionlint/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz",
+      "checksum": "8ACA8DB96F1B94770F1B0D72B6DDDCB1EBB8123CB3712530B08CC387B349A3D8",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/rhysd/actionlint/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz",
+      "checksum": "325E971B6BA9BFA504672E29BE93C24981EEB1C07576D730E9F7C8805AFFF0C6",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/rhysd/actionlint/v1.7.12/actionlint_1.7.12_windows_amd64.zip",
+      "checksum": "6E7241B51E6817EA6A047693D8E6FED13B31819C9A0DD6C5A726E1592D22F6E9",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/rhysd/actionlint/v1.7.12/actionlint_1.7.12_windows_arm64.zip",
+      "checksum": "CADCF7EA4EFE3A68728893813643CEBE1185E5B1D4BE5B96245F65C9A4D5EA41",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-aarch64-apple-darwin.tar.gz",
+      "checksum": "54949BBD6B4C8527046BB8990BAC9E0DAB3EEC787640F4E6199AE121DD1040BE",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-aarch64-unknown-linux-gnu.tar.gz",
+      "checksum": "324E43770CFACF4216F8AEFB287263B5B5C733C85B03BF7583B5CC4A0460239E",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-x86_64-apple-darwin.tar.gz",
+      "checksum": "40A58D8560D65C71357B3977D0DA425773BF8F10BF1FFD38099D963D3AFDF3AA",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-x86_64-pc-windows-msvc.zip",
+      "checksum": "06E5B2345323201ED4C55897651862FEE3B43F79DDCED799F1236F0F0D1C1C0F",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-x86_64-unknown-linux-gnu.tar.gz",
+      "checksum": "E87B67160194884E375A46A12C57CCC904F762B53845F254FAB7F17D98809C09",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "registries/github_content/github.com/aquaproj/aqua-registry/v4.544.0/registry.yaml",
+      "checksum": "ED73709C88FA03BE758F78C25A35C07D48E2FA9D19E407F89FC36989A306E111",
+      "algorithm": "sha256"
+    }
+  ]
+}

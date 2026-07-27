@@ -1,0 +1,84 @@
+version: 1
+organization: dceoy
+github:
+  web_url: https://github.com
+  api_url: https://api.github.com
+  graphql_url: https://api.github.com/graphql
+auth:
+  app_id: 0
+  installation_id: 0
+  private_key_env: SEGH_GITHUB_APP_PRIVATE_KEY
+  token_env: SEGH_GITHUB_TOKEN
+  allow_existing_token: false
+selectors:
+  exclude_archived: true
+  exclude_disabled: true
+  exclude_forks: true
+policies:
+  actions:
+    enabled: true
+    allowed_actions: selected
+    default_workflow_permissions: read
+    require_full_sha: true
+    require_sha_pinning_enforcement: false
+    require_renovate: true
+  code_security:
+    codeql: required
+    secret_scanning: required
+    push_protection: required
+    dependency_graph: required
+    dependabot_alerts: required
+    dependabot_security_updates: required
+  repository:
+    require_ruleset: true
+    require_pull_request: true
+    require_required_checks: true
+    restrict_force_pushes: true
+    restrict_deletions: true
+    require_security_md: true
+suppressions: []
+scanners:
+  zizmor:
+    enabled: true
+    version: 1.28.0
+    timeout: 5m
+    cpu_seconds: 300
+    memory_mb: 2048
+  trivy:
+    enabled: true
+    version: 0.72.0
+    timeout: 10m
+    cpu_seconds: 600
+    memory_mb: 3072
+  scorecard:
+    enabled: true
+    version: 5.5.0
+    timeout: 10m
+    cpu_seconds: 600
+    memory_mb: 2048
+  semgrep:
+    enabled: false
+    version: 1.171.0
+    rules: []
+execution:
+  concurrency: 4
+  repository_timeout: 25m
+  total_timeout: 6h
+  api_timeout: 30s
+  max_retries: 4
+  base_retry_delay: 1s
+  dry_run: false
+publication:
+  enabled: true
+  poll_timeout: 2m
+  category_prefix: segh
+output:
+  directory: segh-results
+  jsonl: true
+  retention_days: 14
+pull_request:
+  report_only: true
+  thresholds:
+    default:
+      minimum_severity: high
+      rules: []

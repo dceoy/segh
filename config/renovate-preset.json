@@ -1,0 +1,21 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "segh preset: pin GitHub Actions to immutable digests and preserve version comments",
+  "extends": [
+    "helpers:pinGitHubActionDigests"
+  ],
+  "enabledManagers": [
+    "github-actions"
+  ],
+  "packageRules": [
+    {
+      "description": "Update pinned GitHub Actions through reviewable pull requests",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "pinDigests": true,
+      "rangeStrategy": "pin",
+      "groupName": "github-actions-digests"
+    }
+  ]
+}
