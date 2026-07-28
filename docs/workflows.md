@@ -39,8 +39,13 @@ scheduled run.
 ## Pull-request workflow
 
 `.github/workflows/reusable-pr-security.yml` is a reusable `workflow_call`
-workflow. Organization rulesets can require it where required-workflow support
-is available. The fallback is a small workflow in each repository:
+workflow. GitHub's "require workflows to pass before merging" ruleset rule only
+invokes workflows whose `on:` section includes `pull_request`,
+`pull_request_target`, or `merge_group`; a `workflow_call`-only file is never
+triggered by a ruleset directly, regardless of required-workflow support.
+Point organization rulesets at a small `pull_request`-triggered caller workflow
+in each repository instead (see `pr-security.yml` in this repository), not at
+`reusable-pr-security.yml` itself:
 
 ```yaml
 name: segh

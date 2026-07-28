@@ -102,6 +102,57 @@ func Read(path string) (Log, error) {
 	return log, nil
 }
 
+// InjectCategory returns a copy of the SARIF document with runs[].automationDetails.id
+// set to category. GitHub's code-scanning SARIF upload API derives the analysis category
+// from that field, not from a request-level "category" parameter, so this must run before
+// upload. Every other field is passed through untouched via json.RawMessage so that
+// artifacts, invocations, results, and any other run/document content survive unmodified.
+//
+// GitHub splits automationDetails.id at the last "/": everything before it is the
+// category, everything after is a separate per-run identifier. A trailing "/" is
+// required so the entire string is treated as the category with no run identifier;
+// without it, a value like "segh/zizmor" would be parsed as category "segh".
+func InjectCategory(data []byte, category string) ([]byte, error) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("decode SARIF for category injection: %w", err)
+	}
+	rawRuns, ok := doc["runs"]
+	if !ok {
+		return nil, fmt.Errorf("SARIF document has no runs")
+	}
+	var runs []json.RawMessage
+	if err := json.Unmarshal(rawRuns, &runs); err != nil {
+		return nil, fmt.Errorf("decode SARIF runs for category injection: %w", err)
+	}
+	automationDetails, err := json.Marshal(map[string]string{"id": category + "/"})
+	if err != nil {
+		return nil, fmt.Errorf("encode automationDetails: %w", err)
+	}
+	for i, rawRun := range runs {
+		var run map[string]json.RawMessage
+		if err := json.Unmarshal(rawRun, &run); err != nil {
+			return nil, fmt.Errorf("decode SARIF run for category injection: %w", err)
+		}
+		run["automationDetails"] = automationDetails
+		updated, err := json.Marshal(run)
+		if err != nil {
+			return nil, fmt.Errorf("encode SARIF run for category injection: %w", err)
+		}
+		runs[i] = updated
+	}
+	updatedRuns, err := json.Marshal(runs)
+	if err != nil {
+		return nil, fmt.Errorf("encode SARIF runs for category injection: %w", err)
+	}
+	doc["runs"] = updatedRuns
+	updated, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("encode SARIF document for category injection: %w", err)
+	}
+	return updated, nil
+}
+
 type preparedFinding struct {
 	result  Result
 	finding Finding

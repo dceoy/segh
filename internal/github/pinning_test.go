@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/dceoy/segh/internal/config"
@@ -132,6 +133,51 @@ func TestWorkflowPinningLocalCompositeActionFullyPinned(t *testing.T) {
 	pinned, status := service.workflowPinning(context.Background(), "/repos/org/repo", "main")
 	if !pinned.Value {
 		t.Fatalf("pinned = %#v, want true", pinned)
+	}
+	if status.Value != "pinned_freshness_unknown" {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestWorkflowPinningRejectsMutableDockerTag(t *testing.T) {
+	workflow := "on: push\njobs:\n  build:\n    steps:\n      - uses: docker://alpine:latest\n"
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows" && request.URL.RawQuery == "ref=main":
+			_, _ = io.WriteString(writer, `[{"name":"ci.yml","type":"file"}]`)
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows/ci.yml":
+			_, _ = io.WriteString(writer, contentResponse(workflow))
+		default:
+			t.Errorf("unexpected request: %s?%s", request.URL.Path, request.URL.RawQuery)
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	})
+	pinned, status := service.workflowPinning(context.Background(), "/repos/org/repo", "main")
+	if pinned.Value {
+		t.Fatalf("pinned = %#v, want false due to mutable docker tag", pinned)
+	}
+	if status.Value != "unpinned" {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestWorkflowPinningAcceptsDigestPinnedDockerImage(t *testing.T) {
+	digest := strings.Repeat("0123456789abcdef", 4)
+	workflow := fmt.Sprintf("on: push\njobs:\n  build:\n    steps:\n      - uses: docker://ghcr.io/org/image@sha256:%s\n", digest)
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows" && request.URL.RawQuery == "ref=main":
+			_, _ = io.WriteString(writer, `[{"name":"ci.yml","type":"file"}]`)
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows/ci.yml":
+			_, _ = io.WriteString(writer, contentResponse(workflow))
+		default:
+			t.Errorf("unexpected request: %s?%s", request.URL.Path, request.URL.RawQuery)
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	})
+	pinned, status := service.workflowPinning(context.Background(), "/repos/org/repo", "main")
+	if !pinned.Value {
+		t.Fatalf("pinned = %#v, want true for digest-pinned docker image", pinned)
 	}
 	if status.Value != "pinned_freshness_unknown" {
 		t.Fatalf("status = %#v", status)

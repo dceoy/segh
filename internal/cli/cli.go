@@ -407,6 +407,15 @@ func runPublish(ctx context.Context, cfg config.Config, args []string, stdout io
 			inventoryRepos[repository.FullName] = repository
 		}
 	}
+	// Bind publication to the commit segh actually cloned and scanned, not the inventory's
+	// default-branch SHA captured earlier: the branch can move between inventory and clone,
+	// and publishing against a stale SHA would attribute findings to the wrong tree.
+	scannedCommits := map[string]string{}
+	for _, execution := range scanRun.Repositories {
+		if execution.CommitSHA != "" {
+			scannedCommits[execution.Repository] = execution.CommitSHA
+		}
+	}
 	var publications []model.Publication
 	for _, result := range scanRun.Results {
 		if result.ResultPath == "" || !strings.EqualFold(filepath.Ext(result.ResultPath), ".sarif") ||
@@ -414,18 +423,15 @@ func runPublish(ctx context.Context, cfg config.Config, args []string, stdout io
 			continue
 		}
 		category := cfg.Publication.CategoryPrefix + "/" + result.Scanner
-		targetSHA, targetRef := *commitSHA, *ref
-		if *inventoryPath != "" {
-			repository, exists := inventoryRepos[result.Repository]
-			if !exists || repository.DefaultBranchSHA.State != model.Available {
-				publications = append(publications, model.Publication{
-					Repository: result.Repository, Scanner: result.Scanner, Category: category,
-					Status: model.PublicationRejected, Error: "inventory lacks a known default-branch SHA",
-				})
-				continue
-			}
-			targetSHA = repository.DefaultBranchSHA.Value
-			targetRef = "refs/heads/" + repository.DefaultBranch
+		targetSHA, targetRef, rejectReason := publicationTarget(
+			result.Repository, *inventoryPath != "", *commitSHA, *ref, inventoryRepos, scannedCommits,
+		)
+		if rejectReason != "" {
+			publications = append(publications, model.Publication{
+				Repository: result.Repository, Scanner: result.Scanner, Category: category,
+				Status: model.PublicationRejected, Error: rejectReason,
+			})
+			continue
 		}
 		sarifPath, pathErr := secureArtifactPath(cfg.Output.Directory, result.ResultPath)
 		if pathErr != nil {
@@ -629,6 +635,30 @@ func requiresAuth(targets []scanner.Target, cfg config.Config) bool {
 		}
 	}
 	return false
+}
+
+// publicationTarget resolves the commit SHA and ref to publish a repository's SARIF
+// against. When an inventory is in use it binds to the commit segh actually cloned and
+// scanned (scannedCommits, keyed by repository), never the inventory's earlier-observed
+// default-branch SHA, since the branch can move between inventory and clone and publishing
+// against a stale SHA would attribute findings to the wrong tree. A non-empty rejectReason
+// means the repository must not be published.
+func publicationTarget(
+	repository string, hasInventory bool, flagSHA, flagRef string,
+	inventoryRepos map[string]model.Repository, scannedCommits map[string]string,
+) (sha, ref, rejectReason string) {
+	if !hasInventory {
+		return flagSHA, flagRef, ""
+	}
+	target, exists := inventoryRepos[repository]
+	if !exists || target.DefaultBranch == "" {
+		return "", "", "repository not found in inventory"
+	}
+	scannedSHA, scanned := scannedCommits[repository]
+	if !scanned {
+		return "", "", "no recorded scanned commit SHA for repository"
+	}
+	return scannedSHA, "refs/heads/" + target.DefaultBranch, ""
 }
 
 func retainedPublications(scanRun model.ScanRun, cfg config.Config, sha, ref string) []model.Publication {

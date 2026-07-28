@@ -19,6 +19,7 @@ import (
 
 var usesPattern = regexp.MustCompile(`(?m)^\s*(?:-\s*)?uses:\s*["']?([^@"'\s]+)(?:@([^"'\s#]+)(?:["']?\s*#\s*([A-Za-z0-9_.+/-]+))?)?`)
 var fullSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+var dockerDigestPattern = regexp.MustCompile(`(?i)^sha256:[0-9a-f]{64}$`)
 
 type InventoryService struct {
 	cfg    config.Config
@@ -545,6 +546,13 @@ func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceNam
 	for _, match := range usesPattern.FindAllSubmatch(decoded, -1) {
 		action, ref := string(match[1]), string(match[2])
 		if strings.HasPrefix(action, "docker://") {
+			// docker:// tags carry no freshness signal comparable to a GitHub ref, so a
+			// digest-pinned image is counted as an action but never marked "resolved";
+			// an unpinned tag (or no tag/digest at all) is treated as mutable.
+			counts.actions++
+			if !dockerDigestPattern.MatchString(ref) {
+				return sourceName, nil
+			}
 			continue
 		}
 		if strings.HasPrefix(action, "./") {

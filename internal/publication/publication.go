@@ -66,6 +66,17 @@ func (p *Publisher) Upload(ctx context.Context, repository, scanner, category, c
 		result.Status, result.Error = model.PublicationRejected, "SARIF must be between 1 byte and 50 MiB"
 		return result
 	}
+	// GitHub derives the analysis category from runs[].automationDetails.id, not from a
+	// request-level "category" field, so it must be injected into the SARIF itself.
+	data, err = sarif.InjectCategory(data, category)
+	if err != nil {
+		result.Status, result.Error = model.PublicationRejected, "inject analysis category into SARIF"
+		return result
+	}
+	if len(data) > 50<<20 {
+		result.Status, result.Error = model.PublicationRejected, "SARIF must be between 1 byte and 50 MiB"
+		return result
+	}
 	var compressed bytes.Buffer
 	writer := gzip.NewWriter(&compressed)
 	if _, err := writer.Write(data); err != nil {
@@ -81,7 +92,6 @@ func (p *Publisher) Upload(ctx context.Context, repository, scanner, category, c
 		"ref":        ref,
 		"sarif":      base64.StdEncoding.EncodeToString(compressed.Bytes()),
 		"tool_name":  scanner,
-		"category":   category,
 	}
 	var response struct {
 		ID  string `json:"id"`

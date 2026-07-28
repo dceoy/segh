@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -117,6 +118,45 @@ func TestCountScorecardIndividualChecks(t *testing.T) {
 	}
 }
 
+func TestResolveHeadSHAReturnsCheckedOutCommit(t *testing.T) {
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	run("init", "--initial-branch=main")
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "file.txt")
+	run("commit", "-m", "initial")
+	expected, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output() // #nosec G204 -- dir is a t.TempDir() path this test created.
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha, err := resolveHeadSHA(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha != strings.TrimSpace(string(expected)) {
+		t.Fatalf("sha = %q, want %q", sha, strings.TrimSpace(string(expected)))
+	}
+}
+
+func TestResolveHeadSHARejectsNonGitDirectory(t *testing.T) {
+	if _, err := resolveHeadSHA(context.Background(), t.TempDir()); err == nil {
+		t.Fatal("expected error for a directory that is not a git worktree")
+	}
+}
+
 func TestValidateCloneURLBindsHostAndRepository(t *testing.T) {
 	cfg := config.Default()
 	cfg.GitHub.WebURL = "https://github.example"
@@ -135,6 +175,32 @@ func TestValidateCloneURLBindsHostAndRepository(t *testing.T) {
 		if err := service.validateCloneURL(repo); err == nil {
 			t.Fatalf("accepted unsafe clone URL %q", unsafe)
 		}
+	}
+}
+
+func TestScorecardHostDerivesBareHostForGHES(t *testing.T) {
+	host, err := scorecardHost("https://github.example.corp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "github.example.corp" {
+		t.Fatalf("host = %q, want bare GHES host", host)
+	}
+}
+
+func TestScorecardHostLeavesGitHubComUnset(t *testing.T) {
+	host, err := scorecardHost("https://github.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "" {
+		t.Fatalf("host = %q, want empty so GH_HOST is left unset for the default host", host)
+	}
+}
+
+func TestScorecardHostRejectsUnparsableURL(t *testing.T) {
+	if _, err := scorecardHost(""); err == nil {
+		t.Fatal("expected error for empty GitHub web URL")
 	}
 }
 

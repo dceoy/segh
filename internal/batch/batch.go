@@ -10,6 +10,9 @@ import (
 	"github.com/dceoy/segh/internal/output"
 )
 
+// maxMatrixEntries is GitHub Actions' hard limit on jobs generated from a single matrix.
+const maxMatrixEntries = 256
+
 type Matrix struct {
 	Include []MatrixEntry `json:"include"`
 }
@@ -45,6 +48,12 @@ func Write(inventory model.Inventory, size int, repositories []string, outputDir
 				return Matrix{}, fmt.Errorf("target repository %q is not in the inventory", requested)
 			}
 		}
+	}
+	if batches := (len(selected) + size - 1) / size; batches > maxMatrixEntries {
+		return Matrix{}, fmt.Errorf(
+			"batch size %d over %d repositories would produce %d matrix entries, exceeding the GitHub Actions limit of %d; increase --size",
+			size, len(selected), batches, maxMatrixEntries,
+		)
 	}
 	matrix := Matrix{}
 	for offset, index := 0, 0; offset < len(selected); offset, index = offset+size, index+1 {

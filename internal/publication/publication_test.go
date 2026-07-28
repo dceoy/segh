@@ -44,8 +44,11 @@ func TestUploadSuccessUsesExactContextAndPolls(t *testing.T) {
 	if result.Status != model.PublicationSucceeded || result.SARIFID != "123" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if posted["commit_sha"] != strings.Repeat("a", 40) || posted["ref"] != "refs/heads/main" || posted["category"] != "segh/zizmor" {
+	if posted["commit_sha"] != strings.Repeat("a", 40) || posted["ref"] != "refs/heads/main" {
 		t.Fatalf("mismatched context: %#v", posted)
+	}
+	if _, exists := posted["category"]; exists {
+		t.Fatalf("GitHub's SARIF upload API does not use a request-level category field: %#v", posted)
 	}
 	compressed, err := base64.StdEncoding.DecodeString(posted["sarif"].(string))
 	if err != nil {
@@ -55,8 +58,25 @@ func TestUploadSuccessUsesExactContextAndPolls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := io.ReadAll(reader); !strings.Contains(string(data), `"version":"2.1.0"`) {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"version":"2.1.0"`) {
 		t.Fatalf("unexpected SARIF payload: %s", data)
+	}
+	var uploaded struct {
+		Runs []struct {
+			AutomationDetails struct {
+				ID string `json:"id"`
+			} `json:"automationDetails"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(data, &uploaded); err != nil {
+		t.Fatal(err)
+	}
+	if len(uploaded.Runs) != 1 || uploaded.Runs[0].AutomationDetails.ID != "segh/zizmor/" {
+		t.Fatalf("expected runs[].automationDetails.id = segh/zizmor/, got %#v", uploaded.Runs)
 	}
 }
 

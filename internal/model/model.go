@@ -166,6 +166,11 @@ type RepositoryExecution struct {
 	QueueMS    int64     `json:"queue_ms"`
 	DurationMS int64     `json:"duration_ms"`
 	Status     string    `json:"status"`
+	// CommitSHA is the commit actually checked out and scanned (resolved after clone),
+	// not the inventory's default-branch SHA captured at inventory time. Publication must
+	// bind SARIF uploads to this value so findings are never attributed to a commit other
+	// than the one that was scanned.
+	CommitSHA string `json:"commit_sha,omitempty"`
 }
 
 type PublicationStatus string

@@ -29,6 +29,47 @@ func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
 	}
 }
 
+func TestPublicationTargetUsesScannedCommitNotInventorySHA(t *testing.T) {
+	inventoryRepos := map[string]model.Repository{
+		"org/repo": {FullName: "org/repo", DefaultBranch: "main"},
+	}
+	scannedCommits := map[string]string{"org/repo": strings.Repeat("a", 40)}
+	sha, ref, reject := publicationTarget("org/repo", true, "", "", inventoryRepos, scannedCommits)
+	if reject != "" {
+		t.Fatalf("unexpected rejection: %s", reject)
+	}
+	if sha != strings.Repeat("a", 40) || ref != "refs/heads/main" {
+		t.Fatalf("sha = %q, ref = %q", sha, ref)
+	}
+}
+
+func TestPublicationTargetRejectsMissingScannedCommit(t *testing.T) {
+	inventoryRepos := map[string]model.Repository{
+		"org/repo": {FullName: "org/repo", DefaultBranch: "main"},
+	}
+	_, _, reject := publicationTarget("org/repo", true, "", "", inventoryRepos, map[string]string{})
+	if reject == "" {
+		t.Fatal("expected rejection when no scanned commit SHA was recorded")
+	}
+}
+
+func TestPublicationTargetRejectsRepositoryNotInInventory(t *testing.T) {
+	_, _, reject := publicationTarget("org/missing", true, "", "", map[string]model.Repository{}, map[string]string{})
+	if reject == "" {
+		t.Fatal("expected rejection for a repository absent from the inventory")
+	}
+}
+
+func TestPublicationTargetUsesFlagsWithoutInventory(t *testing.T) {
+	sha, ref, reject := publicationTarget("org/repo", false, strings.Repeat("b", 40), "refs/heads/main", nil, nil)
+	if reject != "" {
+		t.Fatalf("unexpected rejection: %s", reject)
+	}
+	if sha != strings.Repeat("b", 40) || ref != "refs/heads/main" {
+		t.Fatalf("sha = %q, ref = %q", sha, ref)
+	}
+}
+
 func TestScanRunErrorCatchesRunLevelFailuresWithoutFailedResults(t *testing.T) {
 	for _, test := range []struct {
 		name string

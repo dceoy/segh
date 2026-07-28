@@ -1,6 +1,9 @@
 package sarif
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestFindingsPreserveNativeData(t *testing.T) {
 	log := Log{
@@ -32,6 +35,50 @@ func TestFindingsPreserveNativeData(t *testing.T) {
 	}
 	if got.Fingerprint == "" {
 		t.Fatal("missing fingerprint")
+	}
+}
+
+func TestInjectCategorySetsAutomationDetailsAndPreservesUnknownFields(t *testing.T) {
+	input := `{"version":"2.1.0","$schema":"https://example/schema","runs":[` +
+		`{"tool":{"driver":{"name":"trivy"}},"results":[],"artifacts":[{"location":{"uri":"a"}}],"properties":{"x":1}},` +
+		`{"tool":{"driver":{"name":"trivy"}},"results":[],"automationDetails":{"id":"old"}}` +
+		`]}`
+	output, err := InjectCategory([]byte(input), "segh/trivy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Schema string `json:"$schema"`
+		Runs   []struct {
+			AutomationDetails struct {
+				ID string `json:"id"`
+			} `json:"automationDetails"`
+			Artifacts  []map[string]any `json:"artifacts"`
+			Properties map[string]any   `json:"properties"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(output, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Schema != "https://example/schema" {
+		t.Fatalf("unrelated top-level field lost: %#v", doc)
+	}
+	if len(doc.Runs) != 2 {
+		t.Fatalf("runs = %d", len(doc.Runs))
+	}
+	for i, run := range doc.Runs {
+		if run.AutomationDetails.ID != "segh/trivy/" {
+			t.Fatalf("run %d automationDetails.id = %q, want segh/trivy/ (trailing slash keeps the whole string as the category)", i, run.AutomationDetails.ID)
+		}
+	}
+	if len(doc.Runs[0].Artifacts) != 1 || doc.Runs[0].Properties["x"] != float64(1) {
+		t.Fatalf("unrelated run fields lost: %#v", doc.Runs[0])
+	}
+}
+
+func TestInjectCategoryRejectsDocumentWithoutRuns(t *testing.T) {
+	if _, err := InjectCategory([]byte(`{"version":"2.1.0"}`), "segh/trivy"); err == nil {
+		t.Fatal("expected error for SARIF document without runs")
 	}
 }
 

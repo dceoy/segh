@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -99,7 +100,7 @@ func (s *Service) Run(ctx context.Context, targets []Target, configDigest, runID
 			defer workers.Done()
 			for item := range jobs {
 				started := time.Now().UTC()
-				items, errs := s.scanRepository(totalCtx, item.target)
+				items, errs, commitSHA := s.scanRepository(totalCtx, item.target)
 				finished := time.Now().UTC()
 				status := "complete"
 				if len(errs) > 0 {
@@ -112,6 +113,7 @@ func (s *Service) Run(ctx context.Context, targets []Target, configDigest, runID
 						QueuedAt:   item.queuedAt, StartedAt: started, FinishedAt: finished,
 						QueueMS:    started.Sub(item.queuedAt).Milliseconds(),
 						DurationMS: finished.Sub(started).Milliseconds(), Status: status,
+						CommitSHA: commitSHA,
 					},
 				}
 			}
@@ -153,24 +155,25 @@ func (s *Service) Run(ctx context.Context, targets []Target, configDigest, runID
 	return run
 }
 
-func (s *Service) scanRepository(ctx context.Context, target Target) ([]model.ScannerResult, []model.RunError) {
+func (s *Service) scanRepository(ctx context.Context, target Target) ([]model.ScannerResult, []model.RunError, string) {
 	repository := target.Repository.FullName
 	repoCtx, cancel := context.WithTimeout(ctx, s.cfg.Execution.RepositoryTimeout)
 	defer cancel()
 	workPath := target.Path
 	var cleanup func()
+	var commitSHA string
 	if workPath == "" && !s.cfg.Execution.DryRun {
 		var err error
-		workPath, cleanup, err = s.clone(repoCtx, target.Repository)
+		workPath, cleanup, commitSHA, err = s.clone(repoCtx, target.Repository)
 		if err != nil {
-			return nil, []model.RunError{{Repository: repository, Component: "clone", Kind: "runtime", Message: err.Error()}}
+			return nil, []model.RunError{{Repository: repository, Component: "clone", Kind: "runtime", Message: err.Error()}}, ""
 		}
 		defer cleanup()
 	}
 	if len(target.Files) > 0 && !s.cfg.Execution.DryRun {
 		filtered, filteredCleanup, err := filteredTree(workPath, target.Files)
 		if err != nil {
-			return nil, []model.RunError{{Repository: repository, Component: "filter", Kind: "untrusted_path", Message: err.Error()}}
+			return nil, []model.RunError{{Repository: repository, Component: "filter", Kind: "untrusted_path", Message: err.Error()}}, ""
 		}
 		defer filteredCleanup()
 		workPath = filtered
@@ -200,7 +203,7 @@ func (s *Service) scanRepository(ctx context.Context, target Target) ([]model.Sc
 			})
 		}
 	}
-	return results, errs
+	return results, errs, commitSHA
 }
 
 func (s *Service) definitions() []definition {
@@ -273,11 +276,15 @@ func (s *Service) execute(parent context.Context, repo model.Repository, workPat
 			result.Status, result.Error = model.ScannerFailed, "obtain read-only token for Scorecard"
 			return result
 		}
-		cmd.Env = append(cmd.Env,
-			"GITHUB_AUTH_TOKEN="+token,
-			"GITHUB_API_URL="+strings.TrimRight(s.cfg.GitHub.APIURL, "/"),
-			"GITHUB_SERVER_URL="+strings.TrimRight(s.cfg.GitHub.WebURL, "/"),
-		)
+		host, hostErr := scorecardHost(s.cfg.GitHub.WebURL)
+		if hostErr != nil {
+			result.Status, result.Error = model.ScannerFailed, hostErr.Error()
+			return result
+		}
+		cmd.Env = append(cmd.Env, "GITHUB_AUTH_TOKEN="+token)
+		if host != "" {
+			cmd.Env = append(cmd.Env, "GH_HOST="+host)
+		}
 	}
 	cmd.Stderr = &limitedWriter{writer: diagnostic, remaining: 10 << 20}
 	var sarifOutput *os.File
@@ -415,20 +422,26 @@ func countFindings(scannerName, path string) (int, error) {
 	return findings, nil
 }
 
-func (s *Service) clone(ctx context.Context, repo model.Repository) (string, func(), error) {
+// clone checks out repo's default branch and returns the worktree path, a cleanup
+// function, and the commit SHA actually checked out (resolved after clone, since
+// DefaultBranch is a moving ref that may have advanced past the inventory's recorded
+// default-branch SHA between inventory time and clone time). Callers must publish
+// findings against this resolved SHA, not any earlier-observed one, so that SARIF
+// uploads are never attributed to a commit other than the one that was scanned.
+func (s *Service) clone(ctx context.Context, repo model.Repository) (string, func(), string, error) {
 	if err := s.validateCloneURL(repo); err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	root, err := os.MkdirTemp("", "segh-repository-*")
 	if err != nil {
-		return "", nil, fmt.Errorf("create repository worktree: %w", err)
+		return "", nil, "", fmt.Errorf("create repository worktree: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(root) }
 	destination := filepath.Join(root, "source")
 	token, err := s.tokens.Token(ctx)
 	if err != nil {
 		cleanup()
-		return "", nil, err
+		return "", nil, "", err
 	}
 	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--single-branch", "--no-tags", "--branch", repo.DefaultBranch, "--", repo.CloneURL, destination) // #nosec G204 -- URL is bound to the configured GitHub host/repository and no shell is used.
 	cmd.Env = append(safeBaseEnvironment(),
@@ -440,9 +453,51 @@ func (s *Service) clone(ctx context.Context, repo model.Repository) (string, fun
 	output, err := limitedCombinedOutput(cmd, 1<<20)
 	if err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("clone failed: %s", sanitizeDiagnostic(output))
+		return "", nil, "", fmt.Errorf("clone failed: %s", sanitizeDiagnostic(output))
 	}
-	return destination, cleanup, nil
+	commitSHA, err := resolveHeadSHA(ctx, destination)
+	if err != nil {
+		cleanup()
+		return "", nil, "", err
+	}
+	return destination, cleanup, commitSHA, nil
+}
+
+var fullSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+// resolveHeadSHA returns the full commit SHA checked out at worktree. stdout and stderr
+// are captured separately, since a stray git advice/warning line on stderr must not be
+// parsed as part of the SHA.
+func resolveHeadSHA(ctx context.Context, worktree string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", worktree, "rev-parse", "HEAD") // #nosec G204 -- worktree is a path segh itself created via os.MkdirTemp.
+	cmd.Env = safeBaseEnvironment()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &limitedWriter{writer: &stdout, remaining: 4096}
+	cmd.Stderr = &limitedWriter{writer: &stderr, remaining: 4096}
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("resolve scanned commit SHA: %s", sanitizeDiagnostic(stderr.String()))
+	}
+	sha := strings.TrimSpace(stdout.String())
+	if !fullSHAPattern.MatchString(sha) {
+		return "", fmt.Errorf("resolve scanned commit SHA: unexpected git output")
+	}
+	return sha, nil
+}
+
+// scorecardHost derives the GH_HOST value Scorecard expects (a bare host, no scheme or
+// trailing slash) from the configured GitHub web URL, for GitHub Enterprise Server hosts;
+// GITHUB_API_URL/GITHUB_SERVER_URL are not recognized by Scorecard. It returns "" for the
+// default github.com host so callers leave GH_HOST unset on the common path rather than
+// exercising Scorecard's Enterprise-host handling for a host that needs none of it.
+func scorecardHost(webURL string) (string, error) {
+	parsed, err := url.Parse(webURL)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("resolve GitHub host for Scorecard")
+	}
+	if strings.EqualFold(parsed.Host, "github.com") {
+		return "", nil
+	}
+	return parsed.Host, nil
 }
 
 func (s *Service) validateCloneURL(repo model.Repository) error {
