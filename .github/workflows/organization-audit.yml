@@ -1,8 +1,6 @@
 name: Organization security audit
 
 on:
-  schedule:
-    - cron: "27 3 * * 1"
   workflow_dispatch:
     inputs:
       dry_run:

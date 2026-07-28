@@ -2,7 +2,7 @@
 
 ## Organization audit
 
-`.github/workflows/organization-audit.yml` supports schedule and
+`.github/workflows/organization-audit.yml` ships with only
 `workflow_dispatch`. It inventories first, creates lexically deterministic
 batches, scans each batch with `fail-fast: false`, and aggregates every
 available result under `if: always()`. A failed repository or scanner is a
@@ -22,16 +22,19 @@ Required Actions secrets are `SEGH_READ_APP_ID`,
 `SEGH_READ_APP_PRIVATE_KEY`. Publication uses a distinct
 `SEGH_PUBLISH_APP_ID`, `SEGH_PUBLISH_INSTALLATION_ID`, and
 `SEGH_PUBLISH_APP_PRIVATE_KEY`. Configure `config/organization.yaml` before
-enabling the schedule.
+adding a `schedule` trigger.
 
 This workflow retains the organization inventory, audit, and scanner findings
 in Actions artifacts and the run summary. Both are readable by anyone with
 repository read access, so the workflow must run from a private control
 repository, never from a public fork or mirror of `dceoy/segh`. The `plan` and
 `aggregate` jobs each fail fast with `Require a private control repository`,
-which queries `repos/$GITHUB_REPOSITORY` via `gh api` rather than trusting the
-`schedule` event payload's repository visibility, since that payload field is
-not reliably populated for every trigger.
+which queries `repos/$GITHUB_REPOSITORY` via `gh api` rather than trusting
+repository visibility from the triggering event payload, since that field is
+not reliably populated for every trigger. Copy this workflow into your own
+private control repository and add a `schedule:` trigger there; `dceoy/segh`
+itself ships without one because it is public and the guard would fail every
+scheduled run.
 
 ## Pull-request workflow
 
