@@ -83,6 +83,20 @@ jobs:
             esac
           done < <(git -C _target diff --name-status -M -z "$BASE_SHA" "$HEAD_SHA" --)
           git -C _target worktree add --detach "$BASE_TREE" "$BASE_SHA"
+          # Zizmor follows local composite actions and reusable workflows. Include
+          # the complete .github tree from both revisions so a changed workflow
+          # cannot hide an unpinned dependency inside an unchanged local action.
+          # The NUL-safe sort removes paths already present in the changed-file
+          # diff and paths shared by the head and baseline trees.
+          for tree in _target "$BASE_TREE"; do
+            while IFS= read -r -d '' github_path; do
+              printf '%s\0' "$github_path" >> changed-files.zlist
+            done < <(
+              cd "$tree"
+              find .github \( -type f -o -type l \) -print0 2> /dev/null
+            )
+          done
+          LC_ALL=C sort -zu changed-files.zlist -o changed-files.zlist
       - name: Scan current and baseline files
         env:
           BASE_TREE: ${{ runner.temp }}/segh-base

@@ -87,11 +87,15 @@ jobs:
             --output-directory segh-results/batches \
             --matrix segh-results/batches/matrix.json \
             "${args[@]}"
-          {
-            printf 'matrix='
-            tr -d '\n' < segh-results/batches/matrix.json
-            printf '\n'
-          } >> "$GITHUB_OUTPUT"
+          if jq -e '.include | length > 0' segh-results/batches/matrix.json > /dev/null; then
+            {
+              printf 'matrix='
+              tr -d '\n' < segh-results/batches/matrix.json
+              printf '\n'
+            } >> "$GITHUB_OUTPUT"
+          else
+            printf 'matrix=\n' >> "$GITHUB_OUTPUT"
+          fi
       - name: Retain plan
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

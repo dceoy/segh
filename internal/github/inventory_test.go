@@ -62,3 +62,56 @@ func TestSecurityPolicyExistsFallsBackTo404Profile(t *testing.T) {
 		t.Fatalf("observed = %#v", observed)
 	}
 }
+
+func TestEndpointFeatureEnabled(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		status    int
+		wantState model.Availability
+		wantValue bool
+	}{
+		{name: "enabled", status: http.StatusOK, wantState: model.Available, wantValue: true},
+		{name: "disabled", status: http.StatusNotFound, wantState: model.Available, wantValue: false},
+		{name: "permission unknown", status: http.StatusForbidden, wantState: model.Unknown, wantValue: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := newInventoryTestService(t, func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(test.status)
+			})
+			observed := service.endpointFeatureEnabled(context.Background(), "/feature", "feature")
+			if observed.State != test.wantState || observed.Value != test.wantValue {
+				t.Fatalf("observed = %#v", observed)
+			}
+		})
+	}
+}
+
+func TestEnrichUsesFeatureSpecificSecurityEndpoints(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/repos/org/repo/dependency-graph/sbom", "/repos/org/repo/automated-security-fixes":
+			_, _ = io.WriteString(writer, `{}`)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+		}
+	})
+	repo := service.enrich(context.Background(), apiRepository{
+		FullName:      "org/repo",
+		DefaultBranch: "main",
+		SecurityAndAnalysis: map[string]struct {
+			Status string `json:"status"`
+		}{
+			"dependency_graph":            {Status: "disabled"},
+			"dependabot_security_updates": {Status: "disabled"},
+		},
+	})
+	for name, observed := range map[string]model.Observed[bool]{
+		"dependency_graph":            repo.DependencyGraph,
+		"dependabot_security_updates": repo.DependabotSecurityUpdates,
+	} {
+		if observed.State != model.Available || !observed.Value {
+			t.Fatalf("%s = %#v, want endpoint-derived Available/true", name, observed)
+		}
+	}
+}

@@ -43,3 +43,17 @@ func TestWriteRejectsUnknownTarget(t *testing.T) {
 		t.Fatal("expected missing target error")
 	}
 }
+
+func TestWriteEmptyInventoryEmitsEmptyInclude(t *testing.T) {
+	matrix, err := Write(model.Inventory{}, 10, nil, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(matrix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"include":[]}` {
+		t.Fatalf("matrix = %s", data)
+	}
+}

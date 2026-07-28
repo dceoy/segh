@@ -167,9 +167,9 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 	}
 	repo.SecretScanning = observedSecurity(raw, "secret_scanning")
 	repo.PushProtection = observedSecurity(raw, "secret_scanning_push_protection")
-	repo.DependencyGraph = observedSecurity(raw, "dependency_graph")
-	repo.DependabotSecurityUpdates = observedSecurity(raw, "dependabot_security_updates")
 	base := "/repos/" + escapeFullName(raw.FullName)
+	repo.DependencyGraph = s.endpointFeatureEnabled(ctx, base+"/dependency-graph/sbom", "dependency_graph/sbom")
+	repo.DependabotSecurityUpdates = s.endpointFeatureEnabled(ctx, base+"/automated-security-fixes", "automated_security_fixes")
 
 	var branch struct {
 		Commit struct {
@@ -390,6 +390,23 @@ func (s *InventoryService) getObservedString(_ context.Context, _ string, source
 	return model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
 }
 
+// endpointFeatureEnabled probes a feature-specific read endpoint. A successful
+// response proves that the feature is enabled. These endpoints return 404 for a
+// known repository when the corresponding feature is disabled; other failures
+// remain unknown or unsupported instead of being mistaken for a disabled control.
+func (s *InventoryService) endpointFeatureEnabled(ctx context.Context, path, source string) model.Observed[bool] {
+	err := s.client.Get(ctx, path, nil)
+	if err == nil {
+		return model.Observed[bool]{State: model.Available, Value: true, Source: source}
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+		return model.Observed[bool]{State: model.Available, Value: false, Source: source}
+	}
+	state, reason := ErrorState(err)
+	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason}
+}
+
 func (s *InventoryService) contentExists(ctx context.Context, path, source string) model.Observed[bool] {
 	var content jsonObject
 	err := s.client.Get(ctx, path, &content)
@@ -477,19 +494,11 @@ func (s *InventoryService) workflowPinning(ctx context.Context, base, branch str
 		}
 		decoded, err := s.fetchContent(ctx, base+"/contents/.github/workflows/"+pathEscape(file.Name)+"?ref="+pathEscape(branch))
 		if err != nil {
-			state, reason := ErrorState(err)
-			return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
-				model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
-		}
-		if decoded == nil {
-			return model.Observed[bool]{State: model.Unknown, Source: source, Reason: "workflow content unavailable or too large"},
-				model.Observed[string]{State: model.Unknown, Source: source, Reason: "workflow content unavailable or too large"}
+			return pinningError(source, fmt.Errorf("%s: %w", file.Name, err))
 		}
 		unpinnedIn, err := s.scanUses(ctx, base, branch, file.Name, decoded, visited, counts)
 		if err != nil {
-			state, reason := ErrorState(err)
-			return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
-				model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
+			return pinningError(source, err)
 		}
 		if unpinnedIn != "" {
 			return model.Observed[bool]{State: model.Available, Value: false, Source: source, Reason: unpinnedIn + " contains a mutable action reference"},
@@ -516,8 +525,20 @@ type pinningCounts struct {
 	stale    int
 }
 
-// fetchContent returns the decoded content of a GitHub contents API file, or nil
-// (with a nil error) when the content is unavailable or too large to trust.
+var errContentUnavailable = errors.New("content unavailable")
+
+func pinningError(source string, err error) (model.Observed[bool], model.Observed[string]) {
+	state, reason := ErrorState(err)
+	if errors.Is(err, errContentUnavailable) {
+		state, reason = string(model.Unknown), err.Error()
+	}
+	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
+		model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
+}
+
+// fetchContent returns decoded GitHub contents API data. Existing content that
+// cannot be inspected is an error so callers cannot silently treat an oversized
+// workflow or local action definition as successfully verified.
 func (s *InventoryService) fetchContent(ctx context.Context, path string) ([]byte, error) {
 	var item struct {
 		Content  string `json:"content"`
@@ -527,8 +548,11 @@ func (s *InventoryService) fetchContent(ctx context.Context, path string) ([]byt
 	if err := s.client.Get(ctx, path, &item); err != nil {
 		return nil, err
 	}
-	if item.Encoding != "base64" || item.Size > 1<<20 {
-		return nil, nil
+	if item.Encoding != "base64" {
+		return nil, fmt.Errorf("%w: unsupported encoding %q", errContentUnavailable, item.Encoding)
+	}
+	if item.Size > 1<<20 {
+		return nil, fmt.Errorf("%w: exceeds 1 MiB limit", errContentUnavailable)
 	}
 	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(item.Content, "\n", ""))
 	if err != nil {
@@ -569,7 +593,7 @@ func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceNam
 			if err != nil {
 				return "", err
 			}
-			if content == nil {
+			if actionFile == "" {
 				continue
 			}
 			unpinnedIn, err := s.scanUses(ctx, base, branch, actionFile, content, visited, counts)
@@ -610,7 +634,7 @@ func (s *InventoryService) fetchLocalActionDefinition(ctx context.Context, base,
 			continue
 		}
 		if err != nil {
-			return "", nil, err
+			return "", nil, fmt.Errorf("%s/%s: %w", dirPath, name, err)
 		}
 		return dirPath + "/" + name, content, nil
 	}

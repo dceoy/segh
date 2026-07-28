@@ -118,6 +118,12 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 			}
 			return fmt.Errorf("GitHub API request failed: %w", requestErr)
 		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 && out == nil {
+			if err := resp.Body.Close(); err != nil {
+				return fmt.Errorf("close GitHub API response: %w", err)
+			}
+			return nil
+		}
 		data, readErr := readBounded(resp.Body, maxResponseBytes)
 		closeErr := resp.Body.Close()
 		if readErr != nil {

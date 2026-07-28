@@ -55,7 +55,7 @@ func Write(inventory model.Inventory, size int, repositories []string, outputDir
 			size, len(selected), batches, maxMatrixEntries,
 		)
 	}
-	matrix := Matrix{}
+	matrix := Matrix{Include: []MatrixEntry{}}
 	for offset, index := 0, 0; offset < len(selected); offset, index = offset+size, index+1 {
 		end := min(offset+size, len(selected))
 		name := fmt.Sprintf("%04d", index)

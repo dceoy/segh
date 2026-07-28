@@ -13,6 +13,7 @@ import (
 
 	"github.com/dceoy/segh/internal/config"
 	"github.com/dceoy/segh/internal/logging"
+	"github.com/dceoy/segh/internal/model"
 )
 
 func contentResponse(content string) string {
@@ -181,5 +182,30 @@ func TestWorkflowPinningAcceptsDigestPinnedDockerImage(t *testing.T) {
 	}
 	if status.Value != "pinned_freshness_unknown" {
 		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestWorkflowPinningTreatsOversizedLocalActionAsUnknown(t *testing.T) {
+	workflow := "on: push\njobs:\n  build:\n    steps:\n      - uses: ./.github/actions/example\n"
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows" && request.URL.RawQuery == "ref=main":
+			_, _ = io.WriteString(writer, `[{"name":"ci.yml","type":"file"}]`)
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows/ci.yml":
+			_, _ = io.WriteString(writer, contentResponse(workflow))
+		case request.URL.Path == "/repos/org/repo/contents/.github/actions/example/action.yml":
+			_, _ = io.WriteString(writer, `{"content":"","encoding":"base64","size":1048577}`)
+		default:
+			t.Errorf("unexpected request: %s?%s", request.URL.Path, request.URL.RawQuery)
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	})
+	pinned, status := service.workflowPinning(context.Background(), "/repos/org/repo", "main")
+	if pinned.State != model.Unknown || status.State != model.Unknown {
+		t.Fatalf("pinned = %#v, status = %#v, want unknown", pinned, status)
+	}
+	if !strings.Contains(pinned.Reason, ".github/actions/example/action.yml") ||
+		!strings.Contains(pinned.Reason, "exceeds 1 MiB limit") {
+		t.Fatalf("pinned reason = %q", pinned.Reason)
 	}
 }
