@@ -39,7 +39,13 @@ permissions:
 jobs:
   security:
     uses: dceoy/segh/.github/workflows/reusable-pr-security.yml@FULL_COMMIT_SHA
+    with:
+      segh-ref: FULL_COMMIT_SHA
 ```
+
+`segh-ref` must be the same `FULL_COMMIT_SHA` used to pin the `uses:` line above. The
+`github` context in a called reusable workflow reflects the caller, not `dceoy/segh`, so
+the revision to build from must be passed explicitly rather than inferred.
 
 The scanner job receives no App key or write token. It checks out target data
 without persisted credentials, computes a NUL-delimited diff, scans only copied

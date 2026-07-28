@@ -93,7 +93,15 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 	}()
 
 	for repo := range results {
-		if reason := s.exclusionReason(repo); reason == "" {
+		reason, propertiesUnknown := s.exclusionReason(repo)
+		if propertiesUnknown {
+			inventory.Complete = false
+			inventory.Errors = append(inventory.Errors, model.RunError{
+				Repository: repo.FullName, Component: "selectors", Kind: "custom_properties_unknown",
+				Message: "custom properties unavailable; selection based on selectors.custom_properties could not be verified",
+			})
+		}
+		if reason == "" {
 			inventory.Repositories = append(inventory.Repositories, repo)
 		} else {
 			inventory.Exclusions = append(inventory.Exclusions, model.RepositoryExclusion{Repository: repo.FullName, Reason: reason})
@@ -236,13 +244,21 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 		}
 		return forkApproval.ApprovalPolicy != "first_time_contributors_new_to_github", nil
 	})
-	var rulesets []jsonObject
-	repo.Ruleset = s.getObservedBool(ctx, base+"/rulesets?includes_parents=true", "rulesets", func() (bool, error) {
-		if err := s.client.Get(ctx, base+"/rulesets?includes_parents=true", &rulesets); err != nil {
-			return false, err
+	rulesSource := "rules_branches"
+	var effectiveRules []struct {
+		Type string `json:"type"`
+	}
+	rulesErr := s.client.Get(ctx, base+"/rules/branches/"+pathEscape(raw.DefaultBranch), &effectiveRules)
+	ruleTypes := map[string]bool{}
+	if rulesErr == nil {
+		for _, rule := range effectiveRules {
+			ruleTypes[rule.Type] = true
 		}
-		return len(rulesets) > 0, nil
-	})
+		repo.Ruleset = model.Observed[bool]{State: model.Available, Value: len(effectiveRules) > 0, Source: rulesSource}
+	} else {
+		state, reason := ErrorState(rulesErr)
+		repo.Ruleset = model.Observed[bool]{State: model.Availability(state), Source: rulesSource, Reason: reason}
+	}
 	var protection struct {
 		RequiredPullRequestReviews any `json:"required_pull_request_reviews"`
 		RequiredStatusChecks       any `json:"required_status_checks"`
@@ -254,34 +270,47 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 		} `json:"allow_deletions"`
 	}
 	protectionSource := "branch_protection"
+	var classicProtection, classicPullRequests, classicChecks, classicForcePush, classicDeletion model.Observed[bool]
 	protectionErr := s.client.Get(ctx, base+"/branches/"+pathEscape(raw.DefaultBranch)+"/protection", &protection)
 	var protectionAPIErr *APIError
 	if errors.As(protectionErr, &protectionAPIErr) && protectionAPIErr.StatusCode == 404 {
-		repo.BranchProtection = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
-		repo.RequiredPullRequests = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
-		repo.RequiredChecks = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
-		repo.ForcePushRestricted = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
-		repo.DeletionRestricted = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicProtection = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicPullRequests = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicChecks = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicForcePush = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicDeletion = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
 	} else if protectionErr != nil {
 		state, reason := ErrorState(protectionErr)
 		unknown := model.Observed[bool]{State: model.Availability(state), Source: protectionSource, Reason: reason}
-		repo.BranchProtection, repo.RequiredPullRequests, repo.RequiredChecks = unknown, unknown, unknown
-		repo.ForcePushRestricted, repo.DeletionRestricted = unknown, unknown
+		classicProtection, classicPullRequests, classicChecks = unknown, unknown, unknown
+		classicForcePush, classicDeletion = unknown, unknown
 	} else {
-		repo.BranchProtection = model.Observed[bool]{State: model.Available, Value: true, Source: protectionSource}
-		repo.RequiredPullRequests = model.Observed[bool]{State: model.Available, Value: protection.RequiredPullRequestReviews != nil, Source: protectionSource}
-		repo.RequiredChecks = model.Observed[bool]{State: model.Available, Value: protection.RequiredStatusChecks != nil, Source: protectionSource}
+		classicProtection = model.Observed[bool]{State: model.Available, Value: true, Source: protectionSource}
+		classicPullRequests = model.Observed[bool]{State: model.Available, Value: protection.RequiredPullRequestReviews != nil, Source: protectionSource}
+		classicChecks = model.Observed[bool]{State: model.Available, Value: protection.RequiredStatusChecks != nil, Source: protectionSource}
 		if protection.AllowForcePushes == nil {
-			repo.ForcePushRestricted = model.Observed[bool]{State: model.Unknown, Source: protectionSource, Reason: "field unavailable"}
+			classicForcePush = model.Observed[bool]{State: model.Unknown, Source: protectionSource, Reason: "field unavailable"}
 		} else {
-			repo.ForcePushRestricted = model.Observed[bool]{State: model.Available, Value: !protection.AllowForcePushes.Enabled, Source: protectionSource}
+			classicForcePush = model.Observed[bool]{State: model.Available, Value: !protection.AllowForcePushes.Enabled, Source: protectionSource}
 		}
 		if protection.AllowDeletions == nil {
-			repo.DeletionRestricted = model.Observed[bool]{State: model.Unknown, Source: protectionSource, Reason: "field unavailable"}
+			classicDeletion = model.Observed[bool]{State: model.Unknown, Source: protectionSource, Reason: "field unavailable"}
 		} else {
-			repo.DeletionRestricted = model.Observed[bool]{State: model.Available, Value: !protection.AllowDeletions.Enabled, Source: protectionSource}
+			classicDeletion = model.Observed[bool]{State: model.Available, Value: !protection.AllowDeletions.Enabled, Source: protectionSource}
 		}
 	}
+	// A repository can be governed by an organization ruleset, its own repository
+	// ruleset, classic branch protection, or a combination; GitHub enforces the union
+	// of whichever apply. Merge both sources instead of trusting either alone, so a
+	// ruleset-only repository is not misreported as unprotected (previously the classic
+	// branch-protection 404 branch forced all four booleans to false) and a repository
+	// with an inactive/wrong-branch/other-branch ruleset is not misreported as protected
+	// (previously any nonempty rulesets response short-circuited repository.ruleset).
+	repo.BranchProtection = mergeControl(rulesErr, len(ruleTypes) > 0, classicProtection)
+	repo.RequiredPullRequests = mergeControl(rulesErr, ruleTypes["pull_request"], classicPullRequests)
+	repo.RequiredChecks = mergeControl(rulesErr, ruleTypes["required_status_checks"], classicChecks)
+	repo.ForcePushRestricted = mergeControl(rulesErr, ruleTypes["non_fast_forward"], classicForcePush)
+	repo.DeletionRestricted = mergeControl(rulesErr, ruleTypes["deletion"], classicDeletion)
 	var securityConfig struct {
 		Name string `json:"name"`
 	}
@@ -314,6 +343,25 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 }
 
 type jsonObject map[string]any
+
+// mergeControl combines a boolean policy control derived from GitHub's effective
+// rules-for-branch evaluation (rulesErr/ruleTypePresent) with the equivalent control
+// derived from classic branch protection (classic). Either mechanism enforcing the
+// control is sufficient, matching GitHub's own behavior of enforcing the union of
+// whatever rulesets and branch protection both require.
+func mergeControl(rulesErr error, ruleTypePresent bool, classic model.Observed[bool]) model.Observed[bool] {
+	if rulesErr == nil {
+		if ruleTypePresent {
+			return model.Observed[bool]{State: model.Available, Value: true, Source: "rules_branches"}
+		}
+		return classic
+	}
+	if classic.State == model.Available && classic.Value {
+		return classic
+	}
+	state, reason := ErrorState(rulesErr)
+	return model.Observed[bool]{State: model.Availability(state), Source: "rules_branches", Reason: "ruleset evaluation unavailable: " + reason}
+}
 
 func observedSecurity(raw apiRepository, key string) model.Observed[bool] {
 	item, ok := raw.SecurityAndAnalysis[key]
@@ -385,51 +433,34 @@ func (s *InventoryService) workflowPinning(ctx context.Context, base, branch str
 		return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
 			model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
 	}
-	actionCount, resolvedCount, staleCount := 0, 0, 0
+	counts := &pinningCounts{}
+	visited := map[string]bool{}
 	for _, file := range files {
 		if file.Type != "file" || (!strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml")) {
 			continue
 		}
-		var item struct {
-			Content  string `json:"content"`
-			Encoding string `json:"encoding"`
-			Size     int64  `json:"size"`
-		}
-		if err := s.client.Get(ctx, base+"/contents/.github/workflows/"+pathEscape(file.Name)+"?ref="+pathEscape(branch), &item); err != nil {
+		decoded, err := s.fetchContent(ctx, base+"/contents/.github/workflows/"+pathEscape(file.Name)+"?ref="+pathEscape(branch))
+		if err != nil {
 			state, reason := ErrorState(err)
 			return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
 				model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
 		}
-		if item.Encoding != "base64" || item.Size > 1<<20 {
+		if decoded == nil {
 			return model.Observed[bool]{State: model.Unknown, Source: source, Reason: "workflow content unavailable or too large"},
 				model.Observed[string]{State: model.Unknown, Source: source, Reason: "workflow content unavailable or too large"}
 		}
-		decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(item.Content, "\n", ""))
+		unpinnedIn, err := s.scanUses(ctx, base, branch, file.Name, decoded, visited, counts)
 		if err != nil {
-			return model.Observed[bool]{State: model.Unknown, Source: source, Reason: "invalid workflow encoding"},
-				model.Observed[string]{State: model.Unknown, Source: source, Reason: "invalid workflow encoding"}
+			state, reason := ErrorState(err)
+			return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
+				model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
 		}
-		for _, match := range usesPattern.FindAllSubmatch(decoded, -1) {
-			actionCount++
-			action, ref := string(match[1]), string(match[2])
-			if strings.HasPrefix(action, "./") || strings.HasPrefix(action, "docker://") {
-				actionCount--
-				continue
-			}
-			if !fullSHAPattern.MatchString(ref) {
-				return model.Observed[bool]{State: model.Available, Value: false, Source: source, Reason: file.Name + " contains a mutable action reference"},
-					model.Observed[string]{State: model.Available, Value: "unpinned", Source: source, Reason: file.Name}
-			}
-			if len(match) > 3 && len(match[3]) > 0 {
-				if current, ok := s.resolveActionTag(ctx, action, string(match[3])); ok {
-					resolvedCount++
-					if !strings.EqualFold(current, ref) {
-						staleCount++
-					}
-				}
-			}
+		if unpinnedIn != "" {
+			return model.Observed[bool]{State: model.Available, Value: false, Source: source, Reason: unpinnedIn + " contains a mutable action reference"},
+				model.Observed[string]{State: model.Available, Value: "unpinned", Source: source, Reason: unpinnedIn}
 		}
 	}
+	actionCount, resolvedCount, staleCount := counts.actions, counts.resolved, counts.stale
 	status := "pinned_freshness_unknown"
 	switch {
 	case actionCount == 0:
@@ -441,6 +472,107 @@ func (s *InventoryService) workflowPinning(ctx context.Context, base, branch str
 	}
 	return model.Observed[bool]{State: model.Available, Value: true, Source: source},
 		model.Observed[string]{State: model.Available, Value: status, Source: source}
+}
+
+type pinningCounts struct {
+	actions  int
+	resolved int
+	stale    int
+}
+
+// fetchContent returns the decoded content of a GitHub contents API file, or nil
+// (with a nil error) when the content is unavailable or too large to trust.
+func (s *InventoryService) fetchContent(ctx context.Context, path string) ([]byte, error) {
+	var item struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+		Size     int64  `json:"size"`
+	}
+	if err := s.client.Get(ctx, path, &item); err != nil {
+		return nil, err
+	}
+	if item.Encoding != "base64" || item.Size > 1<<20 {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(item.Content, "\n", ""))
+	if err != nil {
+		return nil, nil
+	}
+	return decoded, nil
+}
+
+// scanUses walks every `uses:` reference in decoded workflow/action content, recursing
+// into repository-local composite actions (./...) so their own third-party references
+// are also evaluated for SHA pinning. visited guards against local-action reference
+// cycles. It returns the name of the first source containing a mutable (non-SHA)
+// third-party reference, or "" if every reference found is fully SHA-pinned.
+func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceName string, decoded []byte, visited map[string]bool, counts *pinningCounts) (string, error) {
+	for _, match := range usesPattern.FindAllSubmatch(decoded, -1) {
+		action, ref := string(match[1]), string(match[2])
+		if strings.HasPrefix(action, "docker://") {
+			continue
+		}
+		if strings.HasPrefix(action, "./") {
+			localPath := strings.Trim(strings.TrimPrefix(action, "."), "/")
+			if visited[localPath] {
+				continue
+			}
+			visited[localPath] = true
+			actionFile, content, err := s.fetchLocalActionDefinition(ctx, base, branch, localPath)
+			if err != nil {
+				return "", err
+			}
+			if content == nil {
+				continue
+			}
+			unpinnedIn, err := s.scanUses(ctx, base, branch, actionFile, content, visited, counts)
+			if err != nil || unpinnedIn != "" {
+				return unpinnedIn, err
+			}
+			continue
+		}
+		counts.actions++
+		if !fullSHAPattern.MatchString(ref) {
+			return sourceName, nil
+		}
+		if len(match) > 3 && len(match[3]) > 0 {
+			if current, ok := s.resolveActionTag(ctx, action, string(match[3])); ok {
+				counts.resolved++
+				if !strings.EqualFold(current, ref) {
+					counts.stale++
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
+// fetchLocalActionDefinition resolves a repository-local composite action directory
+// (e.g. ".github/actions/example") to its action.yml/action.yaml content. It returns a
+// nil content and nil error when neither file exists, since a local `uses:` path that
+// carries no action metadata cannot itself introduce an unpinned third-party reference.
+func (s *InventoryService) fetchLocalActionDefinition(ctx context.Context, base, branch, dirPath string) (string, []byte, error) {
+	escaped := escapeContentPath(dirPath)
+	for _, name := range []string{"action.yml", "action.yaml"} {
+		content, err := s.fetchContent(ctx, base+"/contents/"+escaped+"/"+name+"?ref="+pathEscape(branch))
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+			continue
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		return dirPath + "/" + name, content, nil
+	}
+	return "", nil, nil
+}
+
+func escapeContentPath(value string) string {
+	parts := strings.Split(value, "/")
+	for i, part := range parts {
+		parts[i] = pathEscape(part)
+	}
+	return strings.Join(parts, "/")
 }
 
 func (s *InventoryService) resolveActionTag(ctx context.Context, action, tag string) (string, bool) {
@@ -476,38 +608,46 @@ func (s *InventoryService) resolveActionTag(ctx context.Context, action, tag str
 	return annotated.Object.SHA, true
 }
 
-func (s *InventoryService) exclusionReason(repo model.Repository) string {
+func (s *InventoryService) exclusionReason(repo model.Repository) (reason string, propertiesUnknown bool) {
 	selectors := s.cfg.Selectors
 	if selectors.ExcludeArchived && repo.Archived {
-		return "archived"
+		return "archived", false
 	}
 	if selectors.ExcludeDisabled && repo.Disabled {
-		return "disabled"
+		return "disabled", false
 	}
 	if selectors.ExcludeForks && repo.Fork {
-		return "fork"
+		return "fork", false
 	}
 	if len(selectors.Repositories) > 0 && !slices.Contains(selectors.Repositories, repo.FullName) {
-		return "not explicitly included"
+		return "not explicitly included", false
 	}
 	if slices.Contains(selectors.Exclude, repo.FullName) {
-		return "explicitly excluded"
+		return "explicitly excluded", false
 	}
 	if len(selectors.Visibilities) > 0 && !slices.Contains(selectors.Visibilities, repo.Visibility) {
-		return "visibility"
+		return "visibility", false
 	}
 	if len(selectors.IncludeTopics) > 0 && !intersects(repo.Topics, selectors.IncludeTopics) {
-		return "required topic missing"
+		return "required topic missing", false
 	}
 	if intersects(repo.Topics, selectors.ExcludeTopics) {
-		return "excluded topic"
+		return "excluded topic", false
 	}
-	for key, expected := range selectors.CustomProperties {
-		if repo.CustomProperties[key] != expected {
-			return "custom property " + key
+	if len(selectors.CustomProperties) > 0 {
+		if _, unavailable := repo.Capabilities["custom_properties"]; unavailable {
+			// The custom-properties API call failed, so repo.CustomProperties holds no
+			// reliable data. Treating missing keys as mismatches here would silently
+			// exclude the repository from the audit instead of surfacing the gap.
+			return "", true
+		}
+		for key, expected := range selectors.CustomProperties {
+			if repo.CustomProperties[key] != expected {
+				return "custom property " + key, false
+			}
 		}
 	}
-	return ""
+	return "", false
 }
 
 func escapeFullName(fullName string) string {

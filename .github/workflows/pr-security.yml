@@ -9,3 +9,5 @@ permissions:
 jobs:
   segh:
     uses: ./.github/workflows/reusable-pr-security.yml
+    with:
+      segh-ref: ${{ github.sha }}

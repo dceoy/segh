@@ -69,6 +69,9 @@ func Build(inventory *model.Inventory, audit *model.Audit, scan *model.ScanRun, 
 				result.Summary.Coverage = "partial"
 			}
 		}
+		if len(scan.Errors) > 0 || len(scan.Repositories) < scan.Selected {
+			result.Summary.Coverage = "partial"
+		}
 	}
 	for _, publication := range publications {
 		result.Summary.Publication[string(publication.Status)]++

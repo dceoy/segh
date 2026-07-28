@@ -24,3 +24,28 @@ func TestBuildMarksPartialCoverage(t *testing.T) {
 		t.Fatalf("trend = %#v", result.Trend)
 	}
 }
+
+func TestBuildMarksPartialCoverageOnScanRunErrorsWithoutFailedResults(t *testing.T) {
+	scan := &model.ScanRun{
+		Selected:     2,
+		Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}},
+		Errors:       []model.RunError{{Component: "clone", Kind: "runtime", Message: "boom"}},
+		Results:      []model.ScannerResult{{Status: model.ScannerClean}},
+	}
+	result := Build(nil, nil, scan, nil)
+	if result.Summary.Coverage != "partial" {
+		t.Fatalf("coverage = %s, want partial", result.Summary.Coverage)
+	}
+}
+
+func TestBuildMarksPartialCoverageOnIncompleteRepositoryCoverage(t *testing.T) {
+	scan := &model.ScanRun{
+		Selected:     2,
+		Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}},
+		Results:      []model.ScannerResult{{Status: model.ScannerClean}},
+	}
+	result := Build(nil, nil, scan, nil)
+	if result.Summary.Coverage != "partial" {
+		t.Fatalf("coverage = %s, want partial", result.Summary.Coverage)
+	}
+}

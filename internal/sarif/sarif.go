@@ -102,8 +102,13 @@ func Read(path string) (Log, error) {
 	return log, nil
 }
 
+type preparedFinding struct {
+	result  Result
+	finding Finding
+}
+
 func Findings(log Log) []Finding {
-	var findings []Finding
+	var prepared []preparedFinding
 	for _, run := range log.Runs {
 		rules := map[string]Rule{}
 		for _, rule := range run.Tool.Driver.Rules {
@@ -125,9 +130,13 @@ func Findings(log Log) []Finding {
 				finding.Line = physical.Region.StartLine
 				finding.Column = physical.Region.StartColumn
 			}
-			finding.Fingerprint = fingerprint(result, finding)
-			findings = append(findings, finding)
+			prepared = append(prepared, preparedFinding{result: result, finding: finding})
 		}
+	}
+	assignFingerprints(prepared)
+	findings := make([]Finding, len(prepared))
+	for i, item := range prepared {
+		findings[i] = item.finding
 	}
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Scanner != findings[j].Scanner {
@@ -149,7 +158,35 @@ func CountFile(path string) (int, error) {
 	return len(Findings(log)), nil
 }
 
-func fingerprint(result Result, finding Finding) string {
+// assignFingerprints fills in each item's Fingerprint. Results carrying native SARIF
+// fingerprints use those directly. Everything else falls back to a fingerprint built
+// from scanner/rule/URI/normalized message plus an occurrence ordinal, rather than the
+// absolute line number: inserting or removing lines above a finding, or renaming its
+// file mid-history, must not make an existing finding look new to the PR gate.
+func assignFingerprints(items []preparedFinding) {
+	type key struct{ scanner, ruleID, uri, message string }
+	order := make([]int, len(items))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return items[order[a]].finding.Line < items[order[b]].finding.Line
+	})
+	ordinals := map[key]int{}
+	for _, index := range order {
+		item := &items[index]
+		if native := nativeFingerprint(item.result); native != "" {
+			item.finding.Fingerprint = native
+			continue
+		}
+		k := key{item.finding.Scanner, item.finding.RuleID, item.finding.URI, normalizeMessage(item.finding.Message)}
+		ordinal := ordinals[k]
+		ordinals[k] = ordinal + 1
+		item.finding.Fingerprint = fallbackFingerprint(item.finding, ordinal)
+	}
+}
+
+func nativeFingerprint(result Result) string {
 	values := make([]string, 0, len(result.PartialFingerprints)+len(result.Fingerprints))
 	for key, value := range result.PartialFingerprints {
 		values = append(values, key+"="+value)
@@ -157,15 +194,25 @@ func fingerprint(result Result, finding Finding) string {
 	for key, value := range result.Fingerprints {
 		values = append(values, key+"="+value)
 	}
-	sort.Strings(values)
 	if len(values) == 0 {
-		values = []string{
-			finding.Scanner, finding.RuleID, finding.URI,
-			strconv.Itoa(finding.Line), strings.TrimSpace(finding.Message),
-		}
+		return ""
+	}
+	sort.Strings(values)
+	sum := sha256.Sum256([]byte(strings.Join(values, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+func fallbackFingerprint(finding Finding, ordinal int) string {
+	values := []string{
+		finding.Scanner, finding.RuleID, finding.URI,
+		normalizeMessage(finding.Message), strconv.Itoa(ordinal),
 	}
 	sum := sha256.Sum256([]byte(strings.Join(values, "\x00")))
 	return hex.EncodeToString(sum[:])
+}
+
+func normalizeMessage(message string) string {
+	return strings.Join(strings.Fields(message), " ")
 }
 
 func severity(result Result, rule Rule) string {

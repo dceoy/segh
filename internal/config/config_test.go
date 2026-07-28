@@ -58,3 +58,32 @@ func TestValidateRejectsUnsafeEndpointAndMissingVersion(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestValidateRejectsSpoofedLocalEndpoints(t *testing.T) {
+	unsafe := []string{
+		"http://localhost.attacker.example",
+		"http://localhost@attacker.example",
+		"http://localhost:80@attacker.example",
+		"http://attacker.example#localhost",
+	}
+	for _, raw := range unsafe {
+		cfg := Default()
+		cfg.Organization = "test"
+		cfg.GitHub.APIURL = raw
+		if err := cfg.Validate("."); err == nil || !strings.Contains(err.Error(), "must use HTTPS") {
+			t.Fatalf("%s: expected HTTPS rejection, got %v", raw, err)
+		}
+	}
+}
+
+func TestValidateAcceptsGenuineLocalEndpoints(t *testing.T) {
+	safe := []string{"http://localhost", "http://localhost:8080", "http://127.0.0.1:9000", "http://[::1]:9000"}
+	for _, raw := range safe {
+		cfg := Default()
+		cfg.Organization = "test"
+		cfg.GitHub.APIURL = raw
+		if err := cfg.Validate("."); err != nil && strings.Contains(err.Error(), "must use HTTPS") {
+			t.Fatalf("%s: unexpected HTTPS rejection: %v", raw, err)
+		}
+	}
+}

@@ -39,6 +39,15 @@ type Service struct {
 	log       *logging.Logger
 	versionMu sync.Mutex
 	verified  map[string]error
+	resolved  map[string]string
+	// toolHome is a single persistent HOME shared by every scanner invocation across
+	// the whole Run(), set once before workers start and read-only thereafter. Earlier,
+	// each invocation got its own throwaway HOME, so the Aqua-managed scanner binary had
+	// to be lazily installed on every single call instead of once; that install then ran
+	// inside the prlimit-wrapped, resource-limited execution and could exceed the fsize
+	// cap. Sharing one HOME lets the unconstrained verifyVersion call install the binary
+	// once, so later resource-limited runs find it already present.
+	toolHome string
 }
 
 type definition struct {
@@ -51,7 +60,7 @@ type definition struct {
 }
 
 func New(cfg config.Config, tokens gh.TokenProvider, log *logging.Logger) *Service {
-	return &Service{cfg: cfg, tokens: tokens, log: log, verified: map[string]error{}}
+	return &Service{cfg: cfg, tokens: tokens, log: log, verified: map[string]error{}, resolved: map[string]string{}}
 }
 
 func (s *Service) Run(ctx context.Context, targets []Target, configDigest, runID string) model.ScanRun {
@@ -62,6 +71,14 @@ func (s *Service) Run(ctx context.Context, targets []Target, configDigest, runID
 		StartedAt:     time.Now().UTC(),
 		Selected:      len(targets),
 	}
+	toolHome, err := os.MkdirTemp("", "segh-tools-*")
+	if err != nil {
+		run.Errors = append(run.Errors, model.RunError{Component: "scan", Kind: "runtime", Message: "create scanner tool directory"})
+		run.FinishedAt = time.Now().UTC()
+		return run
+	}
+	defer func() { _ = os.RemoveAll(toolHome) }()
+	s.toolHome = toolHome
 	totalCtx, cancel := context.WithTimeout(ctx, s.cfg.Execution.TotalTimeout)
 	defer cancel()
 	type result struct {
@@ -228,6 +245,15 @@ func (s *Service) execute(parent context.Context, repo model.Repository, workPat
 		return result
 	}
 	command, args, stdoutToSARIF := s.command(scanner.name, repo, workPath, absoluteResultPath)
+	// Resolve the real installed binary now that verifyVersion (above) has already
+	// completed any lazy install unconstrained by resource limits, so the resource-limited
+	// execution below never has to install anything itself.
+	resolvedCommand, resolveErr := s.resolveExecutable(ctx, scanner)
+	if resolveErr != nil {
+		result.Status, result.Error = model.ScannerFailed, resolveErr.Error()
+		return result
+	}
+	command = resolvedCommand
 	diagnostic, err := os.OpenFile(absoluteDiagnosticPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) // #nosec G304 -- derived beneath the configured output directory.
 	if err != nil {
 		result.Status, result.Error = model.ScannerFailed, "create scanner diagnostic output"
@@ -240,14 +266,8 @@ func (s *Service) execute(parent context.Context, repo model.Repository, workPat
 		return result
 	}
 	cmd := exec.CommandContext(ctx, command, args...) // #nosec G204 -- command is a closed internal enum and arguments are passed without a shell.
-	scannerDir, err := os.MkdirTemp("", "segh-scanner-*")
-	if err != nil {
-		result.Status, result.Error = model.ScannerFailed, "create scanner working directory"
-		return result
-	}
-	defer func() { _ = os.RemoveAll(scannerDir) }()
 	cmd.Dir = s.cfg.SourceDir
-	cmd.Env = append(scannerEnvironment(), "HOME="+scannerDir, "XDG_CACHE_HOME="+filepath.Join(scannerDir, "cache"))
+	cmd.Env = toolEnvironment(s.toolHome)
 	if scanner.name == "scorecard" {
 		token, tokenErr := s.tokens.Token(ctx)
 		if tokenErr != nil {
@@ -313,9 +333,26 @@ func (s *Service) verifyVersion(ctx context.Context, scanner definition) error {
 	if err, exists := s.verified[key]; exists {
 		return err
 	}
-	err := verifyVersion(ctx, scanner, s.cfg.SourceDir)
+	err := verifyVersion(ctx, scanner, s.cfg.SourceDir, s.toolHome)
 	s.verified[key] = err
 	return err
+}
+
+// resolveExecutable returns the absolute path of the already-installed scanner binary,
+// bypassing any Aqua proxy shim for the resource-limited execution that follows. It is
+// cached per scanner name and must only be called after verifyVersion has installed it.
+func (s *Service) resolveExecutable(ctx context.Context, scanner definition) (string, error) {
+	s.versionMu.Lock()
+	defer s.versionMu.Unlock()
+	if path, exists := s.resolved[scanner.name]; exists {
+		return path, nil
+	}
+	path, err := resolveExecutable(ctx, scanner.name, s.cfg.SourceDir, s.toolHome)
+	if err != nil {
+		return "", err
+	}
+	s.resolved[scanner.name] = path
+	return path, nil
 }
 
 func (s *Service) command(name string, repo model.Repository, workPath, resultPath string) (string, []string, bool) {
@@ -586,12 +623,11 @@ func fromConfig(name string, cfg config.Scanner) definition {
 	}
 }
 
-func verifyVersion(ctx context.Context, scanner definition, workingDirectory string) error {
-	home, err := os.MkdirTemp("", "segh-version-*")
-	if err != nil {
-		return fmt.Errorf("create version-check environment")
-	}
-	defer func() { _ = os.RemoveAll(home) }()
+// verifyVersion runs the scanner's own --version/version check in the shared, persistent
+// toolHome, never under prlimit. For an Aqua-managed scanner this is what actually
+// performs the lazy install, so it must have room to write the full binary: unlike the
+// resource-limited scan execution later, nothing here is fsize/cpu/memory constrained.
+func verifyVersion(ctx context.Context, scanner definition, workingDirectory, toolHome string) error {
 	var args []string
 	if scanner.name == "scorecard" {
 		args = []string{"version"}
@@ -600,7 +636,7 @@ func verifyVersion(ctx context.Context, scanner definition, workingDirectory str
 	}
 	cmd := exec.CommandContext(ctx, scanner.name, args...) // #nosec G204 -- scanner name is a closed internal enum.
 	cmd.Dir = workingDirectory
-	cmd.Env = append(scannerEnvironment(), "HOME="+home, "XDG_CACHE_HOME="+filepath.Join(home, "cache"))
+	cmd.Env = toolEnvironment(toolHome)
 	output, err := limitedCombinedOutput(cmd, 64<<10)
 	if err != nil {
 		return fmt.Errorf("verify %s version: command failed", scanner.name)
@@ -610,6 +646,47 @@ func verifyVersion(ctx context.Context, scanner definition, workingDirectory str
 		return fmt.Errorf("%s version does not match configured immutable version %s", scanner.name, scanner.version)
 	}
 	return nil
+}
+
+// resolveExecutable returns the absolute path of the installed scanner binary. When the
+// scanner is managed by Aqua (present in this CI environment), "aqua which <name>" is
+// used so the resource-limited execution can invoke the real binary directly instead of
+// going back through Aqua's proxy shim. Outside an Aqua-managed environment (e.g. local
+// development), the scanner name is returned unchanged and resolved from PATH as before.
+func resolveExecutable(ctx context.Context, name, workingDirectory, toolHome string) (string, error) {
+	if _, err := exec.LookPath("aqua"); err != nil {
+		return name, nil
+	}
+	cmd := exec.CommandContext(ctx, "aqua", "which", name) // #nosec G204 -- name is a closed internal enum.
+	cmd.Dir = workingDirectory
+	cmd.Env = toolEnvironment(toolHome)
+	output, err := limitedCombinedOutput(cmd, 4<<10)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s executable path: %s", name, sanitizeDiagnostic(output))
+	}
+	resolved := strings.TrimSpace(output)
+	if resolved == "" {
+		return "", fmt.Errorf("aqua did not resolve an executable path for %s", name)
+	}
+	// "aqua which" computes the expected install path from registry metadata; it does
+	// not itself verify the file exists. Fall back to PATH resolution rather than handing
+	// exec a path that may not be there, which would otherwise surface as an opaque exec
+	// failure indistinguishable from a real scan failure.
+	if info, statErr := os.Stat(resolved); statErr != nil || info.IsDir() {
+		return name, nil
+	}
+	return resolved, nil
+}
+
+func toolEnvironment(toolHome string) []string {
+	if toolHome == "" {
+		return scannerEnvironment()
+	}
+	return append(scannerEnvironment(),
+		"HOME="+toolHome,
+		"XDG_CACHE_HOME="+filepath.Join(toolHome, "cache"),
+		"XDG_DATA_HOME="+filepath.Join(toolHome, "data"),
+	)
 }
 
 func applyResourceLimits(command string, args []string, scanner definition) (string, []string, error) {

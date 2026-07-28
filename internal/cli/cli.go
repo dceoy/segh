@@ -298,8 +298,8 @@ func runScan(ctx context.Context, cfg config.Config, raw []byte, args []string, 
 		}
 	}
 	writef(stdout, "wrote %d scanner results to %s\n", len(scanRun.Results), *outputPath)
-	if hasScannerStatus(scanRun, model.ScannerFailed) {
-		return runtimeError(fmt.Errorf("one or more scanners failed"))
+	if err := scanRunError(scanRun); err != nil {
+		return runtimeError(err)
 	}
 	if hasScannerStatus(scanRun, model.ScannerFindings) {
 		return findingsError(fmt.Errorf("scanner findings found"))
@@ -647,6 +647,22 @@ func hasScannerStatus(run model.ScanRun, status model.ScannerStatus) bool {
 		}
 	}
 	return false
+}
+
+// scanRunError reports a runtime failure whenever the scan did not fully complete,
+// even when no individual ScannerResult carries a failed status: a clone/filter
+// error or a total-timeout can abort a repository before any scanner runs.
+func scanRunError(run model.ScanRun) error {
+	if hasScannerStatus(run, model.ScannerFailed) {
+		return fmt.Errorf("one or more scanners failed")
+	}
+	if len(run.Errors) > 0 {
+		return fmt.Errorf("one or more repositories were not fully scanned")
+	}
+	if len(run.Repositories) < run.Selected {
+		return fmt.Errorf("scan run is incomplete: %d of %d selected repositories were scanned", len(run.Repositories), run.Selected)
+	}
+	return nil
 }
 
 func readJSON(path string, value any) error {

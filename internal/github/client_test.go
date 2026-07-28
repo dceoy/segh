@@ -113,11 +113,41 @@ func TestExclusionReasons(t *testing.T) {
 	cfg.Selectors.ExcludeArchived = true
 	cfg.Selectors.IncludeTopics = []string{"managed"}
 	service := InventoryService{cfg: cfg}
-	if reason := service.exclusionReason(model.Repository{Archived: true}); reason != "archived" {
+	if reason, _ := service.exclusionReason(model.Repository{Archived: true}); reason != "archived" {
 		t.Fatalf("reason = %s", reason)
 	}
-	if reason := service.exclusionReason(model.Repository{Topics: []string{"managed"}}); reason != "" {
+	if reason, _ := service.exclusionReason(model.Repository{Topics: []string{"managed"}}); reason != "" {
 		t.Fatalf("unexpected reason = %s", reason)
+	}
+}
+
+func TestExclusionReasonCustomPropertyMismatch(t *testing.T) {
+	cfg := config.Default()
+	cfg.Selectors.CustomProperties = map[string]string{"team": "platform"}
+	service := InventoryService{cfg: cfg}
+	repo := model.Repository{CustomProperties: map[string]string{"team": "other"}}
+	if reason, unknown := service.exclusionReason(repo); reason != "custom property team" || unknown {
+		t.Fatalf("reason = %q unknown = %v", reason, unknown)
+	}
+	repo.CustomProperties = map[string]string{"team": "platform"}
+	if reason, unknown := service.exclusionReason(repo); reason != "" || unknown {
+		t.Fatalf("expected inclusion, got reason = %q unknown = %v", reason, unknown)
+	}
+}
+
+func TestExclusionReasonDoesNotExcludeOnUnknownCustomProperties(t *testing.T) {
+	cfg := config.Default()
+	cfg.Selectors.CustomProperties = map[string]string{"team": "platform"}
+	service := InventoryService{cfg: cfg}
+	repo := model.Repository{
+		Capabilities: map[string]model.Availability{"custom_properties": model.Unknown},
+	}
+	reason, unknown := service.exclusionReason(repo)
+	if reason != "" {
+		t.Fatalf("expected no exclusion when custom properties are unverifiable, got %q", reason)
+	}
+	if !unknown {
+		t.Fatal("expected propertiesUnknown = true")
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -209,6 +211,18 @@ func Load(path string) (Config, []byte, error) {
 	return cfg, data, nil
 }
 
+func isLocalTestEndpoint(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "http" {
+		return false
+	}
+	if parsed.User != nil {
+		return false
+	}
+	hostname := parsed.Hostname()
+	return hostname == "localhost" || net.ParseIP(hostname).IsLoopback()
+}
+
 func baseDir(path string) string {
 	dir, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
@@ -226,7 +240,7 @@ func (c *Config) Validate(baseDir string) error {
 		errs = append(errs, fmt.Errorf("organization is required"))
 	}
 	for name, raw := range map[string]string{"github.web_url": c.GitHub.WebURL, "github.api_url": c.GitHub.APIURL, "github.graphql_url": c.GitHub.GraphQLURL} {
-		if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://localhost") && !strings.HasPrefix(raw, "http://127.0.0.1") {
+		if !strings.HasPrefix(raw, "https://") && !isLocalTestEndpoint(raw) {
 			errs = append(errs, fmt.Errorf("%s must use HTTPS (HTTP is allowed only for local tests)", name))
 		}
 	}
