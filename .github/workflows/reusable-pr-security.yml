@@ -58,13 +58,23 @@ jobs:
           # --name-only diff would report just the new path, so the base-tree scan (which
           # only has the old path on disk) would filter it out and never scan it, letting
           # a pre-existing finding at the old path silently reappear as "new" post-rename.
+          # Rename (R) pairs are also recorded in renames.zlist so the gate step can remap
+          # baseline findings from their old path to their new path before comparing,
+          # instead of the rename alone making a pre-existing finding look new. Copy (C)
+          # pairs are excluded: the old path still exists in the head tree for a copy, so
+          # remapping it would wrongly suppress a genuinely new finding at the new path
+          # and misreport the still-present old-path finding as new.
           : > changed-files.zlist
+          : > renames.zlist
           while IFS= read -r -d '' change_status; do
             case "$change_status" in
               R*|C*)
                 IFS= read -r -d '' old_path
                 IFS= read -r -d '' new_path
                 printf '%s\0' "$old_path" "$new_path" >> changed-files.zlist
+                if [[ "$change_status" == R* ]]; then
+                  printf '%s\0' "$old_path" "$new_path" >> renames.zlist
+                fi
                 ;;
               *)
                 IFS= read -r -d '' changed_path
@@ -101,6 +111,7 @@ jobs:
           ./segh-bin --config _segh/config/pr.yaml pr-gate \
             --current segh-results/head/sarif \
             --baseline segh-results/base/sarif \
+            --rename-map0 renames.zlist \
             --output segh-results/pr-gate.json \
             --markdown segh-results/pr-gate.md \
             --annotations

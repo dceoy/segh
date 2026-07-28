@@ -566,6 +566,7 @@ func runGate(cfg config.Config, args []string, stdout io.Writer) error {
 	var current, baseline stringList
 	flags.Var(&current, "current", "current SARIF file or directory (repeatable)")
 	flags.Var(&baseline, "baseline", "baseline SARIF file or directory (repeatable)")
+	renameMap0 := flags.String("rename-map0", "", "NUL-delimited old-path/new-path pairs to align renamed baseline findings")
 	outputPath := flags.String("output", filepath.Join(cfg.Output.Directory, "pr-gate.json"), "gate JSON output")
 	markdownPath := flags.String("markdown", filepath.Join(cfg.Output.Directory, "pr-gate.md"), "gate Markdown output")
 	annotations := flags.Bool("annotations", false, "emit escaped GitHub workflow commands")
@@ -575,7 +576,11 @@ func runGate(cfg config.Config, args []string, stdout io.Writer) error {
 	if len(current) == 0 {
 		return usageError(fmt.Errorf("pr-gate requires at least one --current path"))
 	}
-	result, err := gate.Compare(current, baseline, cfg.PullRequest)
+	renames, err := readRenameMap(*renameMap0)
+	if err != nil {
+		return usageError(err)
+	}
+	result, err := gate.Compare(current, baseline, cfg.PullRequest, renames)
 	if err != nil {
 		return runtimeError(err)
 	}
@@ -690,15 +695,36 @@ func readJSON(path string, value any) error {
 	return nil
 }
 
+// readRenameMap parses a NUL-delimited old-path,new-path,old-path,new-path,... list, as
+// emitted by a caller workflow that already detected renames via "git diff --name-status
+// -M -z", into a map of old path to new path.
+func readRenameMap(path string) (map[string]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+	entries, err := readList(path, "\x00", 20_000)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries)%2 != 0 {
+		return nil, fmt.Errorf("rename map must contain old/new path pairs, got %d entries", len(entries))
+	}
+	renames := make(map[string]string, len(entries)/2)
+	for i := 0; i < len(entries); i += 2 {
+		renames[entries[i]] = entries[i+1]
+	}
+	return renames, nil
+}
+
 func readList(path, separator string, limit int) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() || info.Size() > 5<<20 {
-		return nil, fmt.Errorf("changed-file list exceeds 5 MiB")
+		return nil, fmt.Errorf("%s exceeds 5 MiB", path)
 	}
-	data, err := os.ReadFile(path) // #nosec G304 -- the CLI operator selected a regular, size-bounded changed-file list.
+	data, err := os.ReadFile(path) // #nosec G304 -- the CLI operator selected a regular, size-bounded list.
 	if err != nil {
 		return nil, err
 	}
@@ -713,7 +739,7 @@ func readList(path, separator string, limit int) ([]string, error) {
 		}
 		values = append(values, line)
 		if len(values) > limit {
-			return nil, fmt.Errorf("changed-file list exceeds %d entries", limit)
+			return nil, fmt.Errorf("%s exceeds %d entries", path, limit)
 		}
 	}
 	return values, nil

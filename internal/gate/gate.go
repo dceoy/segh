@@ -22,12 +22,16 @@ type Result struct {
 	ReportOnly       bool            `json:"report_only"`
 }
 
-func Compare(currentPaths, baselinePaths []string, cfg config.PullRequest) (Result, error) {
-	current, err := load(currentPaths)
+func Compare(currentPaths, baselinePaths []string, cfg config.PullRequest, renames map[string]string) (Result, error) {
+	current, err := load(currentPaths, nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("load current findings: %w", err)
 	}
-	baseline, err := load(baselinePaths)
+	// Baseline SARIF is produced by scanning the pre-rename tree, so a file renamed in
+	// this PR still reports findings at its old path there; remap those paths to their
+	// post-rename equivalents before fingerprinting so a rename alone does not make a
+	// pre-existing finding look new.
+	baseline, err := load(baselinePaths, renames)
 	if err != nil {
 		return Result{}, fmt.Errorf("load baseline findings: %w", err)
 	}
@@ -108,7 +112,7 @@ func Annotations(result Result) []string {
 	return annotations
 }
 
-func load(paths []string) ([]sarif.Finding, error) {
+func load(paths []string, renames map[string]string) ([]sarif.Finding, error) {
 	var expanded []string
 	for _, path := range paths {
 		info, err := os.Stat(path)
@@ -141,6 +145,9 @@ func load(paths []string) ([]sarif.Finding, error) {
 		log, err := sarif.Read(path)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		if len(renames) > 0 {
+			log = sarif.RemapURIs(log, renames)
 		}
 		findings = append(findings, sarif.Findings(log)...)
 	}

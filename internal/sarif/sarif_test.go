@@ -76,3 +76,73 @@ func TestFallbackFingerprintDistinguishesRepeatedOccurrences(t *testing.T) {
 		t.Fatal("two distinct occurrences must not collapse to the same fingerprint")
 	}
 }
+
+func TestNativeFingerprintDoesNotCollideAcrossRules(t *testing.T) {
+	sameNative := func(ruleID string) Result {
+		return Result{
+			RuleID:              ruleID,
+			Message:             Message{Text: "issue"},
+			PartialFingerprints: map[string]string{"primaryLocationLineHash": "same"},
+		}
+	}
+	log := Log{Version: "2.1.0", Runs: []Run{{Tool: Tool{Driver: Driver{Name: "trivy"}}, Results: []Result{
+		sameNative("rule-a"), sameNative("rule-b"),
+	}}}}
+	findings := Findings(log)
+	if len(findings) != 2 {
+		t.Fatalf("findings = %d", len(findings))
+	}
+	if findings[0].Fingerprint == findings[1].Fingerprint {
+		t.Fatal("native fingerprints for different rules must not collide")
+	}
+}
+
+func TestFallbackFingerprintDistinguishesDifferentFiles(t *testing.T) {
+	inFile := func(uri string) Result {
+		return Result{
+			RuleID:  "rule",
+			Message: Message{Text: "issue found"},
+			Locations: []Location{{PhysicalLocation: PhysicalLocation{
+				ArtifactLocation: ArtifactLocation{URI: uri},
+				Region:           Region{StartLine: 10},
+			}}},
+		}
+	}
+	log := Log{Version: "2.1.0", Runs: []Run{{Tool: Tool{Driver: Driver{Name: "zizmor"}}, Results: []Result{
+		inFile("a.yml"), inFile("b.yml"),
+	}}}}
+	findings := Findings(log)
+	if len(findings) != 2 {
+		t.Fatalf("findings = %d", len(findings))
+	}
+	if findings[0].Fingerprint == findings[1].Fingerprint {
+		t.Fatal("the same rule/message finding in two different files must not collapse to one fingerprint")
+	}
+}
+
+func TestRemapURIsAlignsFingerprintsAcrossRename(t *testing.T) {
+	renamed := func(uri string) Result {
+		return Result{
+			RuleID:  "rule",
+			Message: Message{Text: "issue found"},
+			Locations: []Location{{PhysicalLocation: PhysicalLocation{
+				ArtifactLocation: ArtifactLocation{URI: uri},
+				Region:           Region{StartLine: 10},
+			}}},
+		}
+	}
+	before := Log{Version: "2.1.0", Runs: []Run{{Tool: Tool{Driver: Driver{Name: "zizmor"}}, Results: []Result{renamed("old.yml")}}}}
+	after := Log{Version: "2.1.0", Runs: []Run{{Tool: Tool{Driver: Driver{Name: "zizmor"}}, Results: []Result{renamed("new.yml")}}}}
+	beforeFindings := Findings(before)
+	if beforeFindings[0].Fingerprint == Findings(after)[0].Fingerprint {
+		t.Fatal("fingerprints across a rename must differ without a rename map")
+	}
+	remapped := RemapURIs(before, map[string]string{"old.yml": "new.yml"})
+	remappedFindings := Findings(remapped)
+	if remappedFindings[0].URI != "new.yml" {
+		t.Fatalf("URI = %q", remappedFindings[0].URI)
+	}
+	if remappedFindings[0].Fingerprint != Findings(after)[0].Fingerprint {
+		t.Fatal("a remapped baseline finding must align with its post-rename counterpart")
+	}
+}

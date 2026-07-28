@@ -123,10 +123,7 @@ func Findings(log Log) []Finding {
 			}
 			if len(result.Locations) > 0 {
 				physical := result.Locations[0].PhysicalLocation
-				finding.URI = filepath.ToSlash(filepath.Clean(physical.ArtifactLocation.URI))
-				if finding.URI == "." {
-					finding.URI = ""
-				}
+				finding.URI = normalizeURI(physical.ArtifactLocation.URI)
 				finding.Line = physical.Region.StartLine
 				finding.Column = physical.Region.StartColumn
 			}
@@ -159,10 +156,15 @@ func CountFile(path string) (int, error) {
 }
 
 // assignFingerprints fills in each item's Fingerprint. Results carrying native SARIF
-// fingerprints use those directly. Everything else falls back to a fingerprint built
-// from scanner/rule/URI/normalized message plus an occurrence ordinal, rather than the
-// absolute line number: inserting or removing lines above a finding, or renaming its
-// file mid-history, must not make an existing finding look new to the PR gate.
+// fingerprints use those namespaced by scanner and rule, since the baseline gate stores
+// every fingerprint in one global set and a bare native value can collide across rules
+// or scanners. Everything else falls back to a fingerprint built from scanner/rule/URI/
+// normalized message plus an occurrence ordinal, rather than the absolute line number,
+// so inserting or removing lines above a finding does not make it look new to the PR
+// gate. The URI is kept so findings in different files never collapse into one
+// fingerprint; callers that need rename-stable comparison across a renamed file should
+// remap the baseline log's URIs to their post-rename paths (see RemapURIs) before
+// computing findings, rather than dropping the URI from the identity here.
 func assignFingerprints(items []preparedFinding) {
 	type key struct{ scanner, ruleID, uri, message string }
 	order := make([]int, len(items))
@@ -175,7 +177,7 @@ func assignFingerprints(items []preparedFinding) {
 	ordinals := map[key]int{}
 	for _, index := range order {
 		item := &items[index]
-		if native := nativeFingerprint(item.result); native != "" {
+		if native := nativeFingerprint(item.finding, item.result); native != "" {
 			item.finding.Fingerprint = native
 			continue
 		}
@@ -186,7 +188,56 @@ func assignFingerprints(items []preparedFinding) {
 	}
 }
 
-func nativeFingerprint(result Result) string {
+// RemapURIs returns a copy of log with each result location's artifact URI rewritten
+// according to renames (old path -> new path), matched after the same clean/slash
+// normalization Findings applies. Applying this to a baseline log scanned at the
+// pre-rename tree, keyed by the rename pairs a diff already identified, lets a renamed
+// file's pre-existing finding compare equal to its post-rename counterpart instead of
+// looking new merely because the file moved.
+func RemapURIs(log Log, renames map[string]string) Log {
+	if len(renames) == 0 {
+		return log
+	}
+	normalized := make(map[string]string, len(renames))
+	for oldPath, newPath := range renames {
+		normalized[normalizeURI(oldPath)] = newPath
+	}
+	remapped := log
+	remapped.Runs = make([]Run, len(log.Runs))
+	for i, run := range log.Runs {
+		remapped.Runs[i] = run
+		remapped.Runs[i].Results = make([]Result, len(run.Results))
+		for j, result := range run.Results {
+			remapped.Runs[i].Results[j] = remapRename(result, normalized)
+		}
+	}
+	return remapped
+}
+
+func remapRename(result Result, normalized map[string]string) Result {
+	if len(result.Locations) == 0 {
+		return result
+	}
+	result.Locations = append([]Location(nil), result.Locations...)
+	for i, location := range result.Locations {
+		uri := location.PhysicalLocation.ArtifactLocation.URI
+		if newPath, ok := normalized[normalizeURI(uri)]; ok {
+			location.PhysicalLocation.ArtifactLocation.URI = newPath
+			result.Locations[i] = location
+		}
+	}
+	return result
+}
+
+func normalizeURI(uri string) string {
+	clean := filepath.ToSlash(filepath.Clean(uri))
+	if clean == "." {
+		return ""
+	}
+	return clean
+}
+
+func nativeFingerprint(finding Finding, result Result) string {
 	values := make([]string, 0, len(result.PartialFingerprints)+len(result.Fingerprints))
 	for key, value := range result.PartialFingerprints {
 		values = append(values, key+"="+value)
@@ -198,6 +249,7 @@ func nativeFingerprint(result Result) string {
 		return ""
 	}
 	sort.Strings(values)
+	values = append([]string{"scanner=" + finding.Scanner, "rule=" + finding.RuleID}, values...)
 	sum := sha256.Sum256([]byte(strings.Join(values, "\x00")))
 	return hex.EncodeToString(sum[:])
 }

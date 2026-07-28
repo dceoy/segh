@@ -26,12 +26,35 @@ func TestCompareGatesOnlyNewFindings(t *testing.T) {
 			"zizmor": {MinimumSeverity: "high"},
 		},
 	}
-	result, err := Compare([]string{current}, []string{baseline}, cfg)
+	result, err := Compare([]string{current}, []string{baseline}, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.NewFindings) != 1 || len(result.BlockingFindings) != 1 || !result.Failed() {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestCompareRenameMapPreventsFalsePositiveOnRenamedFile(t *testing.T) {
+	dir := t.TempDir()
+	baseline := filepath.Join(dir, "baseline.sarif")
+	current := filepath.Join(dir, "current.sarif")
+	writeSARIF(t, baseline, []sarif.Result{fixtureResultAt("rule", "old.yml", "warning")})
+	writeSARIF(t, current, []sarif.Result{fixtureResultAt("rule", "new.yml", "warning")})
+	cfg := config.PullRequest{Thresholds: map[string]config.GateThreshold{"zizmor": {MinimumSeverity: "high"}}}
+	withoutRenames, err := Compare([]string{current}, []string{baseline}, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutRenames.NewFindings) != 1 {
+		t.Fatalf("expected the renamed finding to look new without a rename map, got %d", len(withoutRenames.NewFindings))
+	}
+	withRenames, err := Compare([]string{current}, []string{baseline}, cfg, map[string]string{"old.yml": "new.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withRenames.NewFindings) != 0 {
+		t.Fatalf("rename map must prevent a pre-existing finding from looking new, got %d new findings", len(withRenames.NewFindings))
 	}
 }
 
@@ -71,5 +94,17 @@ func fixtureResult(rule, fingerprint, level string) sarif.Result {
 	return sarif.Result{
 		RuleID: rule, Level: level, Message: sarif.Message{Text: rule},
 		PartialFingerprints: map[string]string{"id": fingerprint},
+	}
+}
+
+// fixtureResultAt builds a result with no native fingerprint, so it exercises the
+// URI-sensitive fallback fingerprint rather than the location-independent native one.
+func fixtureResultAt(rule, uri, level string) sarif.Result {
+	return sarif.Result{
+		RuleID: rule, Level: level, Message: sarif.Message{Text: rule},
+		Locations: []sarif.Location{{PhysicalLocation: sarif.PhysicalLocation{
+			ArtifactLocation: sarif.ArtifactLocation{URI: uri},
+			Region:           sarif.Region{StartLine: 1},
+		}}},
 	}
 }

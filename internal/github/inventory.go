@@ -334,7 +334,7 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 		err := s.client.Get(ctx, base+"/dependabot/alerts?per_page=1", &alert)
 		return err == nil, err
 	})
-	repo.SecurityMD = s.contentExists(ctx, base+"/contents/SECURITY.md?ref="+pathEscape(raw.DefaultBranch), "security_md")
+	repo.SecurityMD = s.securityPolicyExists(ctx, base, raw.DefaultBranch)
 	repo.RenovateConfigured = s.anyContentExists(ctx, base, raw.DefaultBranch, []string{
 		"renovate.json", "renovate.json5", ".github/renovate.json", ".github/renovate.json5",
 	}, "renovate_config")
@@ -401,6 +401,41 @@ func (s *InventoryService) contentExists(ctx context.Context, path, source strin
 	}
 	state, reason := ErrorState(err)
 	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason}
+}
+
+// securityMDPaths lists the repository locations GitHub itself accepts a security
+// policy at, checked as a fallback when the community profile API is unavailable or
+// reports no policy.
+var securityMDPaths = []string{"SECURITY.md", ".github/SECURITY.md", "docs/SECURITY.md"}
+
+// securityPolicyExists prefers the community profile API over probing a fixed
+// SECURITY.md path: GitHub itself resolves a repository's security policy from the
+// root, .github/, or docs/ directory, and falls back to the organization's default
+// .github community-health repository when the repository has none of its own, so a
+// profile hit is treated as authoritative. A miss or an unavailable profile (some
+// repository visibility/permission combinations don't expose it) falls back to
+// checking the supported locations directly rather than assuming absence, since
+// checking only "SECURITY.md" at the repository root missed all of those cases.
+func (s *InventoryService) securityPolicyExists(ctx context.Context, base, branch string) model.Observed[bool] {
+	var profile struct {
+		Files struct {
+			Security *jsonObject `json:"security"`
+		} `json:"files"`
+	}
+	err := s.client.Get(ctx, base+"/community/profile", &profile)
+	switch {
+	case err == nil && profile.Files.Security != nil:
+		return model.Observed[bool]{State: model.Available, Value: true, Source: "community/profile"}
+	case err == nil:
+		return s.anyContentExists(ctx, base, branch, securityMDPaths, "security_md")
+	default:
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+			return s.anyContentExists(ctx, base, branch, securityMDPaths, "security_md")
+		}
+		state, reason := ErrorState(err)
+		return model.Observed[bool]{State: model.Availability(state), Source: "community/profile", Reason: reason}
+	}
 }
 
 func (s *InventoryService) anyContentExists(ctx context.Context, base, branch string, paths []string, source string) model.Observed[bool] {

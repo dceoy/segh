@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -69,6 +71,32 @@ func TestScanRunErrorAcceptsCompleteRuns(t *testing.T) {
 	}
 	if err := scanRunError(run); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadRenameMap(t *testing.T) {
+	dir := t.TempDir()
+	writeList := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	if renames, err := readRenameMap(""); err != nil || renames != nil {
+		t.Fatalf("empty path: renames=%v err=%v", renames, err)
+	}
+	pairs := writeList("pairs.zlist", "old.yml\x00new.yml\x00")
+	renames, err := readRenameMap(pairs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(renames) != 1 || renames["old.yml"] != "new.yml" {
+		t.Fatalf("renames = %#v", renames)
+	}
+	odd := writeList("odd.zlist", "old.yml\x00")
+	if _, err := readRenameMap(odd); err == nil {
+		t.Fatal("expected an error for an unpaired entry")
 	}
 }
 
