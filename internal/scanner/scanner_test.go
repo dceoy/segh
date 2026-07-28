@@ -122,7 +122,7 @@ func TestResolveHeadSHAReturnsCheckedOutCommit(t *testing.T) {
 	dir := t.TempDir()
 	run := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := exec.CommandContext(context.Background(), "git", args...) // #nosec G204 -- args are fixed test-controlled git subcommands.
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
@@ -138,7 +138,7 @@ func TestResolveHeadSHAReturnsCheckedOutCommit(t *testing.T) {
 	}
 	run("add", "file.txt")
 	run("commit", "-m", "initial")
-	expected, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output() // #nosec G204 -- dir is a t.TempDir() path this test created.
+	expected, err := exec.CommandContext(context.Background(), "git", "-C", dir, "rev-parse", "HEAD").Output() // #nosec G204 -- dir is a t.TempDir() path this test created.
 	if err != nil {
 		t.Fatal(err)
 	}
