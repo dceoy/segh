@@ -244,16 +244,15 @@ func (s *Service) execute(parent context.Context, repo model.Repository, workPat
 		result.Status, result.Error = model.ScannerFailed, err.Error()
 		return result
 	}
-	command, args, stdoutToSARIF := s.command(scanner.name, repo, workPath, absoluteResultPath)
+	_, args, stdoutToSARIF := s.command(scanner.name, repo, workPath, absoluteResultPath)
 	// Resolve the real installed binary now that verifyVersion (above) has already
 	// completed any lazy install unconstrained by resource limits, so the resource-limited
 	// execution below never has to install anything itself.
-	resolvedCommand, resolveErr := s.resolveExecutable(ctx, scanner)
+	command, resolveErr := s.resolveExecutable(ctx, scanner)
 	if resolveErr != nil {
 		result.Status, result.Error = model.ScannerFailed, resolveErr.Error()
 		return result
 	}
-	command = resolvedCommand
 	diagnostic, err := os.OpenFile(absoluteDiagnosticPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) // #nosec G304 -- derived beneath the configured output directory.
 	if err != nil {
 		result.Status, result.Error = model.ScannerFailed, "create scanner diagnostic output"
@@ -654,7 +653,7 @@ func verifyVersion(ctx context.Context, scanner definition, workingDirectory, to
 // going back through Aqua's proxy shim. Outside an Aqua-managed environment (e.g. local
 // development), the scanner name is returned unchanged and resolved from PATH as before.
 func resolveExecutable(ctx context.Context, name, workingDirectory, toolHome string) (string, error) {
-	if _, err := exec.LookPath("aqua"); err != nil {
+	if !commandAvailable("aqua") {
 		return name, nil
 	}
 	cmd := exec.CommandContext(ctx, "aqua", "which", name) // #nosec G204 -- name is a closed internal enum.
@@ -672,10 +671,20 @@ func resolveExecutable(ctx context.Context, name, workingDirectory, toolHome str
 	// not itself verify the file exists. Fall back to PATH resolution rather than handing
 	// exec a path that may not be there, which would otherwise surface as an opaque exec
 	// failure indistinguishable from a real scan failure.
-	if info, statErr := os.Stat(resolved); statErr != nil || info.IsDir() {
+	if !existingFile(resolved) {
 		return name, nil
 	}
 	return resolved, nil
+}
+
+func commandAvailable(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func existingFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func toolEnvironment(toolHome string) []string {

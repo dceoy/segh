@@ -496,7 +496,7 @@ func (s *InventoryService) fetchContent(ctx context.Context, path string) ([]byt
 	}
 	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(item.Content, "\n", ""))
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("invalid content encoding")
 	}
 	return decoded, nil
 }
