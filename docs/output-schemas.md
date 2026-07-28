@@ -20,6 +20,16 @@ and a delta without treating the prior artifact as a database or source of
 truth. Pull-request gating uses native fingerprints rather than aggregate
 counts.
 
+`report --expected-repositories <n>` marks summary coverage `partial` when no
+scan input is supplied, or when the supplied scan covers fewer than `n`
+distinct repositories, so a matrix batch that never produced a `scan.json`
+cannot leave an incomplete organization audit report as `complete`. Pass the
+batch plan's repository count (not the organization inventory's selected
+count), since a targeted `workflow_dispatch` run intentionally scans fewer
+repositories than the full inventory. The default `-1` disables this check.
+Coverage is a summary label only; it does not change the `report` command's
+exit code.
+
 Recommended retention is 14 days and must comply with organization policy.
 SARIF upload status and unsupported paths remain in the report. Do not retain
 private source clones, App private keys, installation tokens, or scanner

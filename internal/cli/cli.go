@@ -202,7 +202,7 @@ func runAudit(cfg config.Config, args []string, stdout io.Writer) error {
 			return runtimeError(err)
 		}
 	}
-	consolidated := report.Build(&inventory, &audit, nil, nil)
+	consolidated := report.Build(&inventory, &audit, nil, nil, -1)
 	if err := output.Text(*markdownPath, report.Markdown(consolidated)); err != nil {
 		return runtimeError(err)
 	}
@@ -458,6 +458,7 @@ func runReport(args []string, stdout io.Writer) error {
 	inventoryPath := flags.String("inventory", "", "inventory JSON input")
 	auditPath := flags.String("audit", "", "audit JSON input")
 	scanPath := flags.String("scan", "", "scan JSON input")
+	expectedRepositories := flags.Int("expected-repositories", -1, "number of distinct repositories the scan stage was expected to cover; marks coverage partial when the scan is missing or covers fewer (-1 disables this check)")
 	previousScanPath := flags.String("previous-scan", "", "optional prior scan JSON for trend input")
 	var publicationPaths stringList
 	flags.Var(&publicationPaths, "publications", "publication JSON file or directory (repeatable)")
@@ -501,7 +502,7 @@ func runReport(args []string, stdout io.Writer) error {
 			publications = append(publications, batch...)
 		}
 	}
-	result := report.Build(inventory, audit, scanRun, publications)
+	result := report.Build(inventory, audit, scanRun, publications, *expectedRepositories)
 	if *previousScanPath != "" {
 		var previous model.ScanRun
 		if err := readJSON(*previousScanPath, &previous); err != nil {

@@ -269,9 +269,19 @@ jobs:
           if test -d publication-results; then
             publication_args+=(--publications publication-results)
           fi
+          # Expected coverage comes from the batch plan rather than the
+          # organization inventory's selected count, since a workflow_dispatch
+          # run can target a repository subset that is smaller than the
+          # inventory: comparing against the inventory would misreport such a
+          # run as partial even when every planned batch succeeded.
+          expected_repositories=0
+          if test -n "$(find segh-results/batches -maxdepth 1 -name 'inventory-*.json' -print -quit 2>/dev/null)"; then
+            expected_repositories=$(jq -s '[.[].repositories[].full_name] | unique | length' segh-results/batches/inventory-*.json)
+          fi
           bin/segh --config config/organization.yaml report \
             --inventory segh-results/inventory.json \
             --audit segh-results/audit.json \
+            --expected-repositories "$expected_repositories" \
             "${scan_args[@]}" \
             "${publication_args[@]}" \
             --output segh-results/report.json \

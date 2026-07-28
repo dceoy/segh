@@ -34,7 +34,12 @@ type Trend struct {
 	Delta            int `json:"delta"`
 }
 
-func Build(inventory *model.Inventory, audit *model.Audit, scan *model.ScanRun, publications []model.Publication) Consolidated {
+// Build assembles a consolidated report. expectedRepositories is the number
+// of distinct repositories the caller expects the scan stage to have covered
+// for this run (for example, the batch plan's repository count, which may be
+// a targeted subset smaller than inventory.Selected); pass -1 when the caller
+// has no such expectation, so a missing or partial scan is not flagged.
+func Build(inventory *model.Inventory, audit *model.Audit, scan *model.ScanRun, publications []model.Publication, expectedRepositories int) Consolidated {
 	result := Consolidated{
 		SchemaVersion: model.ReportSchemaVersion,
 		Inventory:     inventory,
@@ -72,6 +77,11 @@ func Build(inventory *model.Inventory, audit *model.Audit, scan *model.ScanRun, 
 		if len(scan.Errors) > 0 || len(scan.Repositories) < scan.Selected {
 			result.Summary.Coverage = "partial"
 		}
+		if expectedRepositories >= 0 && scannedRepositories(scan.Repositories) < expectedRepositories {
+			result.Summary.Coverage = "partial"
+		}
+	} else if expectedRepositories > 0 {
+		result.Summary.Coverage = "partial"
 	}
 	for _, publication := range publications {
 		result.Summary.Publication[string(publication.Status)]++
@@ -80,6 +90,18 @@ func Build(inventory *model.Inventory, audit *model.Audit, scan *model.ScanRun, 
 		}
 	}
 	return result
+}
+
+// scannedRepositories counts distinct repositories actually present in a scan
+// run. A merged run's own Selected field is derived from this same set, so it
+// cannot detect a matrix batch that failed to produce a scan.json at all;
+// comparing against an independently supplied expected count can.
+func scannedRepositories(executions []model.RepositoryExecution) int {
+	seen := map[string]struct{}{}
+	for _, execution := range executions {
+		seen[execution.Repository] = struct{}{}
+	}
+	return len(seen)
 }
 
 func AddTrend(result *Consolidated, previous model.ScanRun) {
