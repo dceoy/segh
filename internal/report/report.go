@@ -35,11 +35,17 @@ type Trend struct {
 }
 
 // Build assembles a consolidated report. expectedRepositories is the number
-// of distinct repositories the caller expects the scan stage to have covered
-// for this run (for example, the batch plan's repository count, which may be
-// a targeted subset smaller than inventory.Selected); pass -1 when the caller
-// has no such expectation, so a missing or partial scan is not flagged.
-func Build(inventory *model.Inventory, audit *model.Audit, scan *model.ScanRun, publications []model.Publication, expectedRepositories int) Consolidated {
+// of distinct repositories the caller expects the scan stage to have covered.
+// expectedPublicationBatches and observedPublicationBatches independently
+// reconcile publication-stage artifacts with the batch plan. Pass -1 for an
+// expected count when that stage is not expected for this run.
+func Build(
+	inventory *model.Inventory,
+	audit *model.Audit,
+	scan *model.ScanRun,
+	publications []model.Publication,
+	expectedRepositories, expectedPublicationBatches, observedPublicationBatches int,
+) Consolidated {
 	result := Consolidated{
 		SchemaVersion: model.ReportSchemaVersion,
 		Inventory:     inventory,
@@ -88,6 +94,9 @@ func Build(inventory *model.Inventory, audit *model.Audit, scan *model.ScanRun, 
 		if publication.Status != model.PublicationSucceeded && publication.Status != model.PublicationRetained {
 			result.Summary.Coverage = "partial"
 		}
+	}
+	if expectedPublicationBatches >= 0 && observedPublicationBatches < expectedPublicationBatches {
+		result.Summary.Coverage = "partial"
 	}
 	return result
 }

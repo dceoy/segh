@@ -202,7 +202,7 @@ func runAudit(cfg config.Config, args []string, stdout io.Writer) error {
 			return runtimeError(err)
 		}
 	}
-	consolidated := report.Build(&inventory, &audit, nil, nil, -1)
+	consolidated := report.Build(&inventory, &audit, nil, nil, -1, -1, 0)
 	if err := output.Text(*markdownPath, report.Markdown(consolidated)); err != nil {
 		return runtimeError(err)
 	}
@@ -465,6 +465,7 @@ func runReport(args []string, stdout io.Writer) error {
 	auditPath := flags.String("audit", "", "audit JSON input")
 	scanPath := flags.String("scan", "", "scan JSON input")
 	expectedRepositories := flags.Int("expected-repositories", -1, "number of distinct repositories the scan stage was expected to cover; marks coverage partial when the scan is missing or covers fewer (-1 disables this check)")
+	expectedPublicationBatches := flags.Int("expected-publication-batches", -1, "number of publication batch artifacts expected from the plan; marks coverage partial when fewer are available (-1 disables this check)")
 	previousScanPath := flags.String("previous-scan", "", "optional prior scan JSON for trend input")
 	var publicationPaths stringList
 	flags.Var(&publicationPaths, "publications", "publication JSON file or directory (repeatable)")
@@ -477,6 +478,7 @@ func runReport(args []string, stdout io.Writer) error {
 	var audit *model.Audit
 	var scanRun *model.ScanRun
 	var publications []model.Publication
+	publicationBatches := 0
 	if *inventoryPath != "" {
 		inventory = &model.Inventory{}
 		if err := readJSON(*inventoryPath, inventory); err != nil {
@@ -500,6 +502,7 @@ func runReport(args []string, stdout io.Writer) error {
 		if err != nil {
 			return runtimeError(err)
 		}
+		publicationBatches = len(paths)
 		for _, path := range paths {
 			var batch []model.Publication
 			if err := readJSON(path, &batch); err != nil {
@@ -508,7 +511,15 @@ func runReport(args []string, stdout io.Writer) error {
 			publications = append(publications, batch...)
 		}
 	}
-	result := report.Build(inventory, audit, scanRun, publications, *expectedRepositories)
+	result := report.Build(
+		inventory,
+		audit,
+		scanRun,
+		publications,
+		*expectedRepositories,
+		*expectedPublicationBatches,
+		publicationBatches,
+	)
 	if *previousScanPath != "" {
 		var previous model.ScanRun
 		if err := readJSON(*previousScanPath, &previous); err != nil {

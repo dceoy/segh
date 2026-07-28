@@ -258,6 +258,8 @@ jobs:
           pattern: publication-*
           path: publication-results
       - name: Build and aggregate
+        env:
+          DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           go build -trimpath -o bin/segh ./cmd/segh
           scan_args=()
@@ -268,7 +270,7 @@ jobs:
             scan_args+=(--scan segh-results/scan-merged.json)
           fi
           publication_args=()
-          if test -d publication-results; then
+          if test -d publication-results && test -n "$(find publication-results -name publications.json -print -quit)"; then
             publication_args+=(--publications publication-results)
           fi
           # Expected coverage comes from the batch plan rather than the
@@ -280,10 +282,15 @@ jobs:
           if test -n "$(find segh-results/batches -maxdepth 1 -name 'inventory-*.json' -print -quit 2>/dev/null)"; then
             expected_repositories=$(jq -s '[.[].repositories[].full_name] | unique | length' segh-results/batches/inventory-*.json)
           fi
+          expected_publication_batches=-1
+          if [[ "$DRY_RUN" != "true" ]]; then
+            expected_publication_batches=$(jq '.include | length' segh-results/batches/matrix.json)
+          fi
           bin/segh --config config/organization.yaml report \
             --inventory segh-results/inventory.json \
             --audit segh-results/audit.json \
             --expected-repositories "$expected_repositories" \
+            --expected-publication-batches "$expected_publication_batches" \
             "${scan_args[@]}" \
             "${publication_args[@]}" \
             --output segh-results/report.json \

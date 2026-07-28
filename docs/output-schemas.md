@@ -30,6 +30,12 @@ repositories than the full inventory. The default `-1` disables this check.
 Coverage is a summary label only; it does not change the `report` command's
 exit code.
 
+`report --expected-publication-batches <n>` similarly reconciles the number of
+available `publications.json` artifacts with the batch plan. This prevents a
+publication matrix job that failed before writing its status artifact from
+disappearing from the consolidated coverage result. The organization workflow
+disables this check for dry runs, where publication is intentionally skipped.
+
 Recommended retention is 14 days and must comply with organization policy.
 SARIF upload status and unsupported paths remain in the report. Do not retain
 private source clones, App private keys, installation tokens, or scanner

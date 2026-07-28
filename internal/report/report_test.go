@@ -11,7 +11,7 @@ func TestBuildMarksPartialCoverage(t *testing.T) {
 	inventory := &model.Inventory{Selected: 2, Complete: true}
 	audit := &model.Audit{Counts: map[string]int{"unknown": 1}}
 	scan := &model.ScanRun{Results: []model.ScannerResult{{Status: model.ScannerFailed}}}
-	result := Build(inventory, audit, scan, []model.Publication{{Status: model.PublicationUnsupported}}, -1)
+	result := Build(inventory, audit, scan, []model.Publication{{Status: model.PublicationUnsupported}}, -1, -1, 0)
 	AddTrend(&result, model.ScanRun{Results: []model.ScannerResult{{Findings: 3}}})
 	if result.Summary.Coverage != "partial" || result.Summary.Repositories != 2 {
 		t.Fatalf("summary = %#v", result.Summary)
@@ -32,7 +32,7 @@ func TestBuildMarksPartialCoverageOnScanRunErrorsWithoutFailedResults(t *testing
 		Errors:       []model.RunError{{Component: "clone", Kind: "runtime", Message: "boom"}},
 		Results:      []model.ScannerResult{{Status: model.ScannerClean}},
 	}
-	result := Build(nil, nil, scan, nil, -1)
+	result := Build(nil, nil, scan, nil, -1, -1, 0)
 	if result.Summary.Coverage != "partial" {
 		t.Fatalf("coverage = %s, want partial", result.Summary.Coverage)
 	}
@@ -44,7 +44,7 @@ func TestBuildMarksPartialCoverageOnIncompleteRepositoryCoverage(t *testing.T) {
 		Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}},
 		Results:      []model.ScannerResult{{Status: model.ScannerClean}},
 	}
-	result := Build(nil, nil, scan, nil, -1)
+	result := Build(nil, nil, scan, nil, -1, -1, 0)
 	if result.Summary.Coverage != "partial" {
 		t.Fatalf("coverage = %s, want partial", result.Summary.Coverage)
 	}
@@ -60,14 +60,14 @@ func TestBuildMarksPartialCoverageWhenMergedScanIsMissingAWholeBatch(t *testing.
 		Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}, {Repository: "a/c", Status: "complete"}},
 		Results:      []model.ScannerResult{{Repository: "a/b", Status: model.ScannerClean}, {Repository: "a/c", Status: model.ScannerClean}},
 	}
-	result := Build(nil, nil, scan, nil, 4)
+	result := Build(nil, nil, scan, nil, 4, -1, 0)
 	if result.Summary.Coverage != "partial" {
 		t.Fatalf("coverage = %s, want partial", result.Summary.Coverage)
 	}
 }
 
 func TestBuildMarksPartialCoverageWhenNoScanArtifactsAreAvailable(t *testing.T) {
-	result := Build(nil, nil, nil, nil, 4)
+	result := Build(nil, nil, nil, nil, 4, -1, 0)
 	if result.Summary.Coverage != "partial" {
 		t.Fatalf("coverage = %s, want partial", result.Summary.Coverage)
 	}
@@ -75,7 +75,7 @@ func TestBuildMarksPartialCoverageWhenNoScanArtifactsAreAvailable(t *testing.T) 
 
 func TestBuildDoesNotRequireScanWhenExpectedRepositoriesIsZero(t *testing.T) {
 	inventory := &model.Inventory{Selected: 0, Complete: true}
-	result := Build(inventory, nil, nil, nil, 0)
+	result := Build(inventory, nil, nil, nil, 0, -1, 0)
 	if result.Summary.Coverage != "complete" {
 		t.Fatalf("coverage = %s, want complete", result.Summary.Coverage)
 	}
@@ -84,7 +84,7 @@ func TestBuildDoesNotRequireScanWhenExpectedRepositoriesIsZero(t *testing.T) {
 func TestBuildDoesNotRequireScanWhenNotExpected(t *testing.T) {
 	inventory := &model.Inventory{Selected: 4, Complete: true}
 	audit := &model.Audit{Counts: map[string]int{"pass": 4}}
-	result := Build(inventory, audit, nil, nil, -1)
+	result := Build(inventory, audit, nil, nil, -1, -1, 0)
 	if result.Summary.Coverage != "complete" {
 		t.Fatalf("coverage = %s, want complete", result.Summary.Coverage)
 	}
@@ -101,7 +101,22 @@ func TestBuildDoesNotFlagATargetedRunScopedBelowInventorySelected(t *testing.T) 
 		Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}, {Repository: "a/c", Status: "complete"}},
 		Results:      []model.ScannerResult{{Repository: "a/b", Status: model.ScannerClean}, {Repository: "a/c", Status: model.ScannerClean}},
 	}
-	result := Build(inventory, nil, scan, nil, 2)
+	result := Build(inventory, nil, scan, nil, 2, -1, 0)
+	if result.Summary.Coverage != "complete" {
+		t.Fatalf("coverage = %s, want complete", result.Summary.Coverage)
+	}
+}
+
+func TestBuildMarksPartialCoverageWhenPublicationBatchArtifactIsMissing(t *testing.T) {
+	publications := []model.Publication{{Status: model.PublicationSucceeded}}
+	result := Build(nil, nil, nil, publications, -1, 2, 1)
+	if result.Summary.Coverage != "partial" {
+		t.Fatalf("coverage = %s, want partial", result.Summary.Coverage)
+	}
+}
+
+func TestBuildDoesNotRequirePublicationArtifactsWhenPublicationIsNotExpected(t *testing.T) {
+	result := Build(nil, nil, nil, nil, -1, -1, 0)
 	if result.Summary.Coverage != "complete" {
 		t.Fatalf("coverage = %s, want complete", result.Summary.Coverage)
 	}

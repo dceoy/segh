@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -46,6 +47,32 @@ func TestClientRetriesTransientFailure(t *testing.T) {
 	}
 	if !response.OK || calls.Load() != 2 {
 		t.Fatalf("response=%#v calls=%d", response, calls.Load())
+	}
+}
+
+func TestRetryDelayUsesPrimaryRateLimitReset(t *testing.T) {
+	client := &Client{baseDelay: time.Millisecond}
+	now := time.Unix(1_700_000_000, 0)
+	header := http.Header{
+		"X-Ratelimit-Remaining": {"0"},
+		"X-Ratelimit-Reset":     {strconv.FormatInt(now.Add(90*time.Second).Unix(), 10)},
+	}
+
+	if delay := client.retryDelay(0, http.StatusForbidden, header, now); delay != 91*time.Second {
+		t.Fatalf("delay = %s, want 91s", delay)
+	}
+}
+
+func TestRetryDelayUsesSecondaryRateLimitMinimumWithoutHeaders(t *testing.T) {
+	client := &Client{baseDelay: time.Millisecond}
+	if delay := client.retryDelay(0, http.StatusTooManyRequests, nil, time.Unix(1_700_000_000, 0)); delay < time.Minute {
+		t.Fatalf("delay = %s, want at least 1m", delay)
+	}
+}
+
+func TestRetryableStatusRecognizesSecondaryRateLimitMessage(t *testing.T) {
+	if !retryableStatus(http.StatusForbidden, nil, "You have exceeded a secondary rate limit.") {
+		t.Fatal("expected a secondary rate-limit response to be retryable")
 	}
 }
 

@@ -111,7 +111,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 		resp, requestErr := c.http.Do(req)
 		if requestErr != nil {
 			if attempt < c.maxRetries && isRetryableRequestError(requestErr) {
-				if err := waitRetry(ctx, c.retryDelay(attempt, "")); err != nil {
+				if err := waitRetry(ctx, c.retryDelay(attempt, 0, nil, time.Now())); err != nil {
 					return err
 				}
 				continue
@@ -142,8 +142,8 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 		}
 
 		apiErr := decodeAPIError(resp, data, token)
-		if attempt < c.maxRetries && retryableStatus(resp.StatusCode, resp.Header) {
-			delay := c.retryDelay(attempt, resp.Header.Get("Retry-After"))
+		if attempt < c.maxRetries && retryableStatus(resp.StatusCode, resp.Header, apiErr.Message) {
+			delay := c.retryDelay(attempt, resp.StatusCode, resp.Header, time.Now())
 			c.log.Info("retrying GitHub API request", "status", resp.StatusCode, "attempt", attempt+1, "delay", delay)
 			if err := waitRetry(ctx, delay); err != nil {
 				return err
@@ -165,7 +165,7 @@ func readBounded(reader io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-func decodeAPIError(resp *http.Response, data []byte, token string) error {
+func decodeAPIError(resp *http.Response, data []byte, token string) *APIError {
 	var payload struct {
 		Message string `json:"message"`
 	}
@@ -182,21 +182,41 @@ func decodeAPIError(resp *http.Response, data []byte, token string) error {
 	return &APIError{StatusCode: resp.StatusCode, Message: payload.Message, RequestID: resp.Header.Get("X-GitHub-Request-Id")}
 }
 
-func retryableStatus(status int, header http.Header) bool {
+func retryableStatus(status int, header http.Header, message string) bool {
 	if status == http.StatusTooManyRequests || status >= 500 {
 		return true
 	}
 	return status == http.StatusForbidden &&
-		(header.Get("Retry-After") != "" || header.Get("X-RateLimit-Remaining") == "0")
+		(header.Get("Retry-After") != "" ||
+			header.Get("X-RateLimit-Remaining") == "0" ||
+			isSecondaryRateLimitMessage(message))
+}
+
+func isSecondaryRateLimitMessage(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "secondary rate limit") ||
+		strings.Contains(message, "abuse detection")
 }
 
 func isRetryableRequestError(err error) bool {
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
-func (c *Client) retryDelay(attempt int, retryAfter string) time.Duration {
-	if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
+func (c *Client) retryDelay(attempt, status int, header http.Header, now time.Time) time.Duration {
+	if seconds, err := strconv.Atoi(header.Get("Retry-After")); err == nil && seconds > 0 {
 		return time.Duration(seconds) * time.Second
+	}
+	if header.Get("X-RateLimit-Remaining") == "0" {
+		if reset, err := strconv.ParseInt(header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+			delay := time.Unix(reset, 0).Sub(now)
+			if delay > 0 {
+				const afterReset = time.Second
+				if delay > time.Duration(1<<63-1)-afterReset {
+					return time.Duration(1<<63 - 1)
+				}
+				return delay + afterReset
+			}
+		}
 	}
 	exponent := math.Min(float64(attempt), 8)
 	base := float64(c.baseDelay) * math.Pow(2, exponent)
@@ -204,7 +224,11 @@ func (c *Client) retryDelay(attempt int, retryAfter string) time.Duration {
 	if random, err := rand.Int(rand.Reader, big.NewInt(5001)); err == nil {
 		jitter = 0.75 + float64(random.Int64())/10_000
 	}
-	return time.Duration(base * jitter)
+	delay := time.Duration(base * jitter)
+	if status == http.StatusForbidden || status == http.StatusTooManyRequests {
+		return max(delay, time.Minute)
+	}
+	return delay
 }
 
 func waitRetry(ctx context.Context, delay time.Duration) error {
