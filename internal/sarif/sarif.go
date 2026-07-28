@@ -156,17 +156,21 @@ func CountFile(path string) (int, error) {
 }
 
 // assignFingerprints fills in each item's Fingerprint. Results carrying native SARIF
-// fingerprints use those namespaced by scanner and rule, since the baseline gate stores
-// every fingerprint in one global set and a bare native value can collide across rules
-// or scanners. Everything else falls back to a fingerprint built from scanner/rule/URI/
-// normalized message plus an occurrence ordinal, rather than the absolute line number,
-// so inserting or removing lines above a finding does not make it look new to the PR
-// gate. The URI is kept so findings in different files never collapse into one
-// fingerprint; callers that need rename-stable comparison across a renamed file should
-// remap the baseline log's URIs to their post-rename paths (see RemapURIs) before
-// computing findings, rather than dropping the URI from the identity here.
+// fingerprints use those namespaced by scanner, rule, and URI plus an occurrence ordinal,
+// since the baseline gate stores every fingerprint in one global set: a bare native value
+// can collide across rules or scanners, and omitting the URI would let a copied file's
+// finding collide with the source file's baseline entry, or a genuinely duplicated
+// occurrence at one location collide with its own baseline entry. Everything else falls
+// back to a fingerprint built from scanner/rule/URI/normalized message plus an occurrence
+// ordinal, rather than the absolute line number, so inserting or removing lines above a
+// finding does not make it look new to the PR gate. The URI is kept so findings in
+// different files never collapse into one fingerprint; callers that need rename-stable
+// comparison across a renamed file should remap the baseline log's URIs to their
+// post-rename paths (see RemapURIs) before computing findings, rather than dropping the
+// URI from the identity here.
 func assignFingerprints(items []preparedFinding) {
 	type key struct{ scanner, ruleID, uri, message string }
+	type nativeKey struct{ scanner, ruleID, uri, native string }
 	order := make([]int, len(items))
 	for i := range order {
 		order[i] = i
@@ -175,10 +179,14 @@ func assignFingerprints(items []preparedFinding) {
 		return items[order[a]].finding.Line < items[order[b]].finding.Line
 	})
 	ordinals := map[key]int{}
+	nativeOrdinals := map[nativeKey]int{}
 	for _, index := range order {
 		item := &items[index]
-		if native := nativeFingerprint(item.finding, item.result); native != "" {
-			item.finding.Fingerprint = native
+		if native := nativeValues(item.result); native != "" {
+			nk := nativeKey{item.finding.Scanner, item.finding.RuleID, item.finding.URI, native}
+			ordinal := nativeOrdinals[nk]
+			nativeOrdinals[nk] = ordinal + 1
+			item.finding.Fingerprint = nativeFingerprint(item.finding, native, ordinal)
 			continue
 		}
 		k := key{item.finding.Scanner, item.finding.RuleID, item.finding.URI, normalizeMessage(item.finding.Message)}
@@ -237,7 +245,7 @@ func normalizeURI(uri string) string {
 	return clean
 }
 
-func nativeFingerprint(finding Finding, result Result) string {
+func nativeValues(result Result) string {
 	values := make([]string, 0, len(result.PartialFingerprints)+len(result.Fingerprints))
 	for key, value := range result.PartialFingerprints {
 		values = append(values, key+"="+value)
@@ -249,7 +257,14 @@ func nativeFingerprint(finding Finding, result Result) string {
 		return ""
 	}
 	sort.Strings(values)
-	values = append([]string{"scanner=" + finding.Scanner, "rule=" + finding.RuleID}, values...)
+	return strings.Join(values, "\x00")
+}
+
+func nativeFingerprint(finding Finding, native string, ordinal int) string {
+	values := []string{
+		"scanner=" + finding.Scanner, "rule=" + finding.RuleID, "uri=" + finding.URI,
+		native, strconv.Itoa(ordinal),
+	}
 	sum := sha256.Sum256([]byte(strings.Join(values, "\x00")))
 	return hex.EncodeToString(sum[:])
 }

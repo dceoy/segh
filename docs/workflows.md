@@ -24,6 +24,15 @@ Required Actions secrets are `SEGH_READ_APP_ID`,
 `SEGH_PUBLISH_APP_PRIVATE_KEY`. Configure `config/organization.yaml` before
 enabling the schedule.
 
+This workflow retains the organization inventory, audit, and scanner findings
+in Actions artifacts and the run summary. Both are readable by anyone with
+repository read access, so the workflow must run from a private control
+repository, never from a public fork or mirror of `dceoy/segh`. The `plan` and
+`aggregate` jobs each fail fast with `Require a private control repository`,
+which queries `repos/$GITHUB_REPOSITORY` via `gh api` rather than trusting the
+`schedule` event payload's repository visibility, since that payload field is
+not reliably populated for every trigger.
+
 ## Pull-request workflow
 
 `.github/workflows/reusable-pr-security.yml` is a reusable `workflow_call`

@@ -97,6 +97,50 @@ func TestNativeFingerprintDoesNotCollideAcrossRules(t *testing.T) {
 	}
 }
 
+func TestNativeFingerprintDistinguishesDifferentFiles(t *testing.T) {
+	sameNative := func(uri string) Result {
+		return Result{
+			RuleID:  "rule",
+			Message: Message{Text: "issue"},
+			Locations: []Location{{PhysicalLocation: PhysicalLocation{
+				ArtifactLocation: ArtifactLocation{URI: uri},
+			}}},
+			PartialFingerprints: map[string]string{"primaryLocationLineHash": "same"},
+		}
+	}
+	log := Log{Version: "2.1.0", Runs: []Run{{Tool: Tool{Driver: Driver{Name: "trivy"}}, Results: []Result{
+		sameNative("a.yml"), sameNative("b.yml"),
+	}}}}
+	findings := Findings(log)
+	if len(findings) != 2 {
+		t.Fatalf("findings = %d", len(findings))
+	}
+	if findings[0].Fingerprint == findings[1].Fingerprint {
+		t.Fatal("a copied file with the same native fingerprint must not collapse to one fingerprint")
+	}
+}
+
+func TestNativeFingerprintDistinguishesRepeatedOccurrences(t *testing.T) {
+	sameNative := Result{
+		RuleID:  "rule",
+		Message: Message{Text: "issue"},
+		Locations: []Location{{PhysicalLocation: PhysicalLocation{
+			ArtifactLocation: ArtifactLocation{URI: "a.yml"},
+		}}},
+		PartialFingerprints: map[string]string{"primaryLocationLineHash": "same"},
+	}
+	log := Log{Version: "2.1.0", Runs: []Run{{Tool: Tool{Driver: Driver{Name: "trivy"}}, Results: []Result{
+		sameNative, sameNative,
+	}}}}
+	findings := Findings(log)
+	if len(findings) != 2 {
+		t.Fatalf("findings = %d", len(findings))
+	}
+	if findings[0].Fingerprint == findings[1].Fingerprint {
+		t.Fatal("a duplicated occurrence at the same location must not collapse to one fingerprint")
+	}
+}
+
 func TestFallbackFingerprintDistinguishesDifferentFiles(t *testing.T) {
 	inFile := func(uri string) Result {
 		return Result{
@@ -144,5 +188,29 @@ func TestRemapURIsAlignsFingerprintsAcrossRename(t *testing.T) {
 	}
 	if remappedFindings[0].Fingerprint != Findings(after)[0].Fingerprint {
 		t.Fatal("a remapped baseline finding must align with its post-rename counterpart")
+	}
+}
+
+func TestRemapURIsAlignsNativeFingerprintsAcrossRename(t *testing.T) {
+	renamed := func(uri string) Result {
+		return Result{
+			RuleID:              "rule",
+			Message:             Message{Text: "issue found"},
+			PartialFingerprints: map[string]string{"primaryLocationLineHash": "same"},
+			Locations: []Location{{PhysicalLocation: PhysicalLocation{
+				ArtifactLocation: ArtifactLocation{URI: uri},
+			}}},
+		}
+	}
+	before := Log{Version: "2.1.0", Runs: []Run{{Tool: Tool{Driver: Driver{Name: "trivy"}}, Results: []Result{renamed("old.yml")}}}}
+	after := Log{Version: "2.1.0", Runs: []Run{{Tool: Tool{Driver: Driver{Name: "trivy"}}, Results: []Result{renamed("new.yml")}}}}
+	beforeFindings := Findings(before)
+	if beforeFindings[0].Fingerprint == Findings(after)[0].Fingerprint {
+		t.Fatal("native fingerprints across a rename must differ without a rename map")
+	}
+	remapped := RemapURIs(before, map[string]string{"old.yml": "new.yml"})
+	remappedFindings := Findings(remapped)
+	if remappedFindings[0].Fingerprint != Findings(after)[0].Fingerprint {
+		t.Fatal("a remapped baseline native fingerprint must align with its post-rename counterpart")
 	}
 }

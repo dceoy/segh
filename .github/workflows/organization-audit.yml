@@ -34,6 +34,14 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
+      - name: Require a private control repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" != "true" ]]; then
+            echo "::error::This workflow retains the organization inventory, audit, and scanner findings in Actions artifacts and the run summary, which are readable by anyone with repository read access. Run it only from a private control repository; $GITHUB_REPOSITORY is not private."
+            exit 1
+          fi
       - name: Check out trusted source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -213,6 +221,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Require a private control repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" != "true" ]]; then
+            echo "::error::This workflow retains the organization inventory, audit, and scanner findings in Actions artifacts and the run summary, which are readable by anyone with repository read access. Run it only from a private control repository; $GITHUB_REPOSITORY is not private."
+            exit 1
+          fi
       - name: Check out trusted source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
