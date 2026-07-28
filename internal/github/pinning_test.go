@@ -62,6 +62,56 @@ func TestWorkflowPinningFollowsLocalCompositeActions(t *testing.T) {
 	}
 }
 
+func TestWorkflowPinningFollowsLocalCompositeActionWithoutRef(t *testing.T) {
+	workflow := "on: push\njobs:\n  build:\n    steps:\n      - uses: ./.github/actions/example\n"
+	action := "runs:\n  using: composite\n  steps:\n    - uses: third-party/action@main\n"
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows" && request.URL.RawQuery == "ref=main":
+			_, _ = io.WriteString(writer, `[{"name":"ci.yml","type":"file"}]`)
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows/ci.yml":
+			_, _ = io.WriteString(writer, contentResponse(workflow))
+		case request.URL.Path == "/repos/org/repo/contents/.github/actions/example/action.yml":
+			_, _ = io.WriteString(writer, contentResponse(action))
+		case request.URL.Path == "/repos/org/repo/contents/.github/actions/example/action.yaml":
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+		default:
+			t.Errorf("unexpected request: %s?%s", request.URL.Path, request.URL.RawQuery)
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	})
+	pinned, status := service.workflowPinning(context.Background(), "/repos/org/repo", "main")
+	if pinned.Value {
+		t.Fatalf("pinned = %#v, want false due to nested unpinned reference", pinned)
+	}
+	if status.Value != "unpinned" || status.Reason != ".github/actions/example/action.yml" {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestWorkflowPinningIgnoresLocalReusableWorkflowCall(t *testing.T) {
+	workflow := "on: push\njobs:\n  call:\n    uses: ./.github/workflows/reusable.yml\n"
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows" && request.URL.RawQuery == "ref=main":
+			_, _ = io.WriteString(writer, `[{"name":"ci.yml","type":"file"}]`)
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows/ci.yml":
+			_, _ = io.WriteString(writer, contentResponse(workflow))
+		default:
+			t.Errorf("unexpected request: %s?%s", request.URL.Path, request.URL.RawQuery)
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	})
+	pinned, status := service.workflowPinning(context.Background(), "/repos/org/repo", "main")
+	if !pinned.Value {
+		t.Fatalf("pinned = %#v, want true (no third-party actions)", pinned)
+	}
+	if status.Value != "no_actions" {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
 func TestWorkflowPinningLocalCompositeActionFullyPinned(t *testing.T) {
 	workflow := "on: push\njobs:\n  build:\n    steps:\n      - uses: ./.github/actions/example@main\n"
 	pinnedSHA := "0123456789012345678901234567890123456789"

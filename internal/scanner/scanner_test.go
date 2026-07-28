@@ -53,6 +53,33 @@ func TestFilteredTreeCopiesOnlySelectedRegularFiles(t *testing.T) {
 	}
 }
 
+func TestFilteredTreeSkipsSubmoduleGitlinkDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "vendor", "submodule"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	filtered, cleanup, err := filteredTree(root, []string{"vendor/submodule"})
+	if err != nil {
+		t.Fatalf("expected unpopulated submodule directory to be skipped, got error: %v", err)
+	}
+	defer cleanup()
+	if _, err := os.Stat(filepath.Join(filtered, "vendor", "submodule")); err == nil {
+		t.Fatal("submodule directory should not have been copied")
+	}
+}
+
+func TestFilteredTreeErrorsOnOversizedSelectedFile(t *testing.T) {
+	root := t.TempDir()
+	large := make([]byte, (10<<20)+1)
+	if err := os.WriteFile(filepath.Join(root, "big.tf"), large, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, cleanup, err := filteredTree(root, []string{"big.tf"}); err == nil {
+		cleanup()
+		t.Fatal("expected error for oversized selected file, got nil")
+	}
+}
+
 func TestFixedCommandsDisableOverlappingTrivyScanners(t *testing.T) {
 	cfg := config.Default()
 	cfg.Scanners.Trivy.Exclude = []string{"vendor/**"}

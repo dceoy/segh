@@ -17,7 +17,7 @@ import (
 	"github.com/dceoy/segh/internal/model"
 )
 
-var usesPattern = regexp.MustCompile(`(?m)^\s*(?:-\s*)?uses:\s*["']?([^@"'\s]+)@([^"'\s#]+)(?:["']?\s*#\s*([A-Za-z0-9_.+/-]+))?`)
+var usesPattern = regexp.MustCompile(`(?m)^\s*(?:-\s*)?uses:\s*["']?([^@"'\s]+)(?:@([^"'\s#]+)(?:["']?\s*#\s*([A-Za-z0-9_.+/-]+))?)?`)
 var fullSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 type InventoryService struct {
@@ -549,6 +549,10 @@ func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceNam
 		}
 		if strings.HasPrefix(action, "./") {
 			localPath := strings.Trim(strings.TrimPrefix(action, "."), "/")
+			if strings.HasSuffix(localPath, ".yml") || strings.HasSuffix(localPath, ".yaml") {
+				// A local reusable-workflow call, not a composite action directory; it has no action.yml to fetch.
+				continue
+			}
 			if visited[localPath] {
 				continue
 			}
@@ -564,6 +568,9 @@ func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceNam
 			if err != nil || unpinnedIn != "" {
 				return unpinnedIn, err
 			}
+			continue
+		}
+		if ref == "" {
 			continue
 		}
 		counts.actions++

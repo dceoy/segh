@@ -497,8 +497,20 @@ func filteredTree(root string, files []string) (string, func(), error) {
 			return "", nil, fmt.Errorf("changed-file symlink escapes repository")
 		}
 		info, err := os.Stat(resolved)
-		if err != nil || !info.Mode().IsRegular() || info.Size() > 10<<20 {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("stat changed-file path: %w", err)
+		}
+		if info.IsDir() {
+			// An unpopulated submodule gitlink surfaces here as an empty directory, not missing content.
+			continue
+		}
+		if !info.Mode().IsRegular() || info.Size() > 10<<20 {
+			cleanup()
+			return "", nil, fmt.Errorf("changed-file %q exceeds the size limit or is not a regular file", clean)
 		}
 		destination := filepath.Join(temp, clean)
 		if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
