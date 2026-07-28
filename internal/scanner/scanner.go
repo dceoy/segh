@@ -309,7 +309,7 @@ func (s *Service) execute(parent context.Context, repo model.Repository, workPat
 		result.Status, result.Error = model.ScannerFailed, "scanner timeout"
 		return result
 	}
-	findings, parseErr := countFindings(scanner.name, absoluteResultPath)
+	findings, summaries, parseErr := summarizeFindings(scanner.name, absoluteResultPath)
 	if parseErr != nil {
 		result.Status = model.ScannerFailed
 		if err != nil {
@@ -320,6 +320,7 @@ func (s *Service) execute(parent context.Context, repo model.Repository, workPat
 		return result
 	}
 	result.Findings = findings
+	result.FindingSummaries = summaries
 	if err != nil && !acceptedFindingExit(scanner.name, err) {
 		result.Status, result.Error = model.ScannerFailed, exitDescription(err)
 		return result
@@ -390,36 +391,74 @@ func (s *Service) command(name string, repo model.Repository, workPath, resultPa
 	}
 }
 
-func countFindings(scannerName, path string) (int, error) {
+func summarizeFindings(scannerName, path string) (int, []model.FindingSummary, error) {
 	if scannerName != "scorecard" {
-		return sarif.CountFile(path)
+		log, err := sarif.Read(path)
+		if err != nil {
+			return 0, nil, err
+		}
+		findings := sarif.Findings(log)
+		return len(findings), groupSARIF(findings), nil
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return 0, fmt.Errorf("stat Scorecard JSON: %w", err)
+		return 0, nil, fmt.Errorf("stat Scorecard JSON: %w", err)
 	}
 	if !info.Mode().IsRegular() || info.Size() > 50<<20 {
-		return 0, fmt.Errorf("scorecard JSON exceeds 50 MiB")
+		return 0, nil, fmt.Errorf("scorecard JSON exceeds 50 MiB")
 	}
 	data, err := os.ReadFile(path) // #nosec G304 -- fixed, regular, size-bounded Scorecard output path.
 	if err != nil {
-		return 0, fmt.Errorf("read Scorecard JSON: %w", err)
+		return 0, nil, fmt.Errorf("read Scorecard JSON: %w", err)
 	}
 	var result struct {
 		Checks []struct {
-			Score int `json:"score"`
+			Name  string `json:"name"`
+			Score int    `json:"score"`
 		} `json:"checks"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
-		return 0, fmt.Errorf("decode Scorecard JSON: %w", err)
+		return 0, nil, fmt.Errorf("decode Scorecard JSON: %w", err)
 	}
-	findings := 0
+	var summaries []model.FindingSummary
 	for _, check := range result.Checks {
 		if check.Score < 10 {
-			findings++
+			summaries = append(summaries, model.FindingSummary{
+				RuleID: check.Name, Severity: "unknown", Count: 1,
+			})
 		}
 	}
-	return findings, nil
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].RuleID != summaries[j].RuleID {
+			return summaries[i].RuleID < summaries[j].RuleID
+		}
+		return summaries[i].Severity < summaries[j].Severity
+	})
+	return len(summaries), summaries, nil
+}
+
+func groupSARIF(findings []sarif.Finding) []model.FindingSummary {
+	type key struct {
+		ruleID   string
+		severity string
+	}
+	counts := map[key]int{}
+	for _, finding := range findings {
+		counts[key{ruleID: finding.RuleID, severity: finding.Severity}]++
+	}
+	summaries := make([]model.FindingSummary, 0, len(counts))
+	for item, count := range counts {
+		summaries = append(summaries, model.FindingSummary{
+			RuleID: item.ruleID, Severity: item.severity, Count: count,
+		})
+	}
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].RuleID != summaries[j].RuleID {
+			return summaries[i].RuleID < summaries[j].RuleID
+		}
+		return summaries[i].Severity < summaries[j].Severity
+	})
+	return summaries
 }
 
 // clone checks out repo's default branch and returns the worktree path, a cleanup

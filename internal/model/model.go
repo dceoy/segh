@@ -133,16 +133,27 @@ const (
 )
 
 type ScannerResult struct {
-	Repository     string        `json:"repository"`
-	Scanner        string        `json:"scanner"`
-	Version        string        `json:"version"`
-	Status         ScannerStatus `json:"status"`
-	StartedAt      time.Time     `json:"started_at,omitempty"`
-	DurationMS     int64         `json:"duration_ms,omitempty"`
-	ResultPath     string        `json:"result_path,omitempty"`
-	DiagnosticPath string        `json:"diagnostic_path,omitempty"`
-	Findings       int           `json:"findings"`
-	Error          string        `json:"error,omitempty"`
+	Repository       string           `json:"repository"`
+	Scanner          string           `json:"scanner"`
+	Version          string           `json:"version"`
+	Status           ScannerStatus    `json:"status"`
+	StartedAt        time.Time        `json:"started_at,omitempty"`
+	DurationMS       int64            `json:"duration_ms,omitempty"`
+	ResultPath       string           `json:"result_path,omitempty"`
+	DiagnosticPath   string           `json:"diagnostic_path,omitempty"`
+	Findings         int              `json:"findings"`
+	FindingSummaries []FindingSummary `json:"finding_summaries,omitempty"`
+	Error            string           `json:"error,omitempty"`
+}
+
+// FindingSummary is a compact, deterministic grouping of findings from a
+// scanner's raw result artifact. The artifact remains the source of full
+// messages and locations; summaries make organization reports useful without
+// duplicating every raw finding into each intermediate JSON document.
+type FindingSummary struct {
+	RuleID   string `json:"rule_id"`
+	Severity string `json:"severity"`
+	Count    int    `json:"count"`
 }
 
 type ScanRun struct {

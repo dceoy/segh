@@ -15,9 +15,19 @@ type Consolidated struct {
 	Inventory     *model.Inventory    `json:"inventory,omitempty"`
 	Audit         *model.Audit        `json:"audit,omitempty"`
 	Scan          *model.ScanRun      `json:"scan,omitempty"`
+	Findings      []FindingGroup      `json:"findings,omitempty"`
 	Publications  []model.Publication `json:"publications,omitempty"`
 	Summary       Summary             `json:"summary"`
 	Trend         *Trend              `json:"trend,omitempty"`
+}
+
+type FindingGroup struct {
+	Repository string `json:"repository"`
+	Scanner    string `json:"scanner"`
+	RuleID     string `json:"rule_id"`
+	Severity   string `json:"severity"`
+	Count      int    `json:"count"`
+	Artifact   string `json:"artifact"`
 }
 
 type Summary struct {
@@ -76,6 +86,16 @@ func Build(
 	if scan != nil {
 		for _, scanner := range scan.Results {
 			result.Summary.Scanners[string(scanner.Status)]++
+			for _, finding := range scanner.FindingSummaries {
+				result.Findings = append(result.Findings, FindingGroup{
+					Repository: scanner.Repository,
+					Scanner:    scanner.Scanner,
+					RuleID:     finding.RuleID,
+					Severity:   finding.Severity,
+					Count:      finding.Count,
+					Artifact:   scanner.ResultPath,
+				})
+			}
 			if scanner.Status == model.ScannerFailed {
 				result.Summary.Coverage = "partial"
 			}
@@ -98,6 +118,18 @@ func Build(
 	if expectedPublicationBatches >= 0 && observedPublicationBatches < expectedPublicationBatches {
 		result.Summary.Coverage = "partial"
 	}
+	sort.Slice(result.Findings, func(i, j int) bool {
+		if result.Findings[i].Repository != result.Findings[j].Repository {
+			return result.Findings[i].Repository < result.Findings[j].Repository
+		}
+		if result.Findings[i].Scanner != result.Findings[j].Scanner {
+			return result.Findings[i].Scanner < result.Findings[j].Scanner
+		}
+		if result.Findings[i].RuleID != result.Findings[j].RuleID {
+			return result.Findings[i].RuleID < result.Findings[j].RuleID
+		}
+		return result.Findings[i].Severity < result.Findings[j].Severity
+	})
 	return result
 }
 
@@ -172,6 +204,15 @@ func Markdown(result Consolidated) string {
 		for _, item := range results {
 			fmt.Fprintf(&builder, "| %s | %s | %s | %d | %d ms |\n",
 				cell(item.Repository), cell(item.Scanner), item.Status, item.Findings, item.DurationMS)
+		}
+	}
+	if len(result.Findings) > 0 {
+		builder.WriteString("\n## Normalized finding groups\n\n")
+		builder.WriteString("| Repository | Scanner | Rule | Severity | Count | Raw artifact |\n")
+		builder.WriteString("|---|---|---|---|---:|---|\n")
+		for _, item := range result.Findings {
+			fmt.Fprintf(&builder, "| %s | %s | `%s` | %s | %d | `%s` |\n",
+				cell(item.Repository), cell(item.Scanner), cell(item.RuleID), cell(item.Severity), item.Count, cell(item.Artifact))
 		}
 	}
 	if len(result.Publications) > 0 {

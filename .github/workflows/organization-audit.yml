@@ -52,11 +52,29 @@ jobs:
       - name: Build
         run: go build -trimpath -o bin/segh ./cmd/segh
       - name: Inventory
+        id: inventory
         env:
           SEGH_GITHUB_APP_ID: ${{ secrets.SEGH_READ_APP_ID }}
           SEGH_GITHUB_INSTALLATION_ID: ${{ secrets.SEGH_READ_INSTALLATION_ID }}
           SEGH_GITHUB_APP_PRIVATE_KEY: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
-        run: bin/segh --config config/organization.yaml inventory --output segh-results/inventory.json
+        run: |
+          set +e
+          bin/segh --config config/organization.yaml inventory \
+            --output segh-results/inventory.json
+          status=$?
+          set -e
+          case "$status" in
+            0)
+              printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+              ;;
+            4)
+              printf 'complete=false\n' >> "$GITHUB_OUTPUT"
+              echo "::warning::Inventory is incomplete; retaining the partial evidence and skipping repository scans."
+              ;;
+            *)
+              exit "$status"
+              ;;
+          esac
       - name: Audit policy
         run: |
           set +e
@@ -70,6 +88,7 @@ jobs:
           fi
       - name: Create deterministic batches
         id: matrix
+        if: ${{ steps.inventory.outputs.complete == 'true' }}
         env:
           BATCH_SIZE: ${{ inputs.batch_size || '25' }}
           TARGET_REPOSITORIES: ${{ inputs.repositories }}
@@ -283,7 +302,7 @@ jobs:
             expected_repositories=$(jq -s '[.[].repositories[].full_name] | unique | length' segh-results/batches/inventory-*.json)
           fi
           expected_publication_batches=-1
-          if [[ "$DRY_RUN" != "true" ]]; then
+          if [[ "$DRY_RUN" != "true" ]] && test -f segh-results/batches/matrix.json; then
             expected_publication_batches=$(jq '.include | length' segh-results/batches/matrix.json)
           fi
           bin/segh --config config/organization.yaml report \

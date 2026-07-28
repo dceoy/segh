@@ -121,3 +121,36 @@ func TestBuildDoesNotRequirePublicationArtifactsWhenPublicationIsNotExpected(t *
 		t.Fatalf("coverage = %s, want complete", result.Summary.Coverage)
 	}
 }
+
+func TestBuildIncludesDeterministicFindingGroupsWithArtifactReferences(t *testing.T) {
+	scan := &model.ScanRun{Results: []model.ScannerResult{
+		{
+			Repository: "org/z",
+			Scanner:    "trivy",
+			ResultPath: "segh-results/sarif/org-z/trivy.sarif",
+			FindingSummaries: []model.FindingSummary{
+				{RuleID: "B", Severity: "high", Count: 2},
+			},
+		},
+		{
+			Repository: "org/a",
+			Scanner:    "zizmor",
+			ResultPath: "segh-results/sarif/org-a/zizmor.sarif",
+			FindingSummaries: []model.FindingSummary{
+				{RuleID: "A", Severity: "medium", Count: 1},
+			},
+		},
+	}}
+	result := Build(nil, nil, scan, nil, -1, -1, 0)
+	if len(result.Findings) != 2 {
+		t.Fatalf("findings = %#v", result.Findings)
+	}
+	if result.Findings[0].Repository != "org/a" || result.Findings[1].Count != 2 {
+		t.Fatalf("findings are not deterministically ordered: %#v", result.Findings)
+	}
+	markdown := Markdown(result)
+	if !strings.Contains(markdown, "## Normalized finding groups") ||
+		!strings.Contains(markdown, "`segh-results/sarif/org-z/trivy.sarif`") {
+		t.Fatalf("markdown = %s", markdown)
+	}
+}

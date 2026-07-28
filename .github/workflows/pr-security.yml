@@ -8,6 +8,9 @@ permissions:
 
 jobs:
   segh:
-    uses: ./.github/workflows/reusable-pr-security.yml
+    # Keep both the reusable workflow and the scanner source on an immutable,
+    # maintainer-reviewed revision. Update these SHAs together through a trusted
+    # maintenance change; never derive them from the pull request under test.
+    uses: dceoy/segh/.github/workflows/reusable-pr-security.yml@fecd9f20cfd7219af53a8ae712e6efe1e54ee1b8
     with:
-      segh-ref: ${{ github.sha }}
+      segh-ref: fecd9f20cfd7219af53a8ae712e6efe1e54ee1b8

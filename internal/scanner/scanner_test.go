@@ -138,12 +138,43 @@ func TestCountScorecardIndividualChecks(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	count, err := countFindings("scorecard", path)
+	count, summaries, err := summarizeFindings("scorecard", path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
 		t.Fatalf("individual check findings = %d", count)
+	}
+	if len(summaries) != 1 || summaries[0].RuleID != "Pinned-Dependencies" || summaries[0].Severity != "unknown" {
+		t.Fatalf("summaries = %#v", summaries)
+	}
+}
+
+func TestSummarizeFindingsGroupsSARIFByRuleAndSeverity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "findings.sarif")
+	data := `{
+		"version":"2.1.0",
+		"runs":[{
+			"tool":{"driver":{"name":"Trivy"}},
+			"results":[
+				{"ruleId":"DS001","level":"error","message":{"text":"first"}},
+				{"ruleId":"DS001","level":"error","message":{"text":"second"}},
+				{"ruleId":"DS002","level":"warning","message":{"text":"third"}}
+			]
+		}]
+	}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	count, summaries, err := summarizeFindings("trivy", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 || len(summaries) != 2 {
+		t.Fatalf("count = %d, summaries = %#v", count, summaries)
+	}
+	if summaries[0].RuleID != "DS001" || summaries[0].Severity != "high" || summaries[0].Count != 2 {
+		t.Fatalf("first summary = %#v", summaries[0])
 	}
 }
 
