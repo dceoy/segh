@@ -92,6 +92,28 @@ func TestWorkflowPinningFollowsLocalCompositeActionWithoutRef(t *testing.T) {
 	}
 }
 
+func TestWorkflowPinningParsesFlowStyleQuotedUses(t *testing.T) {
+	workflow := "on: push\njobs:\n  build:\n    steps:\n      - {\"uses\": \"third-party/action@main\"}\n"
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows" && request.URL.RawQuery == "ref=main":
+			_, _ = io.WriteString(writer, `[{"name":"ci.yml","type":"file"}]`)
+		case request.URL.Path == "/repos/org/repo/contents/.github/workflows/ci.yml":
+			_, _ = io.WriteString(writer, contentResponse(workflow))
+		default:
+			t.Errorf("unexpected request: %s?%s", request.URL.Path, request.URL.RawQuery)
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	})
+	pinned, status := service.workflowPinning(context.Background(), "/repos/org/repo", "main")
+	if pinned.Value {
+		t.Fatalf("pinned = %#v, want false for flow-style mutable action", pinned)
+	}
+	if status.Value != "unpinned" {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
 func TestWorkflowPinningIgnoresLocalReusableWorkflowCall(t *testing.T) {
 	workflow := "on: push\njobs:\n  call:\n    uses: ./.github/workflows/reusable.yml\n"
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {

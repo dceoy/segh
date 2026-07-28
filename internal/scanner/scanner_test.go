@@ -54,6 +54,35 @@ func TestFilteredTreeCopiesOnlySelectedRegularFiles(t *testing.T) {
 	}
 }
 
+func TestFilteredTreeIncludesLocalActionsOutsideGitHub(t *testing.T) {
+	root := t.TempDir()
+	workflow := filepath.Join(root, ".github", "workflows", "ci.yml")
+	action := filepath.Join(root, "actions", "build", "action.yml")
+	for path, content := range map[string]string{
+		workflow: "jobs:\n  build:\n    steps:\n      - uses: ./actions/build\n",
+		action:   "runs:\n  using: composite\n  steps:\n    - uses: third-party/action@main\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	filtered, cleanup, err := filteredTree(root, []string{".github/workflows/ci.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	copied, err := os.ReadFile(filepath.Join(filtered, "actions", "build", "action.yml")) // #nosec G304 -- filtered is a test-owned temporary directory.
+	if err != nil {
+		t.Fatalf("read copied local action: %v", err)
+	}
+	if !strings.Contains(string(copied), "third-party/action@main") {
+		t.Fatalf("copied action = %q", copied)
+	}
+}
+
 func TestFilteredTreeSkipsSubmoduleGitlinkDirectory(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "vendor", "submodule"), 0o700); err != nil {

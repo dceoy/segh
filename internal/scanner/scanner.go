@@ -527,6 +527,11 @@ func filteredTree(root string, files []string) (string, func(), error) {
 		cleanup()
 		return "", nil, err
 	}
+	files, err = includeLocalActionDefinitions(cleanRoot, files)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
 	for _, candidate := range files {
 		if filepath.IsAbs(candidate) {
 			cleanup()
@@ -578,6 +583,54 @@ func filteredTree(root string, files []string) (string, func(), error) {
 		}
 	}
 	return temp, cleanup, nil
+}
+
+// includeLocalActionDefinitions keeps repository-local composite actions available to
+// scanners even when a changed workflow starts referring to an otherwise unchanged
+// action outside .github. All action manifests are included so transitive ./... action
+// references remain resolvable without copying the repository's other unchanged files.
+func includeLocalActionDefinitions(root string, files []string) ([]string, error) {
+	const maxFilteredFiles = 10_000
+	included := make(map[string]bool, len(files))
+	result := make([]string, 0, len(files))
+	for _, file := range files {
+		if !included[file] {
+			included[file] = true
+			result = append(result, file)
+		}
+	}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != root && entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Name() != "action.yml" && entry.Name() != "action.yaml" {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if included[relative] {
+			return nil
+		}
+		if len(result) >= maxFilteredFiles {
+			return fmt.Errorf("changed-file and local-action set exceeds %d files", maxFilteredFiles)
+		}
+		included[relative] = true
+		result = append(result, relative)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("discover local action definitions: %w", err)
+	}
+	return result, nil
 }
 
 func copyFile(source, destination string, mode os.FileMode) error {

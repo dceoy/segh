@@ -178,14 +178,21 @@ func TestExclusionReasonDoesNotExcludeOnUnknownCustomProperties(t *testing.T) {
 	}
 }
 
-func TestWorkflowPattern(t *testing.T) {
+func TestParseActionUses(t *testing.T) {
 	content := []byte(`
-steps:
-  - uses: actions/checkout@0123456789012345678901234567890123456789 # v7.0.1
-  - uses: owner/action@main
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@0123456789012345678901234567890123456789 # v7.0.1
+      - {"uses": "owner/action@main"}
+      - run: |
+          uses: ignored/action@main
 `)
-	matches := usesPattern.FindAllSubmatch(content, -1)
-	if len(matches) != 2 || string(matches[0][3]) != "v7.0.1" || !strings.EqualFold(string(matches[1][2]), "main") {
-		t.Fatalf("matches = %#v", matches)
+	uses, err := parseActionUses(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uses) != 2 || uses[0].tag != "v7.0.1" || !strings.EqualFold(uses[1].ref, "main") {
+		t.Fatalf("uses = %#v", uses)
 	}
 }

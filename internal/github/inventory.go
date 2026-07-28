@@ -15,9 +15,10 @@ import (
 	"github.com/dceoy/segh/internal/config"
 	"github.com/dceoy/segh/internal/logging"
 	"github.com/dceoy/segh/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
-var usesPattern = regexp.MustCompile(`(?m)^\s*(?:-\s*)?uses:\s*["']?([^@"'\s]+)(?:@([^"'\s#]+)(?:["']?\s*#\s*([A-Za-z0-9_.+/-]+))?)?`)
+var actionTagPattern = regexp.MustCompile(`^[A-Za-z0-9_.+/-]+$`)
 var fullSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 var dockerDigestPattern = regexp.MustCompile(`(?i)^sha256:[0-9a-f]{64}$`)
 
@@ -525,6 +526,12 @@ type pinningCounts struct {
 	stale    int
 }
 
+type actionUse struct {
+	action string
+	ref    string
+	tag    string
+}
+
 var errContentUnavailable = errors.New("content unavailable")
 
 func pinningError(source string, err error) (model.Observed[bool], model.Observed[string]) {
@@ -567,8 +574,12 @@ func (s *InventoryService) fetchContent(ctx context.Context, path string) ([]byt
 // cycles. It returns the name of the first source containing a mutable (non-SHA)
 // third-party reference, or "" if every reference found is fully SHA-pinned.
 func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceName string, decoded []byte, visited map[string]bool, counts *pinningCounts) (string, error) {
-	for _, match := range usesPattern.FindAllSubmatch(decoded, -1) {
-		action, ref := string(match[1]), string(match[2])
+	uses, err := parseActionUses(decoded)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", sourceName, err)
+	}
+	for _, use := range uses {
+		action, ref := use.action, use.ref
 		if strings.HasPrefix(action, "docker://") {
 			// docker:// tags carry no freshness signal comparable to a GitHub ref, so a
 			// digest-pinned image is counted as an action but never marked "resolved";
@@ -609,8 +620,8 @@ func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceNam
 		if !fullSHAPattern.MatchString(ref) {
 			return sourceName, nil
 		}
-		if len(match) > 3 && len(match[3]) > 0 {
-			if current, ok := s.resolveActionTag(ctx, action, string(match[3])); ok {
+		if use.tag != "" {
+			if current, ok := s.resolveActionTag(ctx, action, use.tag); ok {
 				counts.resolved++
 				if !strings.EqualFold(current, ref) {
 					counts.stale++
@@ -619,6 +630,170 @@ func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceNam
 		}
 	}
 	return "", nil
+}
+
+// parseActionUses decodes Actions YAML and visits only the structural locations where
+// GitHub accepts `uses`: reusable-workflow jobs, workflow steps, and composite-action
+// steps. Parsing errors fail pinning evaluation closed instead of allowing malformed or
+// parser-differential input to be reported as fully pinned.
+func parseActionUses(content []byte) ([]actionUse, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		return nil, fmt.Errorf("parse Actions YAML: %w", err)
+	}
+	if len(document.Content) == 0 {
+		return nil, nil
+	}
+	root, err := dereferenceYAMLNode(document.Content[0])
+	if err != nil {
+		return nil, err
+	}
+	if root.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("actions YAML root must be a mapping")
+	}
+
+	var uses []actionUse
+	jobs, found, err := yamlMappingValue(root, "jobs")
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		jobs, err = dereferenceYAMLNode(jobs)
+		if err != nil {
+			return nil, err
+		}
+		if jobs.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("actions YAML jobs must be a mapping")
+		}
+		for index := 1; index < len(jobs.Content); index += 2 {
+			job, err := dereferenceYAMLNode(jobs.Content[index])
+			if err != nil {
+				return nil, err
+			}
+			if job.Kind != yaml.MappingNode {
+				return nil, fmt.Errorf("actions YAML job must be a mapping")
+			}
+			uses, err = appendActionUse(uses, job)
+			if err != nil {
+				return nil, err
+			}
+			uses, err = appendStepUses(uses, job)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	runs, found, err := yamlMappingValue(root, "runs")
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		runs, err = dereferenceYAMLNode(runs)
+		if err != nil {
+			return nil, err
+		}
+		if runs.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("actions YAML runs must be a mapping")
+		}
+		uses, err = appendStepUses(uses, runs)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return uses, nil
+}
+
+func appendStepUses(uses []actionUse, parent *yaml.Node) ([]actionUse, error) {
+	steps, found, err := yamlMappingValue(parent, "steps")
+	if err != nil || !found {
+		return uses, err
+	}
+	steps, err = dereferenceYAMLNode(steps)
+	if err != nil {
+		return nil, err
+	}
+	if steps.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("actions YAML steps must be a sequence")
+	}
+	for _, rawStep := range steps.Content {
+		step, err := dereferenceYAMLNode(rawStep)
+		if err != nil {
+			return nil, err
+		}
+		if step.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("actions YAML step must be a mapping")
+		}
+		uses, err = appendActionUse(uses, step)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return uses, nil
+}
+
+func appendActionUse(uses []actionUse, mapping *yaml.Node) ([]actionUse, error) {
+	value, found, err := yamlMappingValue(mapping, "uses")
+	if err != nil || !found {
+		return uses, err
+	}
+	value, err = dereferenceYAMLNode(value)
+	if err != nil {
+		return nil, err
+	}
+	if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+		return nil, fmt.Errorf("actions YAML uses value must be a string")
+	}
+	raw := strings.TrimSpace(value.Value)
+	action, ref := raw, ""
+	if separator := strings.LastIndexByte(raw, '@'); separator >= 0 {
+		action, ref = raw[:separator], raw[separator+1:]
+	}
+	tag := strings.TrimSpace(strings.TrimPrefix(value.LineComment, "#"))
+	if !actionTagPattern.MatchString(tag) {
+		tag = ""
+	}
+	return append(uses, actionUse{action: action, ref: ref, tag: tag}), nil
+}
+
+func yamlMappingValue(mapping *yaml.Node, name string) (*yaml.Node, bool, error) {
+	mapping, err := dereferenceYAMLNode(mapping)
+	if err != nil {
+		return nil, false, err
+	}
+	if mapping.Kind != yaml.MappingNode {
+		return nil, false, fmt.Errorf("actions YAML value containing %q must be a mapping", name)
+	}
+	var found *yaml.Node
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		key, err := dereferenceYAMLNode(mapping.Content[index])
+		if err != nil {
+			return nil, false, err
+		}
+		if key.Kind != yaml.ScalarNode || key.Value != name {
+			continue
+		}
+		if found != nil {
+			return nil, false, fmt.Errorf("actions YAML contains duplicate %q keys", name)
+		}
+		found = mapping.Content[index+1]
+	}
+	return found, found != nil, nil
+}
+
+func dereferenceYAMLNode(node *yaml.Node) (*yaml.Node, error) {
+	visited := map[*yaml.Node]bool{}
+	for node != nil && node.Kind == yaml.AliasNode {
+		if node.Alias == nil || visited[node] {
+			return nil, fmt.Errorf("actions YAML contains an invalid alias")
+		}
+		visited[node] = true
+		node = node.Alias
+	}
+	if node == nil {
+		return nil, fmt.Errorf("actions YAML contains an empty node")
+	}
+	return node, nil
 }
 
 // fetchLocalActionDefinition resolves a repository-local composite action directory
