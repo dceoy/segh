@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,26 @@ func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	}
 	if cfg.GitHub.WebURL != "https://github.com" || cfg.Inventory.Concurrency != 4 || cfg.Output.Directory != "segh-results" {
 		t.Fatalf("defaults were not applied: %#v", cfg)
+	}
+}
+
+func TestSchemaAllowsDefaultedNestedSections(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Required []string `json:"required"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, section := range []string{"github", "inventory", "policies"} {
+		if required := schema.Properties[section].Required; len(required) != 0 {
+			t.Fatalf("%s schema requirements conflict with loader defaults: %v", section, required)
+		}
 	}
 }
 

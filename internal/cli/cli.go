@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"time"
@@ -90,7 +91,7 @@ func Run(ctx context.Context, args []string, version string, stdout, stderr io.W
 	case "audit":
 		return runAudit(cfg, commandArgs, stdout)
 	case "report":
-		return runReport(commandArgs, stdout)
+		return runReport(cfg, commandArgs, stdout)
 	default:
 		return usageError(fmt.Errorf("unknown command %q", remaining[0]))
 	}
@@ -151,8 +152,8 @@ func runAudit(cfg config.Config, args []string, stdout io.Writer) error {
 	if err := readJSON(*inputPath, &inventory); err != nil {
 		return runtimeError(err)
 	}
-	if inventory.SchemaVersion != model.InventorySchemaVersion {
-		return usageError(fmt.Errorf("unsupported inventory schema version %d", inventory.SchemaVersion))
+	if err := validateInventory(inventory, cfg); err != nil {
+		return usageError(err)
 	}
 	audit := policy.New(cfg, time.Now()).Evaluate(inventory)
 	if err := output.JSON(*outputPath, audit); err != nil {
@@ -162,18 +163,18 @@ func runAudit(cfg config.Config, args []string, stdout io.Writer) error {
 	if policy.Violations(audit) {
 		return findingsError(fmt.Errorf("policy violations found"))
 	}
-	if policy.Partial(audit) {
+	if !inventory.Complete || policy.Partial(audit) {
 		return incompleteError(fmt.Errorf("policy coverage is incomplete"))
 	}
 	return nil
 }
 
-func runReport(args []string, stdout io.Writer) error {
+func runReport(cfg config.Config, args []string, stdout io.Writer) error {
 	flags := commandFlags("report")
-	inventoryPath := flags.String("inventory", "segh-results/inventory.json", "inventory JSON input")
-	auditPath := flags.String("audit", "segh-results/audit.json", "audit JSON input")
-	outputPath := flags.String("output", "segh-results/report.json", "consolidated JSON output")
-	markdownPath := flags.String("markdown", "segh-results/report.md", "Markdown output")
+	inventoryPath := flags.String("inventory", filepath.Join(cfg.Output.Directory, "inventory.json"), "inventory JSON input")
+	auditPath := flags.String("audit", filepath.Join(cfg.Output.Directory, "audit.json"), "audit JSON input")
+	outputPath := flags.String("output", filepath.Join(cfg.Output.Directory, "report.json"), "consolidated JSON output")
+	markdownPath := flags.String("markdown", filepath.Join(cfg.Output.Directory, "report.md"), "Markdown output")
 	if err := flags.Parse(args); err != nil {
 		return usageError(err)
 	}
@@ -188,6 +189,9 @@ func runReport(args []string, stdout io.Writer) error {
 	if err := readJSON(*auditPath, &audit); err != nil {
 		return runtimeError(err)
 	}
+	if err := validateReportArtifacts(inventory, audit, cfg); err != nil {
+		return usageError(err)
+	}
 	result := report.Build(&inventory, &audit)
 	if err := output.JSON(*outputPath, result); err != nil {
 		return runtimeError(err)
@@ -201,6 +205,78 @@ func runReport(args []string, stdout io.Writer) error {
 	}
 	if policy.Violations(audit) {
 		return findingsError(fmt.Errorf("policy violations found"))
+	}
+	return nil
+}
+
+func validateInventory(inventory model.Inventory, cfg config.Config) error {
+	if inventory.SchemaVersion != model.InventorySchemaVersion {
+		return fmt.Errorf("unsupported inventory schema version %d", inventory.SchemaVersion)
+	}
+	if inventory.Organization != cfg.Organization {
+		return fmt.Errorf("inventory organization %q does not match configured organization %q", inventory.Organization, cfg.Organization)
+	}
+	if inventory.GitHubHost == "" || inventory.GeneratedAt.IsZero() {
+		return fmt.Errorf("inventory is missing required metadata")
+	}
+	if inventory.Total < 0 || inventory.Selected < 0 || inventory.Excluded < 0 {
+		return fmt.Errorf("inventory repository counts must not be negative")
+	}
+	if inventory.Selected != len(inventory.Repositories) || inventory.Excluded != len(inventory.Exclusions) {
+		return fmt.Errorf("inventory repository counts do not match its records")
+	}
+	observed := inventory.Selected + inventory.Excluded
+	if observed > inventory.Total || (inventory.Complete && observed != inventory.Total) {
+		return fmt.Errorf("inventory total does not match its selected and excluded repositories")
+	}
+	if inventory.Complete && len(inventory.Errors) > 0 {
+		return fmt.Errorf("complete inventory must not contain collection errors")
+	}
+	return nil
+}
+
+func validateReportArtifacts(inventory model.Inventory, audit model.Audit, cfg config.Config) error {
+	if err := validateInventory(inventory, cfg); err != nil {
+		return err
+	}
+	if audit.SchemaVersion != model.PolicySchemaVersion {
+		return fmt.Errorf("unsupported audit schema version %d", audit.SchemaVersion)
+	}
+	if audit.Organization != inventory.Organization {
+		return fmt.Errorf("audit organization %q does not match inventory organization %q", audit.Organization, inventory.Organization)
+	}
+	if audit.GeneratedAt.IsZero() || audit.Counts == nil {
+		return fmt.Errorf("audit is missing required metadata")
+	}
+	counts := map[string]int{}
+	validStatuses := map[model.PolicyStatus]bool{
+		model.PolicyPass:        true,
+		model.PolicyFail:        true,
+		model.PolicyUnknown:     true,
+		model.PolicyUnsupported: true,
+		model.PolicyExempt:      true,
+	}
+	for i, result := range audit.Results {
+		if !validStatuses[result.Status] {
+			return fmt.Errorf("audit result %d has invalid status %q", i, result.Status)
+		}
+		if result.PolicyID == "" {
+			return fmt.Errorf("audit result %d is missing a policy ID", i)
+		}
+		counts[string(result.Status)]++
+	}
+	if !maps.Equal(counts, audit.Counts) {
+		return fmt.Errorf("audit counts do not match its policy results")
+	}
+	expected := policy.New(cfg, audit.GeneratedAt).Evaluate(inventory)
+	if len(audit.Results) != len(expected.Results) {
+		return fmt.Errorf("audit results do not match the inventory and configuration")
+	}
+	for i, result := range audit.Results {
+		want := expected.Results[i]
+		if result.Repository != want.Repository || result.PolicyID != want.PolicyID || result.Status != want.Status {
+			return fmt.Errorf("audit results do not match the inventory and configuration")
+		}
 	}
 	return nil
 }
