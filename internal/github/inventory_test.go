@@ -156,11 +156,47 @@ func TestListRepositoriesFetchesEachPageIndependently(t *testing.T) {
 	}
 }
 
+func TestGetInstallationMetadataPaginatesUntilMatchingID(t *testing.T) {
+	var pageParams []string
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/orgs/org/installations" {
+			t.Errorf("path = %s", request.URL.Path)
+			return
+		}
+		page := request.URL.Query().Get("page")
+		pageParams = append(pageParams, page)
+		switch page {
+		case "1":
+			installations := make([]string, 100)
+			for i := range installations {
+				installations[i] = fmt.Sprintf(`{"id":%d}`, i+2)
+			}
+			_, _ = io.WriteString(writer, `{"installations":[`+strings.Join(installations, ",")+`]}`)
+		case "2":
+			_, _ = io.WriteString(writer, `{"installations":[{"id":1,"account":{"login":"org"},"repository_selection":"all"}]}`)
+		default:
+			t.Errorf("unexpected page = %s", page)
+		}
+	})
+	metadata, err := service.getInstallationMetadata(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ID != 1 || metadata.Account.Login != "org" || metadata.RepositorySelection != "all" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+	if !reflect.DeepEqual(pageParams, []string{"1", "2"}) {
+		t.Fatalf("pageParams = %#v, want [1 2]", pageParams)
+	}
+}
+
 func TestRunFailsClosedWhenInstallationIsScopedToSelectedRepositories(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
+		case "/orgs/org/installations":
+			_, _ = io.WriteString(writer, `{"total_count":1,"installations":[{"id":1,"account":{"login":"org"},"repository_selection":"selected"}]}`)
 		case "/installation/repositories":
-			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[{"full_name":"org/repo-1"}],"repository_selection":"selected"}`)
+			t.Error("accessible repositories must not be queried after selected installation metadata")
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
 		default:
@@ -188,8 +224,12 @@ func TestRunFailsClosedWhenInstallationIsScopedToSelectedRepositories(t *testing
 func TestRunSucceedsWhenInstallationCoversWholeOrganization(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
+		case "/orgs/org/installations":
+			_, _ = io.WriteString(writer, `{"total_count":1,"installations":[{"id":1,"account":{"login":"org"},"repository_selection":"all"}]}`)
 		case "/installation/repositories":
-			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[{"full_name":"org/repo-1"}],"repository_selection":"all"}`)
+			// This matches the documented endpoint shape: repository_selection
+			// belongs to installation metadata, not this response.
+			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[{"full_name":"org/repo-1"}]}`)
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo-1"}]`)
 		default:
@@ -214,8 +254,10 @@ func TestRunSucceedsWhenInstallationCoversWholeOrganization(t *testing.T) {
 func TestRunFailsClosedWhenInstallationCountExceedsOrganizationEnumeration(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
+		case "/orgs/org/installations":
+			_, _ = io.WriteString(writer, `{"total_count":1,"installations":[{"id":1,"account":{"login":"org"},"repository_selection":"all"}]}`)
 		case "/installation/repositories":
-			_, _ = io.WriteString(writer, `{"total_count":2,"repositories":[{"full_name":"org/repo-1"}],"repository_selection":"all"}`)
+			_, _ = io.WriteString(writer, `{"total_count":2,"repositories":[{"full_name":"org/repo-1"}]}`)
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo-1"}]`)
 		default:
@@ -244,8 +286,10 @@ func TestRunFailsClosedWhenInstallationCountExceedsOrganizationEnumeration(t *te
 func TestRunFailsClosedWhenInstallationAccountDoesNotMatchConfiguredOrganization(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
+		case "/orgs/org/installations":
+			_, _ = io.WriteString(writer, `{"total_count":1,"installations":[{"id":1,"account":{"login":"other-org"},"repository_selection":"all"}]}`)
 		case "/installation/repositories":
-			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[{"full_name":"other-org/repo-1"}],"repository_selection":"all"}`)
+			t.Error("accessible repositories must not be queried after account mismatch")
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
 		default:
@@ -273,8 +317,10 @@ func TestRunFailsClosedWhenInstallationAccountDoesNotMatchConfiguredOrganization
 func TestRunFailsClosedWhenInstallationReportsAllButReturnsNoRepositories(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
+		case "/orgs/org/installations":
+			_, _ = io.WriteString(writer, `{"total_count":1,"installations":[{"id":1,"account":{"login":"org"},"repository_selection":"all"}]}`)
 		case "/installation/repositories":
-			_, _ = io.WriteString(writer, `{"total_count":0,"repositories":[],"repository_selection":"all"}`)
+			_, _ = io.WriteString(writer, `{"total_count":0,"repositories":[]}`)
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
 		default:
@@ -302,8 +348,10 @@ func TestRunFailsClosedWhenInstallationReportsAllButReturnsNoRepositories(t *tes
 func TestRunFailsClosedWhenExplicitlyIncludedRepositoryIsNotEnumerated(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
+		case "/orgs/org/installations":
+			_, _ = io.WriteString(writer, `{"total_count":1,"installations":[{"id":1,"account":{"login":"org"},"repository_selection":"all"}]}`)
 		case "/installation/repositories":
-			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[{"full_name":"org/repo-1"}],"repository_selection":"all"}`)
+			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[{"full_name":"org/repo-1"}]}`)
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo-1"}]`)
 		default:

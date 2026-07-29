@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/dceoy/segh/internal/config"
@@ -118,13 +119,17 @@ func runInventory(ctx context.Context, cfg config.Config, args []string, stdout 
 	if flags.NArg() != 0 {
 		return usageError(fmt.Errorf("inventory does not accept positional arguments"))
 	}
+	installationID, err := strconv.ParseInt(os.Getenv("SEGH_GITHUB_INSTALLATION_ID"), 10, 64)
+	if err != nil || installationID <= 0 {
+		return authError(fmt.Errorf("SEGH_GITHUB_INSTALLATION_ID must be a positive integer"))
+	}
 	client, err := gh.NewClient(cfg)
 	if err != nil {
 		return authError(err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, cfg.Inventory.Timeout)
 	defer cancel()
-	inventory, runErr := gh.NewInventoryService(cfg, client).Run(ctx)
+	inventory, runErr := gh.NewInventoryService(cfg, client, installationID).Run(ctx)
 	if err := output.JSON(*outputPath, inventory); err != nil {
 		return runtimeError(err)
 	}
@@ -348,7 +353,7 @@ Global options:
   --github-web-url URL          GitHub Enterprise web URL override
 
 Authentication:
-  Supply GH_TOKEN. In Actions, generate it with actions/create-github-app-token.
+  Supply GH_TOKEN and SEGH_GITHUB_INSTALLATION_ID from the same App-token issuer.
 
 Exit codes:
   0 success

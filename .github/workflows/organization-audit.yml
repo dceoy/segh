@@ -33,6 +33,7 @@ jobs:
           permission-administration: read
           permission-contents: read
           permission-metadata: read
+          permission-organization-administration: read
           permission-repository-custom-properties: read
           permission-security-events: read
           permission-vulnerability-alerts: read
@@ -55,6 +56,7 @@ jobs:
         id: inventory
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SEGH_GITHUB_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
         run: |
           set +e
           bin/segh --config config/organization.yaml inventory \

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -287,6 +288,7 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 		{"00h0m", false},
 		{"0ms", false},
 		{"0µs", false},
+		{"0μs", false},
 		{"0h0m0s0ns", false},
 		{"1ns", true},
 		{"0h0m1ns", true},
@@ -298,6 +300,7 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 		{"0.05s", true},
 		{"1.5us", true},
 		{"1.5µs", true},
+		{"1.5μs", true},
 		{".5s", true},
 		{"5.s", true},
 
@@ -313,5 +316,90 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 		if got := err == nil && dur > 0; got != tc.valid {
 			t.Errorf("%s: time.ParseDuration-derived validity = %v, want %v", tc.raw, got, tc.valid)
 		}
+	}
+}
+
+func TestSchemaSuppressionRepositoryPatternMatchesRuntimeValidation(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Suppressions struct {
+				Items struct {
+					Properties struct {
+						Repository struct {
+							Pattern string `json:"pattern"`
+						} `json:"repository"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"suppressions"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	pattern := schema.Properties.Suppressions.Items.Properties.Repository.Pattern
+	if pattern == "" {
+		t.Fatal("suppressions[].repository schema is missing a pattern constraint")
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatalf("invalid suppression repository pattern: %v", err)
+	}
+
+	cases := []struct {
+		raw   string
+		valid bool
+	}{
+		{"", true},
+		{"example/repository", true},
+		{"example/*", true},
+		{"example/repo?", true},
+		{"example/[a-z]*", true},
+		{"example/[^a-z]*", true},
+		{`example/\[literal\]`, true},
+		{`example/[\-]`, true},
+		{"example/[z-a]", true},
+
+		{"example/[", false},
+		{"example/[]", false},
+		{"example/[^]", false},
+		{"example/[a-]", false},
+		{"example/[-a]", false},
+		{"example/[a--b]", false},
+		{`example/trailing\`, false},
+	}
+	for _, tc := range cases {
+		if got := re.MatchString(tc.raw); got != tc.valid {
+			t.Errorf("%q: schema acceptance = %v, want %v", tc.raw, got, tc.valid)
+		}
+		_, runtimeErr := path.Match(tc.raw, "example/repository")
+		if got := runtimeErr == nil; got != tc.valid {
+			t.Errorf("%q: path.Match-derived validity = %v, want %v", tc.raw, got, tc.valid)
+		}
+	}
+
+	// Exhaust the syntax-significant ASCII alphabet through short patterns so
+	// optional negation, escaping, and character-range boundaries cannot drift
+	// between the static schema and path.Match's parser.
+	alphabet := []byte{'a', '*', '?', '[', ']', '^', '-', '\\', '/'}
+	var checkPatterns func([]byte, int)
+	checkPatterns = func(prefix []byte, remaining int) {
+		if remaining == 0 {
+			raw := string(prefix)
+			_, runtimeErr := path.Match(raw, "example/repository")
+			if schemaValid, runtimeValid := re.MatchString(raw), runtimeErr == nil; schemaValid != runtimeValid {
+				t.Errorf("%q: schema acceptance = %v, path.Match-derived validity = %v", raw, schemaValid, runtimeValid)
+			}
+			return
+		}
+		for _, char := range alphabet {
+			checkPatterns(append(prefix, char), remaining-1)
+		}
+	}
+	for length := 0; length <= 5; length++ {
+		checkPatterns(make([]byte, 0, length), length)
 	}
 }

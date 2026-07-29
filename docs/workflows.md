@@ -8,11 +8,11 @@ repository and configure:
 - `SEGH_READ_APP_ID`
 - `SEGH_READ_APP_PRIVATE_KEY`
 
-The App-token action creates a short-lived token for the organization. Only
-`GH_TOKEN` reaches `segh`; the App private key stays scoped to the token step.
-The job inventories native-control coverage, evaluates policy, writes a
-deterministic report, and retains the evidence. It does not clone or scan
-organization repositories.
+The App-token action creates a short-lived token for the organization.
+`GH_TOKEN` and the action's non-secret installation ID reach `segh`; the App
+private key stays scoped to the token step. The job inventories native-control
+coverage, evaluates policy, writes a deterministic report, and retains the
+evidence. It does not clone or scan organization repositories.
 
 The workflow deliberately refuses to run from a public control repository
 because organization inventory and exceptions can be sensitive. Add a schedule

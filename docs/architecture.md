@@ -57,10 +57,12 @@ drives pagination itself and retries transient transport failures, HTTP
 429/5xx responses, and explicit rate-limit responses with bounded exponential
 backoff.
 
-`GH_TOKEN` is required. GitHub Actions generates it from a read-only App using
+`GH_TOKEN` and its matching `SEGH_GITHUB_INSTALLATION_ID` are required for
+inventory. GitHub Actions generates both from a read-only App using
 `actions/create-github-app-token`; local use requires an externally supplied
-token. No private key or long-lived installation token is parsed or cached by
-`segh`.
+token and installation ID. The ID lets `segh` verify authoritative
+organization installation metadata without accepting an App private key. No
+private key or long-lived installation token is parsed or cached by `segh`.
 
 ## Determinism and capability states
 

@@ -46,5 +46,5 @@ func newInventoryTestService(t *testing.T, handler http.HandlerFunc) *InventoryS
 	t.Cleanup(server.Close)
 	cfg := config.Default()
 	cfg.Organization = "org"
-	return NewInventoryService(cfg, testAPIClient{baseURL: server.URL})
+	return NewInventoryService(cfg, testAPIClient{baseURL: server.URL}, 1)
 }

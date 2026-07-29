@@ -117,7 +117,10 @@
         "required": ["policy", "owner", "rationale"],
         "properties": {
           "policy": {"type": "string", "minLength": 1},
-          "repository": {"type": "string"},
+          "repository": {
+            "type": "string",
+            "pattern": "^(?:[*?]|\\\\[\\s\\S]|\\[(?:\\^(?:(?:[^\\x5C\\x5D\\x2D]|\\\\[\\s\\S])(?:-(?:[^\\x5C\\x5D\\x2D]|\\\\[\\s\\S]))?)+|(?:[^\\x5C\\x5D\\x2D\\x5E]|\\\\[\\s\\S])(?:-(?:[^\\x5C\\x5D\\x2D]|\\\\[\\s\\S]))?(?:(?:[^\\x5C\\x5D\\x2D]|\\\\[\\s\\S])(?:-(?:[^\\x5C\\x5D\\x2D]|\\\\[\\s\\S]))?)*)\\]|[^\\x2A\\x3F\\x5C\\x5B])*$"
+          },
           "owner": {"type": "string", "minLength": 1},
           "rationale": {"type": "string", "minLength": 1},
           "expires": {"type": "string", "format": "date-time"}
@@ -277,8 +280,8 @@
     "requirement": {"enum": ["", "required", "disabled"]},
     "duration": {
       "type": "string",
-      "pattern": "^\\+?(([0-9]+\\.?[0-9]*|\\.[0-9]+)(ns|us|µs|ms|s|m|h))+$",
-      "not": {"pattern": "^\\+?((0+\\.?0*|\\.0+)(ns|us|µs|ms|s|m|h))+$"}
+      "pattern": "^\\+?(([0-9]+\\.?[0-9]*|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$",
+      "not": {"pattern": "^\\+?((0+\\.?0*|\\.0+)(ns|us|µs|μs|ms|s|m|h))+$"}
     }
   }
 }

@@ -15,8 +15,9 @@ import (
 )
 
 type InventoryService struct {
-	cfg    config.Config
-	client API
+	cfg            config.Config
+	client         API
+	installationID int64
 }
 
 type apiRepository struct {
@@ -36,8 +37,16 @@ type apiRepository struct {
 	} `json:"security_and_analysis"`
 }
 
-func NewInventoryService(cfg config.Config, client API) *InventoryService {
-	return &InventoryService{cfg: cfg, client: client}
+type apiInstallation struct {
+	ID                  int64  `json:"id"`
+	RepositorySelection string `json:"repository_selection"`
+	Account             struct {
+		Login string `json:"login"`
+	} `json:"account"`
+}
+
+func NewInventoryService(cfg config.Config, client API, installationID int64) *InventoryService {
+	return &InventoryService{cfg: cfg, client: client, installationID: installationID}
 }
 
 func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
@@ -139,58 +148,89 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 	return inventory, nil
 }
 
-// verifyInstallationCoversOrganization fails closed when the GitHub App
-// installation backing the token is scoped to selected repositories rather
-// than all repositories. actions/create-github-app-token with owner expands
-// to every repository in the installation, not every repository in the
-// organization, so a selected-repository installation would otherwise let
-// listRepositories succeed against that narrower set while Complete remains
-// true, silently omitting ungoverned repositories from the report.
+// verifyInstallationCoversOrganization fails closed unless authoritative
+// organization installation metadata says the installation is scoped to all
+// repositories. actions/create-github-app-token with owner expands to every
+// repository in the installation, not every repository in the organization,
+// so a selected-repository installation would otherwise silently omit
+// ungoverned repositories.
 //
-// repository_selection alone only describes the installation behind the
-// token; it does not prove that installation targets cfg.Organization
-// rather than some other account. An installation belongs to exactly one
-// account, so the owner of any repository it returns reveals that account;
-// binding on that owner (instead of trusting an unauthenticated
-// /orgs/{org}/repos response) rules out a stale or mistyped organization
-// and a token from another all-repositories installation.
-//
-// The returned count is the endpoint's total_count, which the caller must
-// cross-check against the organization enumeration: repository_selection
-// "all" only describes the installation's own scope, not whether the
-// installation or org-listing API actually returned every repository it
-// covers.
+// GET /installation/repositories does not guarantee repository_selection.
+// The workflow therefore passes the installation ID emitted alongside
+// GH_TOKEN, and the read-only organization Administration permission lets
+// segh find that exact ID through GET /orgs/{org}/installations. The accessible
+// repository endpoint remains useful for binding the token to the configured
+// account and cross-checking its total_count against organization enumeration.
 func (s *InventoryService) verifyInstallationCoversOrganization(ctx context.Context) (int, error) {
-	var installation struct {
-		TotalCount          int    `json:"total_count"`
-		RepositorySelection string `json:"repository_selection"`
-		Repositories        []struct {
+	metadata, err := s.getInstallationMetadata(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if metadata.RepositorySelection != "all" {
+		return 0, fmt.Errorf(
+			"installation %d repository_selection is %q, not \"all\"; organization-wide inventory coverage cannot be verified",
+			s.installationID, metadata.RepositorySelection,
+		)
+	}
+	if !strings.EqualFold(metadata.Account.Login, s.cfg.Organization) {
+		return 0, fmt.Errorf(
+			"installation %d account %q does not match configured organization %q; organization-wide inventory coverage cannot be verified",
+			s.installationID, metadata.Account.Login, s.cfg.Organization,
+		)
+	}
+
+	var accessible struct {
+		TotalCount   int `json:"total_count"`
+		Repositories []struct {
 			FullName string `json:"full_name"`
 		} `json:"repositories"`
 	}
-	if err := s.client.Get(ctx, "/installation/repositories?per_page=1", &installation); err != nil {
-		return 0, fmt.Errorf("verify installation repository selection: %w", err)
+	if err := s.client.Get(ctx, "/installation/repositories?per_page=1", &accessible); err != nil {
+		return 0, fmt.Errorf("list repositories accessible to installation %d: %w", s.installationID, err)
 	}
-	if installation.RepositorySelection != "all" {
+	if len(accessible.Repositories) == 0 {
 		return 0, fmt.Errorf(
-			"installation repository_selection is %q, not \"all\"; organization-wide inventory coverage cannot be verified",
-			installation.RepositorySelection,
+			"installation %d reports repository_selection \"all\" but returned no repositories; cannot verify it covers organization %q",
+			s.installationID, s.cfg.Organization,
 		)
 	}
-	if len(installation.Repositories) == 0 {
-		return 0, fmt.Errorf(
-			"installation reports repository_selection \"all\" but returned no repositories; cannot verify it covers organization %q",
-			s.cfg.Organization,
-		)
-	}
-	owner, _, ok := strings.Cut(installation.Repositories[0].FullName, "/")
+	owner, _, ok := strings.Cut(accessible.Repositories[0].FullName, "/")
 	if !ok || !strings.EqualFold(owner, s.cfg.Organization) {
 		return 0, fmt.Errorf(
-			"installation account %q does not match configured organization %q; organization-wide inventory coverage cannot be verified",
-			owner, s.cfg.Organization,
+			"installation %d repository owner %q does not match configured organization %q; organization-wide inventory coverage cannot be verified",
+			s.installationID, owner, s.cfg.Organization,
 		)
 	}
-	return installation.TotalCount, nil
+	return accessible.TotalCount, nil
+}
+
+func (s *InventoryService) getInstallationMetadata(ctx context.Context) (apiInstallation, error) {
+	if s.installationID <= 0 {
+		return apiInstallation{}, fmt.Errorf("SEGH_GITHUB_INSTALLATION_ID must be a positive integer")
+	}
+	for page := 1; ; page++ {
+		var response struct {
+			Installations []apiInstallation `json:"installations"`
+		}
+		apiPath := fmt.Sprintf(
+			"/orgs/%s/installations?per_page=100&page=%d",
+			pathEscape(s.cfg.Organization), page,
+		)
+		if err := s.client.Get(ctx, apiPath, &response); err != nil {
+			return apiInstallation{}, fmt.Errorf("get organization installation metadata: %w", err)
+		}
+		for _, installation := range response.Installations {
+			if installation.ID == s.installationID {
+				return installation, nil
+			}
+		}
+		if len(response.Installations) < 100 {
+			return apiInstallation{}, fmt.Errorf(
+				"installation %d was not found in configured organization %q",
+				s.installationID, s.cfg.Organization,
+			)
+		}
+	}
 }
 
 func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepository, error) {

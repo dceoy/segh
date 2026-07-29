@@ -12,11 +12,13 @@ GitHub App JWTs, or reconstruct pull-request baselines.
 
 ## Quick start
 
-Requirements are Go 1.23 or later, the GitHub CLI, and a read-only `GH_TOKEN`.
+Requirements are Go 1.23 or later, the GitHub CLI, a read-only `GH_TOKEN`, and
+the matching GitHub App installation ID.
 
 ```console
 cp segh.example.yaml segh.yaml
 export GH_TOKEN=...
+export SEGH_GITHUB_INSTALLATION_ID=...
 go build -o bin/segh ./cmd/segh
 bin/segh validate
 bin/segh inventory
@@ -62,10 +64,11 @@ repositories; Code Scanning merge protection owns severity thresholds and
 required-tool enforcement.
 
 Organization audits are read-only. The supplied audit workflow uses
-`actions/create-github-app-token` and exposes the result only as `GH_TOKEN` to
-the inventory step. GitHub CLI owns authentication, pagination, transport, and
-GHES hostname handling; `segh` adds bounded exponential retries for transient
-transport, server, and rate-limit failures.
+`actions/create-github-app-token` and exposes its short-lived token and
+non-secret installation ID to the inventory step. GitHub CLI owns
+authentication, pagination, transport, and GHES hostname handling; `segh` adds
+bounded exponential retries for transient transport, server, and rate-limit
+failures.
 
 See [architecture](docs/architecture.md), [workflow rollout](docs/workflows.md),
 [App permissions](docs/github-app-permissions.md), and

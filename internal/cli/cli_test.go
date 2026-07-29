@@ -60,6 +60,16 @@ func TestAuditReturnsIncompleteForIncompletePassingInventory(t *testing.T) {
 	}
 }
 
+func TestInventoryRequiresInstallationID(t *testing.T) {
+	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "")
+	var stdout bytes.Buffer
+	err := runInventory(context.Background(), testConfig(t.TempDir()), nil, &stdout)
+	if err == nil || ExitCode(err) != exitAuth ||
+		!strings.Contains(err.Error(), "SEGH_GITHUB_INSTALLATION_ID must be a positive integer") {
+		t.Fatalf("err = %v, code = %d", err, ExitCode(err))
+	}
+}
+
 func TestReportUsesConfiguredOutputDirectory(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig(dir)
