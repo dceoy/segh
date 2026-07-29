@@ -51,7 +51,7 @@ jobs:
           set +e
           zizmor --offline --no-config --strict-collection --format=sarif . > ../security-results/zizmor.sarif
           status=$?
-          if (( status != 0 && status != 1 && status != 10 )); then
+          if (( status != 0 )); then
             exit "$status"
           fi
       - name: Run Trivy misconfiguration scan

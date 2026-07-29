@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -145,6 +146,65 @@ func TestValidateAcceptsGenuineLocalEndpoints(t *testing.T) {
 		cfg.GitHub.WebURL = raw
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("%s: unexpected rejection: %v", raw, err)
+		}
+	}
+}
+
+func TestSchemaWebURLPatternMatchesRuntimeValidation(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			GitHub struct {
+				Properties struct {
+					WebURL struct {
+						Pattern string `json:"pattern"`
+					} `json:"web_url"`
+				} `json:"properties"`
+			} `json:"github"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	pattern := schema.Properties.GitHub.Properties.WebURL.Pattern
+	if pattern == "" {
+		t.Fatal("github.web_url schema is missing a pattern constraint")
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatalf("invalid github.web_url pattern: %v", err)
+	}
+
+	safe := []string{
+		"https://github.com",
+		"http://localhost",
+		"http://localhost:8080",
+		"http://127.0.0.1:9000",
+		"http://[::1]:9000",
+	}
+	for _, raw := range safe {
+		if !re.MatchString(raw) {
+			t.Errorf("%s: expected schema pattern to accept, but it rejected", raw)
+		}
+	}
+
+	unsafe := []string{
+		"http://example.com",
+		"http://localhost.attacker.example",
+		"http://localhost@attacker.example",
+		"http://localhost:80@attacker.example",
+		"http://attacker.example#localhost",
+		"https://github.example/api/v3",
+		"https://user:pass@github.com",
+		"https://github.com?query=1",
+		"https://github.com#frag",
+	}
+	for _, raw := range unsafe {
+		if re.MatchString(raw) {
+			t.Errorf("%s: expected schema pattern to reject, but it accepted", raw)
 		}
 	}
 }
