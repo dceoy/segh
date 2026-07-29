@@ -49,15 +49,17 @@ coverage, and `5` runtime failure.
 
 The supplied central pull-request workflow runs checksum-pinned zizmor and
 Trivy binaries plus the pinned OpenSSF Scorecard action with a read-only token.
-Each SARIF file is retained as an artifact, then a trusted `workflow_run`
-follow-up uploads it through `github/codeql-action/upload-sarif` with a stable
-scanner category. The follow-up validates artifact metadata against the
-triggering run and checks out the exact analyzed commit without credentials
-solely to preserve SARIF fingerprints; it never executes pull-request code.
-Publication therefore also works for fork and Dependabot pull requests.
-Configure an organization ruleset to require the central workflow and Code
-Scanning results for selected repositories; Code Scanning merge protection
-owns severity thresholds and required-tool enforcement.
+Each SARIF file is retained as an artifact. A protected `workflow_run`
+publisher installed in every target repository validates the central workflow
+identity and artifact metadata, then uploads through
+`github/codeql-action/upload-sarif` with a stable scanner category. It checks
+out the exact analyzed commit without credentials solely to preserve SARIF
+fingerprints and never executes pull-request code, so publication also works
+for fork and Dependabot pull requests. The central source repository is
+excluded from its own scanner and publisher. Configure an organization ruleset
+to require the central workflow and Code Scanning results for selected target
+repositories; Code Scanning merge protection owns severity thresholds and
+required-tool enforcement.
 
 Organization audits are read-only. The supplied audit workflow uses
 `actions/create-github-app-token` and exposes the result only as `GH_TOKEN` to

@@ -19,7 +19,8 @@ Organization ruleset / central required workflow
   ├─ read-only pinned scanner tools and actions
   └─ retained raw SARIF artifacts
 
-Trusted workflow_run follow-up
+Protected per-target workflow_run follow-up
+  ├─ validates the central workflow ID and artifact metadata
   └─ github/codeql-action/upload-sarif (one category per scanner)
 
 Code Scanning merge protection
@@ -35,6 +36,14 @@ segh
 The Go CLI contains no scanner process runner, clone manager, SARIF parser or
 publisher, fingerprint gate, GitHub App signer, custom HTTP transport, batcher,
 or workflow engine.
+
+The central ruleset workflow is disabled in its own source repository because
+an ordinary source-repository pull request controls that run's workflow
+revision. Every target repository installs the publisher on its protected
+default branch and pins the accepted central workflow identity in a repository
+variable. This keeps the write-capable follow-up in the repository where the
+ruleset scan runs without trusting a same-named workflow supplied by a pull
+request.
 
 ## API and authentication
 

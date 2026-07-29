@@ -23,7 +23,7 @@ only after copying it to the private control repository.
 `.github/workflows/pr-security.yml` is the centrally managed `pull_request`
 workflow. It checks out its own trusted `github.workflow_sha` separately from
 the target repository, installs checksum-pinned scanner binaries with Aqua,
-runs scanners directly, and uploads:
+runs scanners directly, and retains:
 
 | Scanner | Code Scanning category |
 |---|---|
@@ -32,20 +32,44 @@ runs scanners directly, and uploads:
 | OpenSSF Scorecard | `scorecard` |
 
 Every SARIF file is also retained as an artifact, including when Code Scanning
-is unavailable. `.github/workflows/publish-pr-security.yml` is a trusted
-`workflow_run` follow-up with `security-events: write`; it downloads only the
-triggering run's fixed-name artifact, validates the retained pull-request
-number and head SHA, and checks out that exact commit without credentials
-solely so the upload action can preserve SARIF fingerprints. It never executes
-pull-request code. This preserves publication for fork and Dependabot pull
-requests while the scanner remains read-only. The upload action waits for
-GitHub processing.
+is unavailable. Because `workflow_run` is repository-local, copy
+`.github/workflows/publish-pr-security.yml` into every target repository's
+protected default branch. This trusted follow-up has `security-events: write`.
+It first validates that the triggering workflow ID matches the repository
+variable `SEGH_PR_SECURITY_WORKFLOW_ID`, then downloads only that run's
+fixed-name artifact, validates the retained pull-request number and head SHA,
+and checks out the exact commit without credentials solely so the upload action
+can preserve SARIF fingerprints. It never executes pull-request code. This
+preserves publication for fork and Dependabot pull requests while the scanner
+remains read-only, and rejects artifacts from a pull-request-controlled
+same-named workflow. The upload action waits for GitHub processing.
 
-Keep the workflow on a protected branch in the central repository. Configure an
-organization ruleset to require that repository, branch, and workflow file for
-the repositories selected by organization policy. The workflow installs
-scanner configuration from its own immutable `github.workflow_sha`, never from
-the pull request under test.
+Keep the scanner workflow on a protected branch in the central source
+repository. Configure an organization ruleset to require that repository,
+branch, and workflow file for the repositories selected by organization
+policy. Exclude `dceoy/segh` itself from the rule: its ordinary
+`pull_request` copy is intentionally skipped because a source-repository PR
+controls that workflow revision. GitHub also recommends disabling the
+individual workflow in the source repository.
+
+For each target repository:
+
+1. Install the publisher workflow on its protected default branch.
+2. Run the central ruleset workflow once in evaluate or non-blocking mode.
+3. Read the run's immutable workflow ID:
+
+   ```console
+   gh api repos/OWNER/REPOSITORY/actions/runs/RUN_ID --jq .workflow_id
+   ```
+
+4. Create the repository Actions variable
+   `SEGH_PR_SECURITY_WORKFLOW_ID` with that numeric value.
+5. Re-run the scanner and confirm the publisher uploads all three categories.
+
+The scanner installs configuration from its immutable `github.workflow_sha`,
+never from the pull request under test. The target publisher is loaded from the
+target's default branch, and the workflow-ID check prevents a pull request from
+substituting another artifact producer.
 
 ## Merge enforcement
 
@@ -56,12 +80,15 @@ scan, custom fingerprints, rename remapping, and a separate `pr-gate` status.
 
 Roll out without a check gap:
 
-1. Enable the direct scanner workflow and confirm all SARIF categories appear.
-2. Add Code Scanning merge protection and the central required workflow in
-   report-only/non-blocking rollout mode where available.
-3. Confirm coverage across the selected repositories.
-4. Enable the intended blocking severities.
-5. Remove legacy scanner and gate workflows only after the new checks are
+1. Add the central required workflow in evaluate or non-blocking mode.
+2. Install the protected publisher and pin the observed workflow ID in every
+   target repository.
+3. Confirm all SARIF categories appear, including for a private repository and
+   a fork or Dependabot pull request.
+4. Add Code Scanning merge protection and confirm coverage across the selected
+   repositories.
+5. Enable the intended blocking severities.
+6. Remove legacy scanner and gate workflows only after the new checks are
    required.
 
 GitHub documents required workflow rules and Code Scanning merge protection in

@@ -8,10 +8,17 @@ permissions:
 
 jobs:
   scan:
+    # Ruleset workflows run in each target repository. Do not run this ordinary
+    # pull_request copy in the protected source repository, where a PR controls
+    # github.workflow_sha.
+    if: github.repository != 'dceoy/segh'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
+      checks: read
       contents: read
+      issues: read
+      pull-requests: read
     steps:
       - name: Check out trusted scanner configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
