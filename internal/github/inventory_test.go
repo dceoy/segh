@@ -119,6 +119,64 @@ func TestEnrichUsesFeatureSpecificSecurityEndpoints(t *testing.T) {
 	}
 }
 
+func TestEnrichPreservesAndMatchesMultiSelectCustomProperties(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/repos/org/repo/properties/values" {
+			_, _ = io.WriteString(writer, `[
+				{"property_name":"teams","value":["security","platform"]},
+				{"property_name":"tier","value":"critical"},
+				{"property_name":"unset","value":null}
+			]`)
+			return
+		}
+		writer.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+	})
+	service.cfg.Selectors.CustomProperties = map[string]string{
+		"teams": "security",
+		"tier":  "critical",
+	}
+
+	repo := service.enrich(context.Background(), apiRepository{
+		FullName:      "org/repo",
+		DefaultBranch: "main",
+	})
+	if !reflect.DeepEqual(repo.CustomProperties["teams"], []string{"platform", "security"}) {
+		t.Fatalf("teams custom property = %#v, want a preserved, sorted string slice", repo.CustomProperties["teams"])
+	}
+	if value, present := repo.CustomProperties["unset"]; !present || value != nil {
+		t.Fatalf("unset custom property = %#v, present = %v; want a preserved null", value, present)
+	}
+	if reason, unknown := service.exclusionReason(repo); reason != "" || unknown {
+		t.Fatalf("exclusionReason() = %q, %v; want multi-select membership to match", reason, unknown)
+	}
+
+	service.cfg.Selectors.CustomProperties["teams"] = "application"
+	if reason, unknown := service.exclusionReason(repo); reason != "custom property teams" || unknown {
+		t.Fatalf("exclusionReason() = %q, %v; want a verified multi-select mismatch", reason, unknown)
+	}
+}
+
+func TestEnrichFailsClosedOnUnsupportedCustomPropertyValue(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/repos/org/repo/properties/values" {
+			_, _ = io.WriteString(writer, `[{"property_name":"tier","value":true}]`)
+			return
+		}
+		writer.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+	})
+	service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
+
+	repo := service.enrich(context.Background(), apiRepository{
+		FullName:      "org/repo",
+		DefaultBranch: "main",
+	})
+	if reason, unknown := service.exclusionReason(repo); reason != "" || !unknown {
+		t.Fatalf("exclusionReason() = %q, %v; want unsupported value type to fail closed", reason, unknown)
+	}
+}
+
 func TestListRepositoriesFetchesEachPageIndependently(t *testing.T) {
 	// A full-size first page must trigger a second request rather than being
 	// treated as the final page, and each page must be decoded on its own so

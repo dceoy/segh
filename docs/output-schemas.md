@@ -9,6 +9,9 @@
 
 The `report` command is the sole producer of the consolidated Markdown operator
 summary. Inventory and audit commands write only their canonical JSON evidence.
+Repository custom-property values retain GitHub's `null`, string, or string-array
+shape. A scalar `selectors.custom_properties` value matches an equal scalar or
+membership in a multi-select array.
 
 Scanner and SARIF schemas are intentionally absent. Raw SARIF is owned and
 retained by the central security workflow, and GitHub Code Scanning is the

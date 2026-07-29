@@ -53,7 +53,7 @@ type Repository struct {
 	Template                   bool                    `json:"template"`
 	DefaultBranch              string                  `json:"default_branch"`
 	Topics                     []string                `json:"topics,omitempty"`
-	CustomProperties           map[string]string       `json:"custom_properties,omitempty"`
+	CustomProperties           map[string]any          `json:"custom_properties,omitempty"`
 	ActionsEnabled             Observed[bool]          `json:"actions_enabled"`
 	AllowedActions             Observed[string]        `json:"allowed_actions"`
 	DefaultWorkflowPermissions Observed[string]        `json:"default_workflow_permissions"`

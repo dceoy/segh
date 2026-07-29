@@ -294,7 +294,7 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 		DefaultBranch:    raw.DefaultBranch,
 		Topics:           sortedStrings(raw.Topics),
 		Capabilities:     map[string]model.Availability{},
-		CustomProperties: map[string]string{},
+		CustomProperties: map[string]any{},
 	}
 	repo.SecretScanning = observedSecurity(raw, "secret_scanning")
 	repo.PushProtection = observedSecurity(raw, "secret_scanning_push_protection")
@@ -308,7 +308,13 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 	}
 	if err := s.client.Get(ctx, base+"/properties/values", &properties); err == nil {
 		for _, property := range properties {
-			repo.CustomProperties[property.PropertyName] = fmt.Sprint(property.Value)
+			value, valid := normalizeCustomPropertyValue(property.Value)
+			if !valid {
+				repo.CustomProperties = map[string]any{}
+				repo.Capabilities["custom_properties"] = model.Unknown
+				break
+			}
+			repo.CustomProperties[property.PropertyName] = value
 		}
 	} else {
 		repo.Capabilities["custom_properties"] = stateFor(err)
@@ -608,7 +614,11 @@ func (s *InventoryService) exclusionReason(repo model.Repository) (reason string
 			return "", true
 		}
 		for key, expected := range selectors.CustomProperties {
-			if repo.CustomProperties[key] != expected {
+			matches, valid := customPropertyMatches(repo.CustomProperties[key], expected)
+			if !valid {
+				return "", true
+			}
+			if !matches {
 				return "custom property " + key, false
 			}
 		}
@@ -642,4 +652,39 @@ func intersects(left, right []string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeCustomPropertyValue(value any) (any, bool) {
+	switch typed := value.(type) {
+	case nil, string:
+		return typed, true
+	case []any:
+		values := make([]string, len(typed))
+		for i, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			values[i] = text
+		}
+		sort.Strings(values)
+		return values, true
+	case []string:
+		return sortedStrings(typed), true
+	default:
+		return nil, false
+	}
+}
+
+func customPropertyMatches(value any, expected string) (matches, valid bool) {
+	switch typed := value.(type) {
+	case nil:
+		return false, true
+	case string:
+		return typed == expected, true
+	case []string:
+		return slices.Contains(typed, expected), true
+	default:
+		return false, false
+	}
 }

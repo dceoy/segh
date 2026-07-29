@@ -257,6 +257,13 @@ func validateReportArtifacts(inventory model.Inventory, audit model.Audit, cfg c
 	if audit.GeneratedAt.IsZero() || audit.Counts == nil {
 		return fmt.Errorf("audit is missing required metadata")
 	}
+	if audit.GeneratedAt.Before(inventory.GeneratedAt) {
+		return fmt.Errorf(
+			"audit generated_at %s predates inventory generated_at %s",
+			audit.GeneratedAt.UTC().Format(time.RFC3339Nano),
+			inventory.GeneratedAt.UTC().Format(time.RFC3339Nano),
+		)
+	}
 	counts := map[string]int{}
 	validStatuses := map[model.PolicyStatus]bool{
 		model.PolicyPass:        true,

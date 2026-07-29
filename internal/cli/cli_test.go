@@ -111,6 +111,27 @@ func TestValidateReportArtifactsAcceptsSliceTypedExpectedValueAfterJSONRoundTrip
 	}
 }
 
+func TestValidateReportArtifactsRejectsAuditPredatingInventoryAfterSuppressionExpiry(t *testing.T) {
+	cfg := testConfig(t.TempDir())
+	expires := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	cfg.Suppressions = []model.Suppression{{
+		Policy:     "repository.ruleset",
+		Repository: "example/repository",
+		Owner:      "security",
+		Rationale:  "temporary migration",
+		Expires:    &expires,
+	}}
+	inventory := validInventory(cfg)
+	inventory.GeneratedAt = expires.Add(time.Hour)
+	inventory.Repositories[0].Ruleset.Value = false
+	audit := policy.New(cfg, expires.Add(-time.Hour)).Evaluate(inventory)
+
+	err := validateReportArtifacts(inventory, audit, cfg)
+	if err == nil || !strings.Contains(err.Error(), "predates inventory") {
+		t.Fatalf("validateReportArtifacts() = %v, want audit-before-inventory error", err)
+	}
+}
+
 func TestValidateReportArtifactsRejectsInconsistentInputs(t *testing.T) {
 	cfg := testConfig(t.TempDir())
 	tests := []struct {
