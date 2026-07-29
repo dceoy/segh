@@ -115,3 +115,21 @@ func TestEnrichUsesFeatureSpecificSecurityEndpoints(t *testing.T) {
 		}
 	}
 }
+
+func TestEnrichDecodesAttachedCodeSecurityConfiguration(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/repos/org/repo/code-security-configuration" {
+			_, _ = io.WriteString(writer, `{"status":"attached","configuration":{"name":"organization default"}}`)
+			return
+		}
+		writer.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+	})
+	repo := service.enrich(context.Background(), apiRepository{
+		FullName:      "org/repo",
+		DefaultBranch: "main",
+	})
+	if observed := repo.CodeSecurityConfiguration; observed.State != model.Available || observed.Value != "organization default" {
+		t.Fatalf("code security configuration = %#v", observed)
+	}
+}

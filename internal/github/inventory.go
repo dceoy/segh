@@ -277,13 +277,15 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 	repo.ForcePushRestricted = mergeControl(rulesErr, ruleTypes["non_fast_forward"], classicForcePush)
 	repo.DeletionRestricted = mergeControl(rulesErr, ruleTypes["deletion"], classicDeletion)
 	var securityConfig struct {
-		Name string `json:"name"`
+		Configuration struct {
+			Name string `json:"name"`
+		} `json:"configuration"`
 	}
 	repo.CodeSecurityConfiguration = s.getObservedString(ctx, base+"/code-security-configuration", "code_security_configuration", func() (string, error) {
 		if err := s.client.Get(ctx, base+"/code-security-configuration", &securityConfig); err != nil {
 			return "", err
 		}
-		return securityConfig.Name, nil
+		return securityConfig.Configuration.Name, nil
 	})
 	var defaultSetup struct {
 		State string `json:"state"`
