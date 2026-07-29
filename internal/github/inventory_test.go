@@ -120,7 +120,7 @@ func TestRunFailsClosedWhenInstallationIsScopedToSelectedRepositories(t *testing
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/installation/repositories":
-			_, _ = io.WriteString(writer, `{"total_count":1,"repository_selection":"selected"}`)
+			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[],"repository_selection":"selected"}`)
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
 		default:
@@ -149,7 +149,7 @@ func TestRunSucceedsWhenInstallationCoversWholeOrganization(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/installation/repositories":
-			_, _ = io.WriteString(writer, `{"total_count":1,"repository_selection":"all"}`)
+			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[],"repository_selection":"all"}`)
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
 		default:
