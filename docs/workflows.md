@@ -43,9 +43,13 @@ workflow. GitHub's "require workflows to pass before merging" ruleset rule only
 invokes workflows whose `on:` section includes `pull_request`,
 `pull_request_target`, or `merge_group`; a `workflow_call`-only file is never
 triggered by a ruleset directly, regardless of required-workflow support.
-Point organization rulesets at a small `pull_request`-triggered caller workflow
-in each repository instead (see `pr-security.yml` in this repository), not at
-`reusable-pr-security.yml` itself:
+Keep a small `pull_request`-triggered caller workflow in a central trusted
+source repository instead (see `pr-security.yml` in this repository), and
+configure the organization ruleset to require that source repository, protected
+branch, and workflow file. Do not copy the ruleset workflow into each target
+repository: GitHub runs the selected central workflow for every repository
+targeted by the ruleset, so target-repository workflow content is not part of
+the enforcement boundary.
 
 ```yaml
 name: segh
@@ -60,9 +64,20 @@ jobs:
       segh-ref: FULL_COMMIT_SHA
 ```
 
-`segh-ref` must be the same `FULL_COMMIT_SHA` used to pin the `uses:` line above. The
-`github` context in a called reusable workflow reflects the caller, not `dceoy/segh`, so
-the revision to build from must be passed explicitly rather than inferred.
+Protect the selected source branch and restrict changes to the caller workflow.
+If the source repository is internal or private, allow the target repositories
+to access its Actions workflows. See GitHub's
+[ruleset workflow requirements](https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#using-a-workflow-file).
+
+`segh-ref` must be the same `FULL_COMMIT_SHA` used to pin the `uses:` line above.
+The `github` context in a called reusable workflow reflects the target
+repository where the ruleset runs, not `dceoy/segh`, so the revision to build
+from must be passed explicitly rather than inferred.
+
+A target repository may also keep its own caller as an optional ordinary status
+check when ruleset workflows are unavailable. That caller is maintained by the
+target repository and must not be documented or configured as the centralized
+ruleset trust boundary.
 
 The scanner job receives no App key or write token. It checks out target data
 without persisted credentials, computes a NUL-delimited diff, scans only copied
