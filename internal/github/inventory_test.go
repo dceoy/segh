@@ -191,9 +191,10 @@ func TestRunSucceedsWhenInstallationCoversWholeOrganization(t *testing.T) {
 		case "/installation/repositories":
 			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[{"full_name":"org/repo-1"}],"repository_selection":"all"}`)
 		case "/orgs/org/repos":
-			_, _ = io.WriteString(writer, `[]`)
+			_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo-1"}]`)
 		default:
-			t.Errorf("unexpected path = %s", request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
 		}
 	})
 	inventory, err := service.Run(context.Background())
@@ -207,6 +208,36 @@ func TestRunSucceedsWhenInstallationCoversWholeOrganization(t *testing.T) {
 		if runErr.Kind == "installation_scope" {
 			t.Fatalf("errors = %#v, want no installation_scope error", inventory.Errors)
 		}
+	}
+}
+
+func TestRunFailsClosedWhenInstallationCountExceedsOrganizationEnumeration(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/installation/repositories":
+			_, _ = io.WriteString(writer, `{"total_count":2,"repositories":[{"full_name":"org/repo-1"}],"repository_selection":"all"}`)
+		case "/orgs/org/repos":
+			_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo-1"}]`)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+		}
+	})
+	inventory, err := service.Run(context.Background())
+	if err == nil {
+		t.Fatalf("err = nil, want error when installation total_count exceeds the enumerated repository count")
+	}
+	if inventory.Complete {
+		t.Fatalf("Complete = true, want false when installation total_count (2) does not match organization enumeration (1)")
+	}
+	found := false
+	for _, runErr := range inventory.Errors {
+		if runErr.Kind == "installation_scope" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("errors = %#v, want an installation_scope error", inventory.Errors)
 	}
 }
 

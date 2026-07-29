@@ -48,9 +48,10 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		GeneratedAt:   time.Now().UTC(),
 		Complete:      true,
 	}
-	if err := s.verifyInstallationCoversOrganization(ctx); err != nil {
+	installationCount, installationErr := s.verifyInstallationCoversOrganization(ctx)
+	if installationErr != nil {
 		inventory.Complete = false
-		inventory.Errors = append(inventory.Errors, model.RunError{Component: "inventory", Kind: "installation_scope", Message: err.Error()})
+		inventory.Errors = append(inventory.Errors, model.RunError{Component: "inventory", Kind: "installation_scope", Message: installationErr.Error()})
 	}
 	repos, err := s.listRepositories(ctx)
 	if err != nil {
@@ -59,6 +60,16 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		return inventory, err
 	}
 	inventory.Total = len(repos)
+	if installationErr == nil && installationCount != len(repos) {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{
+			Component: "inventory", Kind: "installation_scope",
+			Message: fmt.Sprintf(
+				"installation reports %d accessible repositories but organization enumeration returned %d; inventory coverage cannot be verified",
+				installationCount, len(repos),
+			),
+		})
+	}
 	for _, missing := range missingExplicitRepositories(s.cfg.Selectors.Repositories, repos) {
 		inventory.Complete = false
 		inventory.Errors = append(inventory.Errors, model.RunError{
@@ -143,36 +154,43 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 // binding on that owner (instead of trusting an unauthenticated
 // /orgs/{org}/repos response) rules out a stale or mistyped organization
 // and a token from another all-repositories installation.
-func (s *InventoryService) verifyInstallationCoversOrganization(ctx context.Context) error {
+//
+// The returned count is the endpoint's total_count, which the caller must
+// cross-check against the organization enumeration: repository_selection
+// "all" only describes the installation's own scope, not whether the
+// installation or org-listing API actually returned every repository it
+// covers.
+func (s *InventoryService) verifyInstallationCoversOrganization(ctx context.Context) (int, error) {
 	var installation struct {
+		TotalCount          int    `json:"total_count"`
 		RepositorySelection string `json:"repository_selection"`
 		Repositories        []struct {
 			FullName string `json:"full_name"`
 		} `json:"repositories"`
 	}
 	if err := s.client.Get(ctx, "/installation/repositories?per_page=1", &installation); err != nil {
-		return fmt.Errorf("verify installation repository selection: %w", err)
+		return 0, fmt.Errorf("verify installation repository selection: %w", err)
 	}
 	if installation.RepositorySelection != "all" {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"installation repository_selection is %q, not \"all\"; organization-wide inventory coverage cannot be verified",
 			installation.RepositorySelection,
 		)
 	}
 	if len(installation.Repositories) == 0 {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"installation reports repository_selection \"all\" but returned no repositories; cannot verify it covers organization %q",
 			s.cfg.Organization,
 		)
 	}
 	owner, _, ok := strings.Cut(installation.Repositories[0].FullName, "/")
 	if !ok || !strings.EqualFold(owner, s.cfg.Organization) {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"installation account %q does not match configured organization %q; organization-wide inventory coverage cannot be verified",
 			owner, s.cfg.Organization,
 		)
 	}
-	return nil
+	return installation.TotalCount, nil
 }
 
 func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepository, error) {

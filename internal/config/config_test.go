@@ -285,6 +285,20 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 		{"0h0m0s0ns", false},
 		{"1ns", true},
 		{"0h0m1ns", true},
+
+		{"1.5s", true},
+		{"0.5ms", true},
+		{"1.5h", true},
+		{"0h1.5m", true},
+		{"0.05s", true},
+		{"1.5us", true},
+		{"1.5µs", true},
+		{".5s", true},
+		{"5.s", true},
+
+		{"0.0s", false},
+		{".0s", false},
+		{"0.00h0m", false},
 	}
 	for _, tc := range cases {
 		if got := schemaAccepts(tc.raw); got != tc.valid {
