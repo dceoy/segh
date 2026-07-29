@@ -1,9 +1,8 @@
 # Remediation and settings ownership
 
 `segh remediate --audit ...` produces a grouped plan and never writes GitHub
-settings. Dependency and Action updates belong to Renovate. Code security,
-Actions policy, and branch governance belong to GitHub-native organization or
-enterprise controls.
+settings. Code Security Configurations, Actions policy, and branch governance
+belong to GitHub-native organization or enterprise controls.
 
 Safe Settings is justified only when a required setting is not expressible
 through Code Security Configurations, organization/enterprise Actions policy,

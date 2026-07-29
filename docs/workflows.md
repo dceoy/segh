@@ -1,97 +1,63 @@
-# GitHub Actions workflows
+# GitHub Actions rollout
 
-## Organization audit
+## Organization governance audit
 
-`.github/workflows/organization-audit.yml` ships with only
-`workflow_dispatch`. It inventories first, creates lexically deterministic
-batches, scans each batch with `fail-fast: false`, and aggregates every
-available result under `if: always()`. A failed repository or scanner is a
-partial result, not a reason to discard unrelated results.
+Copy `.github/workflows/organization-audit.yml` into a private control
+repository and configure:
 
-Manual inputs support dry-run and exact comma-separated target repositories.
-This provides troubleshooting and resume behavior without rescanning the
-organization. Batch size, CLI concurrency, repository/scanner/total timeouts,
-API retries, and artifact retention are bounded in workflow/configuration.
+- `SEGH_READ_APP_ID`
+- `SEGH_READ_APP_PRIVATE_KEY`
 
-The workflow never caches a target checkout. Scanner installation goes through
-the pinned Aqua registry and checksum metadata. Each target clone lives only in
-a temporary worktree.
+The App-token action creates a short-lived token for the organization. Only
+`GH_TOKEN` reaches `segh`; the App private key stays scoped to the token step.
+The job inventories native-control coverage, evaluates policy, writes a
+deterministic report, and retains the evidence. It does not clone or scan
+organization repositories.
 
-Required Actions secrets are `SEGH_READ_APP_ID`,
-`SEGH_READ_INSTALLATION_ID` (optional when discovery is permitted), and
-`SEGH_READ_APP_PRIVATE_KEY`. Publication uses a distinct
-`SEGH_PUBLISH_APP_ID`, `SEGH_PUBLISH_INSTALLATION_ID`, and
-`SEGH_PUBLISH_APP_PRIVATE_KEY`. Configure `config/organization.yaml` before
-adding a `schedule` trigger.
+The workflow deliberately refuses to run from a public control repository
+because organization inventory and exceptions can be sensitive. Add a schedule
+only after copying it to the private control repository.
 
-This workflow retains the organization inventory, audit, and scanner findings
-in Actions artifacts and the run summary. Both are readable by anyone with
-repository read access, so the workflow must run from a private control
-repository, never from a public fork or mirror of `dceoy/segh`. The `plan` and
-`aggregate` jobs each fail fast with `Require a private control repository`,
-which queries `repos/$GITHUB_REPOSITORY` via `gh api` rather than trusting
-repository visibility from the triggering event payload, since that field is
-not reliably populated for every trigger. Copy this workflow into your own
-private control repository and add a `schedule:` trigger there; `dceoy/segh`
-itself ships without one because it is public and the guard would fail every
-scheduled run.
+## Central pull-request scanning
 
-## Pull-request workflow
+`.github/workflows/pr-security.yml` is the centrally managed `pull_request`
+workflow. It checks out its own trusted `github.workflow_sha` separately from
+the target repository, installs checksum-pinned scanner binaries with Aqua,
+runs scanners directly, and uploads:
 
-`.github/workflows/reusable-pr-security.yml` is a reusable `workflow_call`
-workflow. GitHub's "require workflows to pass before merging" ruleset rule only
-invokes workflows whose `on:` section includes `pull_request`,
-`pull_request_target`, or `merge_group`; a `workflow_call`-only file is never
-triggered by a ruleset directly, regardless of required-workflow support.
-Keep a small `pull_request`-triggered caller workflow in a central trusted
-source repository instead (see `pr-security.yml` in this repository), and
-configure the organization ruleset to require that source repository, protected
-branch, and workflow file. Do not copy the ruleset workflow into each target
-repository: GitHub runs the selected central workflow for every repository
-targeted by the ruleset, so target-repository workflow content is not part of
-the enforcement boundary.
+| Scanner | Code Scanning category |
+|---|---|
+| zizmor | `zizmor` |
+| Trivy misconfiguration | `trivy` |
+| OpenSSF Scorecard | `scorecard` |
 
-```yaml
-name: segh
-on:
-  pull_request:
-permissions:
-  contents: read
-jobs:
-  security:
-    uses: dceoy/segh/.github/workflows/reusable-pr-security.yml@FULL_COMMIT_SHA
-    with:
-      segh-ref: FULL_COMMIT_SHA
-```
+Every SARIF file is also retained as an artifact, including when Code Scanning
+is unavailable. The read-only scanner job and `security-events: write`
+publication job are separate; the upload action waits for GitHub processing.
 
-Protect the selected source branch and restrict changes to the caller workflow.
-If the source repository is internal or private, allow the target repositories
-to access its Actions workflows. See GitHub's
-[ruleset workflow requirements](https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#using-a-workflow-file).
+Keep the workflow on a protected branch in the central repository. Configure an
+organization ruleset to require that repository, branch, and workflow file for
+the repositories selected by organization policy. The workflow installs
+scanner configuration from its own immutable `github.workflow_sha`, never from
+the pull request under test.
 
-`segh-ref` must be the same `FULL_COMMIT_SHA` used to pin the `uses:` line above.
-The `github` context in a called reusable workflow reflects the target
-repository where the ruleset runs, not `dceoy/segh`, so the revision to build
-from must be passed explicitly rather than inferred.
+## Merge enforcement
 
-A target repository may also keep its own caller as an optional ordinary status
-check when ruleset workflows are unavailable. That caller is maintained by the
-target repository and must not be documented or configured as the centralized
-ruleset trust boundary.
+Use GitHub Code Scanning merge protection in the organization ruleset. Require
+the scanner analyses expected for the repository set and configure blocking
+severity thresholds there. This removes the need for a base/current double
+scan, custom fingerprints, rename remapping, and a separate `pr-gate` status.
 
-The scanner job receives no App key or write token. It checks out target data
-without persisted credentials, computes a NUL-delimited diff, scans only copied
-changed files, and never runs target scripts. Base and current SARIF are
-compared by native fingerprints (with a deterministic fallback). Existing
-baseline findings do not block; configured new scanner/rule/severity findings
-do. Start with `report_only: true`, review baselines/false positives, then turn
-on enforcement for high-confidence critical/high findings.
+Roll out without a check gap:
 
-Fork pull requests remain read-only and skip privileged publication. A separate
-publication job may be enabled for same-repository pull requests; it consumes
-SARIF with a trusted `segh` binary and is the only job given publication
-credentials. GitHub-native CodeQL, secret scanning, and push protection remain
-outside this workflow.
+1. Enable the direct scanner workflow and confirm all SARIF categories appear.
+2. Add Code Scanning merge protection and the central required workflow in
+   report-only/non-blocking rollout mode where available.
+3. Confirm coverage across the selected repositories.
+4. Enable the intended blocking severities.
+5. Remove legacy scanner and gate workflows only after the new checks are
+   required.
 
-All third-party `uses:` references in the supplied workflows are full commit
-SHAs with readable release comments.
+GitHub documents required workflow rules and Code Scanning merge protection in
+the repository ruleset documentation:
+<https://docs.github.com/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets>.

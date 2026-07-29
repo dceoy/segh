@@ -26,31 +26,6 @@
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-aarch64-apple-darwin.tar.gz",
-      "checksum": "ED336D0BA49DB8EF89B2B41FFFA372CE63BD032F22A56F001C265891AEC32829",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-aarch64-unknown-linux-musl.tar.gz",
-      "checksum": "D70CDAE687FEB6AAD9A09FE8D686DF8C8EFAF69A1007FA581379A2025ADC10A5",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-x86_64-apple-darwin.tar.gz",
-      "checksum": "77F5CA26C0DE20E992A3677A174FE1121EE25C36F9B1434A863F75BF077A05EB",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-x86_64-pc-windows-msvc.zip",
-      "checksum": "ACFDE570451CFDB8689FA159A138EE805BA4E241C466432750302C86254B0984",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/astral-sh/uv/0.11.32/uv-x86_64-unknown-linux-musl.tar.gz",
-      "checksum": "1FD052F196108D87E61FC3D98FE06B4EC758C9A1EB1466A6FD1A436FE45885F2",
-      "algorithm": "sha256"
-    },
-    {
       "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-darwin-amd64.tar.gz",
       "checksum": "F6F06D94B6241521C53D15450C5209B028270BF966F842AFB11C030C79F5BC16",
       "algorithm": "sha256"
@@ -78,36 +53,6 @@
     {
       "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-windows-arm64.zip",
       "checksum": "947B9A5BF762D465710B376C156F0184ABB2168378B0826AF1899E0EE7183742",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_darwin_amd64.tar.gz",
-      "checksum": "979487CA20E726F6A4D2BD63A0A4C544184F589724B3D12D2BA8D0EA80889063",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_darwin_arm64.tar.gz",
-      "checksum": "BAC6371A4F810D6BDD0B65D63C3311906BDFE3BA0D76A5EA743CE24CED170FCF",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_linux_amd64.tar.gz",
-      "checksum": "83B90A05C1540EF1390DB1CD5711E5FD04BE9C1D8537FB84D39D02092D6A8DFF",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_linux_arm64.tar.gz",
-      "checksum": "3CE59D20C1D53E540C4A14E0DA1E0D96B3B294E8DDC96A3C5A7B8A637B32991E",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_windows_amd64.tar.gz",
-      "checksum": "21CA42B37260785E670C58F602B483510099E7B1988E3C6EB5005F143DC2A2AB",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/ossf/scorecard/v5.5.0/scorecard_5.5.0_windows_arm64.tar.gz",
-      "checksum": "375CCF037552CF2CA105B9143311ED9128C669352D29FAEB6BD11024E5D0BE4A",
       "algorithm": "sha256"
     },
     {

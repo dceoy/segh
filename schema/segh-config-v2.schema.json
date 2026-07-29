@@ -1,33 +1,28 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/dceoy/segh/schema/segh-config-v1.schema.json",
-  "title": "segh configuration v1",
+  "$id": "https://github.com/dceoy/segh/schema/segh-config-v2.schema.json",
+  "title": "segh governance configuration v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "organization", "github", "auth", "selectors", "policies", "scanners", "execution", "publication", "output", "pull_request"],
+  "required": ["version", "organization", "github", "inventory", "selectors", "policies", "output"],
   "properties": {
-    "version": {"const": 1},
+    "version": {"const": 2},
     "organization": {"type": "string", "minLength": 1},
     "github": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["web_url", "api_url", "graphql_url"],
+      "required": ["web_url"],
       "properties": {
-        "web_url": {"type": "string", "format": "uri"},
-        "api_url": {"type": "string", "format": "uri"},
-        "graphql_url": {"type": "string", "format": "uri"}
+        "web_url": {"type": "string", "format": "uri"}
       }
     },
-    "auth": {
+    "inventory": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["concurrency", "timeout"],
       "properties": {
-        "app_id": {"type": "integer", "minimum": 0},
-        "installation_id": {"type": "integer", "minimum": 0},
-        "private_key_file": {"type": "string"},
-        "private_key_env": {"type": "string"},
-        "token_env": {"type": "string"},
-        "allow_existing_token": {"type": "boolean"}
+        "concurrency": {"type": "integer", "minimum": 1, "maximum": 64},
+        "timeout": {"$ref": "#/$defs/duration"}
       }
     },
     "selectors": {
@@ -55,11 +50,9 @@
           "additionalProperties": false,
           "properties": {
             "enabled": {"type": "boolean"},
-            "allowed_actions": {"type": "string"},
+            "allowed_actions": {"enum": ["", "all", "local_only", "selected"]},
             "default_workflow_permissions": {"enum": ["", "read", "write"]},
-            "require_full_sha": {"type": "boolean"},
             "require_sha_pinning_enforcement": {"type": "boolean"},
-            "require_renovate": {"type": "boolean"},
             "require_fork_pr_approval": {"type": "boolean"}
           }
         },
@@ -110,49 +103,6 @@
         }
       }
     },
-    "scanners": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["zizmor", "trivy", "scorecard", "semgrep"],
-      "properties": {
-        "zizmor": {"$ref": "#/$defs/scanner"},
-        "trivy": {"$ref": "#/$defs/scanner"},
-        "scorecard": {"$ref": "#/$defs/scanner"},
-        "semgrep": {
-          "allOf": [
-            {"$ref": "#/$defs/scanner"},
-            {
-              "type": "object",
-              "properties": {"rules": {"$ref": "#/$defs/stringArray"}}
-            }
-          ]
-        }
-      }
-    },
-    "execution": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["concurrency", "repository_timeout", "total_timeout", "api_timeout", "max_retries", "base_retry_delay"],
-      "properties": {
-        "concurrency": {"type": "integer", "minimum": 1, "maximum": 64},
-        "repository_timeout": {"$ref": "#/$defs/duration"},
-        "total_timeout": {"$ref": "#/$defs/duration"},
-        "api_timeout": {"$ref": "#/$defs/duration"},
-        "max_retries": {"type": "integer", "minimum": 0, "maximum": 10},
-        "base_retry_delay": {"$ref": "#/$defs/duration"},
-        "dry_run": {"type": "boolean"}
-      }
-    },
-    "publication": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled", "poll_timeout", "category_prefix"],
-      "properties": {
-        "enabled": {"type": "boolean"},
-        "poll_timeout": {"$ref": "#/$defs/duration"},
-        "category_prefix": {"type": "string", "pattern": "^[A-Za-z0-9_.:/-]+$"}
-      }
-    },
     "output": {
       "type": "object",
       "additionalProperties": false,
@@ -162,45 +112,11 @@
         "jsonl": {"type": "boolean"},
         "retention_days": {"type": "integer", "minimum": 1, "maximum": 400}
       }
-    },
-    "pull_request": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["report_only", "thresholds"],
-      "properties": {
-        "report_only": {"type": "boolean"},
-        "thresholds": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["minimum_severity"],
-            "properties": {
-              "minimum_severity": {"enum": ["none", "note", "low", "warning", "medium", "error", "high", "critical"]},
-              "rules": {"$ref": "#/$defs/stringArray"}
-            }
-          }
-        }
-      }
     }
   },
   "$defs": {
     "stringArray": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "requirement": {"enum": ["", "required", "disabled"]},
-    "duration": {"type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)([0-9]+(ns|us|µs|ms|s|m|h))*$"},
-    "scanner": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled", "version"],
-      "properties": {
-        "enabled": {"type": "boolean"},
-        "version": {"type": "string"},
-        "timeout": {"$ref": "#/$defs/duration"},
-        "cpu_seconds": {"type": "integer", "minimum": 0},
-        "memory_mb": {"type": "integer", "minimum": 0},
-        "exclude": {"$ref": "#/$defs/stringArray"},
-        "rules": {"$ref": "#/$defs/stringArray"}
-      }
-    }
+    "duration": {"type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)([0-9]+(ns|us|µs|ms|s|m|h))*$"}
   }
 }

@@ -3,12 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/dceoy/segh/internal/model"
 )
 
 func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
@@ -16,7 +12,7 @@ func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--help"}, "Usage:"},
+		{[]string{"--help"}, "GitHub security governance audit"},
 		{[]string{"--version"}, "test-version"},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -29,122 +25,10 @@ func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
 	}
 }
 
-func TestPublicationTargetUsesScannedCommitNotInventorySHA(t *testing.T) {
-	inventoryRepos := map[string]model.Repository{
-		"org/repo": {FullName: "org/repo", DefaultBranch: "main"},
-	}
-	scannedCommits := map[string]string{"org/repo": strings.Repeat("a", 40)}
-	sha, ref, reject := publicationTarget("org/repo", true, "", "", inventoryRepos, scannedCommits)
-	if reject != "" {
-		t.Fatalf("unexpected rejection: %s", reject)
-	}
-	if sha != strings.Repeat("a", 40) || ref != "refs/heads/main" {
-		t.Fatalf("sha = %q, ref = %q", sha, ref)
-	}
-}
-
-func TestPublicationTargetRejectsMissingScannedCommit(t *testing.T) {
-	inventoryRepos := map[string]model.Repository{
-		"org/repo": {FullName: "org/repo", DefaultBranch: "main"},
-	}
-	_, _, reject := publicationTarget("org/repo", true, "", "", inventoryRepos, map[string]string{})
-	if reject == "" {
-		t.Fatal("expected rejection when no scanned commit SHA was recorded")
-	}
-}
-
-func TestPublicationTargetRejectsRepositoryNotInInventory(t *testing.T) {
-	_, _, reject := publicationTarget("org/missing", true, "", "", map[string]model.Repository{}, map[string]string{})
-	if reject == "" {
-		t.Fatal("expected rejection for a repository absent from the inventory")
-	}
-}
-
-func TestPublicationTargetUsesFlagsWithoutInventory(t *testing.T) {
-	sha, ref, reject := publicationTarget("org/repo", false, strings.Repeat("b", 40), "refs/heads/main", nil, nil)
-	if reject != "" {
-		t.Fatalf("unexpected rejection: %s", reject)
-	}
-	if sha != strings.Repeat("b", 40) || ref != "refs/heads/main" {
-		t.Fatalf("sha = %q, ref = %q", sha, ref)
-	}
-}
-
-func TestScanRunErrorCatchesRunLevelFailuresWithoutFailedResults(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		run  model.ScanRun
-	}{
-		{
-			name: "clone or filter error with no scanner results",
-			run: model.ScanRun{
-				Selected: 1,
-				Errors:   []model.RunError{{Component: "clone", Kind: "runtime", Message: "boom"}},
-			},
-		},
-		{
-			name: "total timeout leaves repositories unprocessed",
-			run: model.ScanRun{
-				Selected:     2,
-				Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}},
-				Errors:       []model.RunError{{Component: "scan", Kind: "total_timeout", Message: "deadline exceeded"}},
-			},
-		},
-		{
-			name: "fewer repositories executed than selected",
-			run: model.ScanRun{
-				Selected:     2,
-				Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}},
-			},
-		},
-	} {
-		if err := scanRunError(test.run); err == nil {
-			t.Fatalf("%s: expected error, got nil", test.name)
-		}
-	}
-}
-
-func TestScanRunErrorAcceptsCompleteRuns(t *testing.T) {
-	run := model.ScanRun{
-		Selected:     1,
-		Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}},
-		Results:      []model.ScannerResult{{Repository: "a/b", Scanner: "trivy", Status: model.ScannerClean}},
-	}
-	if err := scanRunError(run); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestReadRenameMap(t *testing.T) {
-	dir := t.TempDir()
-	writeList := func(name, content string) string {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	if renames, err := readRenameMap(""); err != nil || renames != nil {
-		t.Fatalf("empty path: renames=%v err=%v", renames, err)
-	}
-	pairs := writeList("pairs.zlist", "old.yml\x00new.yml\x00")
-	renames, err := readRenameMap(pairs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(renames) != 1 || renames["old.yml"] != "new.yml" {
-		t.Fatalf("renames = %#v", renames)
-	}
-	odd := writeList("odd.zlist", "old.yml\x00")
-	if _, err := readRenameMap(odd); err == nil {
-		t.Fatal("expected an error for an unpaired entry")
-	}
-}
-
-func TestUnknownCommandUsesStableUsageExit(t *testing.T) {
+func TestRemovedCommandUsesStableUsageExit(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), []string{"--config", "../../config/pr.yaml", "unknown"}, "test", &stdout, &stderr)
-	if err == nil || ExitCode(err) != exitUsage {
+	err := Run(context.Background(), []string{"--config", "../../config/organization.yaml", "scan"}, "test", &stdout, &stderr)
+	if err == nil || ExitCode(err) != exitUsage || !strings.Contains(err.Error(), `unknown command "scan"`) {
 		t.Fatalf("err=%v code=%d", err, ExitCode(err))
 	}
 }

@@ -19,4 +19,3 @@ lint:
 
 tools:
 	aqua install
-	uv sync --frozen --project tools
