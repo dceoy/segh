@@ -54,6 +54,8 @@ jobs:
         working-directory: _target
         run: |
           trivy fs \
+            --config /dev/null \
+            --ignorefile /dev/null \
             --scanners misconfig \
             --format sarif \
             --output "$GITHUB_WORKSPACE/security-results/trivy.sarif" \

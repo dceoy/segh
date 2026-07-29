@@ -19,9 +19,11 @@ import (
 // Pagination slurps all repository pages into one bounded document. Sixty-four
 // MiB accommodates large organizations while still capping peak response data.
 const (
-	maxResponseBytes = 64 << 20
-	maxAPIAttempts   = 4
-	retryBaseDelay   = time.Second
+	maxResponseBytes    = 64 << 20
+	maxAPIAttempts      = 4
+	retryBaseDelay      = time.Second
+	rateLimitRetryDelay = time.Minute
+	githubAPIVersion    = "2022-11-28"
 )
 
 var httpStatusPattern = regexp.MustCompile(`(?i)\bHTTP ([0-9]{3})\b`)
@@ -82,7 +84,7 @@ func (c *Client) run(ctx context.Context, apiPath string, paginate bool, out any
 		if err == nil || !retryableAPIError(err) || attempt == maxAPIAttempts {
 			return err
 		}
-		delay := retryBaseDelay << (attempt - 1)
+		delay := retryDelay(err, attempt)
 		if err := c.wait(ctx, delay); err != nil {
 			return err
 		}
@@ -90,7 +92,12 @@ func (c *Client) run(ctx context.Context, apiPath string, paginate bool, out any
 }
 
 func (c *Client) runOnce(ctx context.Context, apiPath string, paginate bool, out any) error {
-	args := []string{"api", "--hostname", c.hostname, "--method", http.MethodGet}
+	args := []string{
+		"api",
+		"--hostname", c.hostname,
+		"--method", http.MethodGet,
+		"--header", "X-GitHub-Api-Version: " + githubAPIVersion,
+	}
 	if paginate {
 		args = append(args, "--paginate", "--slurp")
 	}
@@ -138,6 +145,16 @@ func retryableAPIError(err error) bool {
 	return apiErr.StatusCode == 0 || apiErr.StatusCode == http.StatusRequestTimeout ||
 		apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500 ||
 		apiErr.StatusCode == http.StatusForbidden && rateLimitPattern.MatchString(apiErr.Message)
+}
+
+func retryDelay(err error, attempt int) time.Duration {
+	delay := retryBaseDelay << (attempt - 1)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) &&
+		(apiErr.StatusCode == http.StatusTooManyRequests || rateLimitPattern.MatchString(apiErr.Message)) {
+		return max(delay, rateLimitRetryDelay)
+	}
+	return delay
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {

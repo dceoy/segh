@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,10 @@ func TestClientDelegatesPaginationAndHostnameToGitHubCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(args), "api --hostname github.example --method GET --paginate --slurp") {
+	if !strings.Contains(
+		string(args),
+		"api --hostname github.example --method GET --header X-GitHub-Api-Version: 2022-11-28 --paginate --slurp",
+	) {
 		t.Fatalf("args = %q", args)
 	}
 	if len(pages) != 1 || len(pages[0]) != 1 {
@@ -162,6 +166,37 @@ exit 1
 	}
 	if string(count) != "1" {
 		t.Fatalf("attempts = %q, want 1", count)
+	}
+}
+
+func TestRetryDelayUsesRateLimitFloor(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want time.Duration
+	}{
+		{
+			name: "ordinary transient error",
+			err:  &APIError{StatusCode: http.StatusServiceUnavailable},
+			want: retryBaseDelay,
+		},
+		{
+			name: "too many requests",
+			err:  &APIError{StatusCode: http.StatusTooManyRequests},
+			want: rateLimitRetryDelay,
+		},
+		{
+			name: "secondary rate limit",
+			err:  &APIError{StatusCode: http.StatusForbidden, Message: "secondary rate limit"},
+			want: rateLimitRetryDelay,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := retryDelay(test.err, 1); got != test.want {
+				t.Fatalf("retryDelay() = %s, want %s", got, test.want)
+			}
+		})
 	}
 }
 
