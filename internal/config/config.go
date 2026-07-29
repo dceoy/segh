@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -204,6 +204,21 @@ func (p Policies) configured() bool {
 		repository.ProhibitForks || repository.ProhibitTemplates
 }
 
+// loopbackIPv4Pattern matches only the canonical dotted-quad 127.0.0.0/8
+// spellings that the github.web_url JSON Schema pattern also accepts.
+// Alternate loopback representations (IPv4-mapped IPv6 such as
+// ::ffff:127.0.0.1, or expanded IPv6 forms such as 0:0:0:0:0:0:0:1) are
+// deliberately rejected here so the schema stays an exact, auditable
+// description of what this validator accepts rather than an approximation
+// of net.IP.IsLoopback's broader notion of "loopback".
+var loopbackIPv4Pattern = regexp.MustCompile(
+	`^127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$`,
+)
+
+func isLoopbackHostname(hostname string) bool {
+	return hostname == "localhost" || hostname == "::1" || loopbackIPv4Pattern.MatchString(hostname)
+}
+
 func validateGitHubURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
@@ -213,11 +228,8 @@ func validateGitHubURL(raw string) error {
 	if parsed.Scheme == "https" {
 		return nil
 	}
-	if parsed.Scheme == "http" {
-		hostname := parsed.Hostname()
-		if hostname == "localhost" || net.ParseIP(hostname).IsLoopback() {
-			return nil
-		}
+	if parsed.Scheme == "http" && isLoopbackHostname(parsed.Hostname()) {
+		return nil
 	}
 	return fmt.Errorf("must use HTTPS (HTTP is allowed only for local tests)")
 }

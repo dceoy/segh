@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadExample(t *testing.T) {
@@ -178,33 +179,120 @@ func TestSchemaWebURLPatternMatchesRuntimeValidation(t *testing.T) {
 		t.Fatalf("invalid github.web_url pattern: %v", err)
 	}
 
-	safe := []string{
-		"https://github.com",
-		"http://localhost",
-		"http://localhost:8080",
-		"http://127.0.0.1:9000",
-		"http://[::1]:9000",
+	// Each case must agree between the schema pattern and validateGitHubURL:
+	// the schema is meant to be an exact static description of the runtime
+	// contract, not merely an example-based approximation of it.
+	cases := []struct {
+		raw   string
+		valid bool
+	}{
+		{"https://github.com", true},
+		{"http://localhost", true},
+		{"http://localhost:8080", true},
+		{"http://127.0.0.1:9000", true},
+		{"http://127.255.255.255", true},
+		{"http://[::1]:9000", true},
+
+		{"http://example.com", false},
+		{"http://localhost.attacker.example", false},
+		{"http://localhost@attacker.example", false},
+		{"http://localhost:80@attacker.example", false},
+		{"http://attacker.example#localhost", false},
+		{"https://github.example/api/v3", false},
+		{"https://user:pass@github.com", false},
+		{"https://github.com?query=1", false},
+		{"https://github.com#frag", false},
+
+		// Invalid IPv4 octets: the pattern must reject these by range,
+		// not merely by digit count.
+		{"http://127.999.999.999", false},
+		{"http://127.256.0.1", false},
+
+		// Alternate loopback spellings that net.IP.IsLoopback would
+		// accept but the schema pattern does not encode: the runtime
+		// validator must reject these too so the schema remains an
+		// exact description of what it accepts.
+		{"http://[0:0:0:0:0:0:0:1]", false},
+		{"http://[::ffff:127.0.0.1]", false},
+		{"http://[::ffff:7f00:1]", false},
 	}
-	for _, raw := range safe {
-		if !re.MatchString(raw) {
-			t.Errorf("%s: expected schema pattern to accept, but it rejected", raw)
+	for _, tc := range cases {
+		if got := re.MatchString(tc.raw); got != tc.valid {
+			t.Errorf("%s: schema pattern match = %v, want %v", tc.raw, got, tc.valid)
+		}
+		if got := validateGitHubURL(tc.raw) == nil; got != tc.valid {
+			t.Errorf("%s: validateGitHubURL acceptance = %v, want %v", tc.raw, got, tc.valid)
 		}
 	}
+}
 
-	unsafe := []string{
-		"http://example.com",
-		"http://localhost.attacker.example",
-		"http://localhost@attacker.example",
-		"http://localhost:80@attacker.example",
-		"http://attacker.example#localhost",
-		"https://github.example/api/v3",
-		"https://user:pass@github.com",
-		"https://github.com?query=1",
-		"https://github.com#frag",
+func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, raw := range unsafe {
-		if re.MatchString(raw) {
-			t.Errorf("%s: expected schema pattern to reject, but it accepted", raw)
+	var schema struct {
+		Defs struct {
+			Duration struct {
+				Pattern string `json:"pattern"`
+				Not     struct {
+					Pattern string `json:"pattern"`
+				} `json:"not"`
+			} `json:"duration"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	pattern := schema.Defs.Duration.Pattern
+	notPattern := schema.Defs.Duration.Not.Pattern
+	if pattern == "" || notPattern == "" {
+		t.Fatal("$defs/duration is missing a pattern or not-pattern constraint")
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatalf("invalid duration pattern: %v", err)
+	}
+	notRe, err := regexp.Compile(notPattern)
+	if err != nil {
+		t.Fatalf("invalid duration not-pattern: %v", err)
+	}
+	schemaAccepts := func(raw string) bool {
+		return re.MatchString(raw) && !notRe.MatchString(raw)
+	}
+
+	// Config.Validate rejects inventory.timeout <= 0, so every duration
+	// string here must agree between the schema and time.ParseDuration.
+	cases := []struct {
+		raw   string
+		valid bool
+	}{
+		{"30m", true},
+		{"1h30m", true},
+		{"500ms", true},
+		{"1s", true},
+		{"0h30m", true},
+
+		{"0s", false},
+		{"0ns", false},
+		{"00s", false},
+		{"0h0m", false},
+		{"0h0m0s", false},
+		{"0h0m0ns", false},
+		{"00h0m", false},
+		{"0ms", false},
+		{"0µs", false},
+		{"0h0m0s0ns", false},
+		{"1ns", true},
+		{"0h0m1ns", true},
+	}
+	for _, tc := range cases {
+		if got := schemaAccepts(tc.raw); got != tc.valid {
+			t.Errorf("%s: schema acceptance = %v, want %v", tc.raw, got, tc.valid)
+		}
+		dur, err := time.ParseDuration(tc.raw)
+		if got := err == nil && dur > 0; got != tc.valid {
+			t.Errorf("%s: time.ParseDuration-derived validity = %v, want %v", tc.raw, got, tc.valid)
 		}
 	}
 }
