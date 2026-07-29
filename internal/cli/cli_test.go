@@ -138,6 +138,13 @@ func TestValidateReportArtifactsRejectsInconsistentInputs(t *testing.T) {
 			want: "does not match inventory organization",
 		},
 		{
+			name: "inventory github host",
+			change: func(inventory *model.Inventory, _ *model.Audit) {
+				inventory.GitHubHost = "https://github.example.com"
+			},
+			want: "does not match configured github.web_url",
+		},
+		{
 			name: "inventory records",
 			change: func(inventory *model.Inventory, _ *model.Audit) {
 				inventory.Selected = 0

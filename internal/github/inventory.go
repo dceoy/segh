@@ -59,6 +59,13 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		return inventory, err
 	}
 	inventory.Total = len(repos)
+	for _, missing := range missingExplicitRepositories(s.cfg.Selectors.Repositories, repos) {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{
+			Repository: missing, Component: "selectors", Kind: "repository_not_found",
+			Message: fmt.Sprintf("repository %q in selectors.repositories was not found in the organization's enumerated repositories", missing),
+		})
+	}
 
 	concurrency := s.cfg.Inventory.Concurrency
 	jobs := make(chan apiRepository)
@@ -160,6 +167,28 @@ func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepositor
 			return repositories, nil
 		}
 	}
+}
+
+// missingExplicitRepositories reports entries of selectors.repositories that were not
+// found among the organization's enumerated repositories. A typo, rename, or a
+// repository the token cannot see would otherwise be silently dropped: exclusionReason
+// treats an allowlist as "not explicitly included" for every repository it doesn't
+// match, so a wholly unmatched entry never surfaces as anything but a normal exclusion.
+func missingExplicitRepositories(allowlist []string, repos []apiRepository) []string {
+	if len(allowlist) == 0 {
+		return nil
+	}
+	enumerated := make(map[string]bool, len(repos))
+	for _, repo := range repos {
+		enumerated[repo.FullName] = true
+	}
+	var missing []string
+	for _, name := range allowlist {
+		if !enumerated[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.Repository {

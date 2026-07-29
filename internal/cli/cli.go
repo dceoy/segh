@@ -220,6 +220,9 @@ func validateInventory(inventory model.Inventory, cfg config.Config) error {
 	if inventory.GitHubHost == "" || inventory.GeneratedAt.IsZero() {
 		return fmt.Errorf("inventory is missing required metadata")
 	}
+	if inventory.GitHubHost != cfg.GitHub.WebURL {
+		return fmt.Errorf("inventory github_host %q does not match configured github.web_url %q", inventory.GitHubHost, cfg.GitHub.WebURL)
+	}
 	if inventory.Total < 0 || inventory.Selected < 0 || inventory.Excluded < 0 {
 		return fmt.Errorf("inventory repository counts must not be negative")
 	}

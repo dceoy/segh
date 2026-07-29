@@ -210,6 +210,37 @@ func TestRunSucceedsWhenInstallationCoversWholeOrganization(t *testing.T) {
 	}
 }
 
+func TestRunFailsClosedWhenExplicitlyIncludedRepositoryIsNotEnumerated(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/installation/repositories":
+			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[],"repository_selection":"all"}`)
+		case "/orgs/org/repos":
+			_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo-1"}]`)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+		}
+	})
+	service.cfg.Selectors.Repositories = []string{"org/repo-1", "org/does-not-exist"}
+	inventory, err := service.Run(context.Background())
+	if err == nil {
+		t.Fatalf("err = nil, want error for a missing explicitly included repository")
+	}
+	if inventory.Complete {
+		t.Fatalf("Complete = true, want false when a selectors.repositories entry is not enumerated")
+	}
+	found := false
+	for _, runErr := range inventory.Errors {
+		if runErr.Kind == "repository_not_found" && runErr.Repository == "org/does-not-exist" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("errors = %#v, want a repository_not_found error for org/does-not-exist", inventory.Errors)
+	}
+}
+
 func TestEnrichDecodesAttachedCodeSecurityConfiguration(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/repos/org/repo/code-security-configuration" {
