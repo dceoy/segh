@@ -31,15 +31,22 @@ runs scanners directly, and retains:
 | Trivy misconfiguration | `trivy` |
 | OpenSSF Scorecard | `scorecard` |
 
-Every SARIF file is also retained as an artifact, including when Code Scanning
-is unavailable. Because `workflow_run` is repository-local, copy
+Scorecard runs in a separate least-privilege job with the pull request checked
+out at the workspace root, which is the target that its local pull-request mode
+analyzes. Every SARIF file is retained as an artifact, including when Code
+Scanning is unavailable. Because `workflow_run` is repository-local, copy
 `.github/workflows/publish-pr-security.yml` into every target repository's
 protected default branch. This trusted follow-up has `security-events: write`.
 It first validates that the triggering workflow ID matches the repository
 variable `SEGH_PR_SECURITY_WORKFLOW_ID`, then downloads only that run's
-fixed-name artifact, validates the retained pull-request number and head SHA,
-and checks out the exact commit without credentials solely so the upload action
-can preserve SARIF fingerprints. It never executes pull-request code. This
+fixed-name artifacts, validates the retained pull-request number and head SHA,
+checks out the base repository's `refs/pull/<number>/head`, and verifies that
+the checkout matches the analyzed commit. This lets the base repository token
+read private-fork pull-request content without direct access to the fork. The
+publisher explicitly opts into the checkout action's protected
+`workflow_run` fork path only after validating the artifact metadata. The
+checkout has no persisted credentials and exists solely so the upload action
+can preserve SARIF fingerprints; no pull-request code is executed. This
 preserves publication for fork and Dependabot pull requests while the scanner
 remains read-only, and rejects artifacts from a pull-request-controlled
 same-named workflow. The upload action waits for GitHub processing.
