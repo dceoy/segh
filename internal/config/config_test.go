@@ -272,8 +272,13 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 		{"500ms", true},
 		{"1s", true},
 		{"0h30m", true},
+		{"+1s", true},
+		{"+1.5s", true},
 
 		{"0s", false},
+		{"+0s", false},
+		{"+0.0s", false},
+		{"-1s", false},
 		{"0ns", false},
 		{"00s", false},
 		{"0h0m", false},
