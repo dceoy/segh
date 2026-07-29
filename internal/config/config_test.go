@@ -75,6 +75,48 @@ func TestSchemaAllowsDefaultedNestedSections(t *testing.T) {
 	}
 }
 
+func TestSchemaRequiresAnEffectivePolicy(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties map[string]struct {
+			AnyOf []struct {
+				Required   []string                   `json:"required"`
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"anyOf"`
+		} `json:"properties"`
+		Definitions map[string]struct {
+			AnyOf []json.RawMessage `json:"anyOf"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	policies := schema.Properties["policies"]
+	if len(policies.AnyOf) != 3 {
+		t.Fatalf("policies schema must require one configured subsection, got %d alternatives", len(policies.AnyOf))
+	}
+	for _, section := range []string{"actions", "code_security", "repository"} {
+		found := false
+		for _, alternative := range policies.AnyOf {
+			if len(alternative.Required) == 1 && alternative.Required[0] == section && alternative.Properties[section] != nil {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("policies schema does not require an effective %s subsection", section)
+		}
+	}
+	for _, name := range []string{"configuredActionsPolicy", "configuredCodeSecurityPolicy", "configuredRepositoryPolicy"} {
+		if len(schema.Definitions[name].AnyOf) == 0 {
+			t.Errorf("%s must define effective policy values", name)
+		}
+	}
+}
+
 func TestValidateRejectsSpoofedLocalEndpoints(t *testing.T) {
 	unsafe := []string{
 		"http://localhost.attacker.example",

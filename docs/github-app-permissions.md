@@ -23,9 +23,10 @@ grants the token access to every repository in the App installation. The
 workflow passes the short-lived result to `segh` through `GH_TOKEN`; `segh`
 never accepts an App private key, installation ID, or publication credential.
 
-SARIF publication uses the workflow's narrowly scoped `GITHUB_TOKEN` with
-`security-events: write` and the pinned CodeQL upload action. Do not add
-publication permissions to the inventory App.
+SARIF publication uses the trusted `workflow_run` follow-up's narrowly scoped
+`GITHUB_TOKEN` with `security-events: write` and the pinned CodeQL upload
+action. The follow-up does not check out or execute pull-request code. Do not
+add publication permissions to the scanner workflow or inventory App.
 
 Never grant contents write, workflows write, administration write, or
 organization-owner privileges to the inventory App.

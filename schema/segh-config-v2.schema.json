@@ -41,6 +41,26 @@
     "policies": {
       "type": "object",
       "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": ["actions"],
+          "properties": {
+            "actions": {"$ref": "#/$defs/configuredActionsPolicy"}
+          }
+        },
+        {
+          "required": ["code_security"],
+          "properties": {
+            "code_security": {"$ref": "#/$defs/configuredCodeSecurityPolicy"}
+          }
+        },
+        {
+          "required": ["repository"],
+          "properties": {
+            "repository": {"$ref": "#/$defs/configuredRepositoryPolicy"}
+          }
+        }
+      ],
       "properties": {
         "actions": {
           "type": "object",
@@ -109,6 +129,146 @@
     }
   },
   "$defs": {
+    "configuredActionsPolicy": {
+      "anyOf": [
+        {"required": ["enabled"]},
+        {"required": ["require_fork_pr_approval"]},
+        {
+          "required": ["allowed_actions"],
+          "properties": {
+            "allowed_actions": {"enum": ["all", "local_only", "selected"]}
+          }
+        },
+        {
+          "required": ["default_workflow_permissions"],
+          "properties": {
+            "default_workflow_permissions": {"enum": ["read", "write"]}
+          }
+        },
+        {
+          "required": ["require_sha_pinning_enforcement"],
+          "properties": {
+            "require_sha_pinning_enforcement": {"const": true}
+          }
+        }
+      ]
+    },
+    "configuredCodeSecurityPolicy": {
+      "anyOf": [
+        {
+          "required": ["configuration"],
+          "properties": {
+            "configuration": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "required": ["codeql"],
+          "properties": {
+            "codeql": {"enum": ["required", "disabled"]}
+          }
+        },
+        {
+          "required": ["secret_scanning"],
+          "properties": {
+            "secret_scanning": {"enum": ["required", "disabled"]}
+          }
+        },
+        {
+          "required": ["push_protection"],
+          "properties": {
+            "push_protection": {"enum": ["required", "disabled"]}
+          }
+        },
+        {
+          "required": ["dependency_graph"],
+          "properties": {
+            "dependency_graph": {"enum": ["required", "disabled"]}
+          }
+        },
+        {
+          "required": ["dependabot_alerts"],
+          "properties": {
+            "dependabot_alerts": {"enum": ["required", "disabled"]}
+          }
+        },
+        {
+          "required": ["dependabot_security_updates"],
+          "properties": {
+            "dependabot_security_updates": {"enum": ["required", "disabled"]}
+          }
+        }
+      ]
+    },
+    "configuredRepositoryPolicy": {
+      "anyOf": [
+        {
+          "required": ["require_ruleset"],
+          "properties": {
+            "require_ruleset": {"const": true}
+          }
+        },
+        {
+          "required": ["require_branch_protection"],
+          "properties": {
+            "require_branch_protection": {"const": true}
+          }
+        },
+        {
+          "required": ["require_pull_request"],
+          "properties": {
+            "require_pull_request": {"const": true}
+          }
+        },
+        {
+          "required": ["require_required_checks"],
+          "properties": {
+            "require_required_checks": {"const": true}
+          }
+        },
+        {
+          "required": ["restrict_force_pushes"],
+          "properties": {
+            "restrict_force_pushes": {"const": true}
+          }
+        },
+        {
+          "required": ["restrict_deletions"],
+          "properties": {
+            "restrict_deletions": {"const": true}
+          }
+        },
+        {
+          "required": ["require_security_md"],
+          "properties": {
+            "require_security_md": {"const": true}
+          }
+        },
+        {
+          "required": ["allowed_visibilities"],
+          "properties": {
+            "allowed_visibilities": {"minItems": 1}
+          }
+        },
+        {
+          "required": ["prohibit_archived"],
+          "properties": {
+            "prohibit_archived": {"const": true}
+          }
+        },
+        {
+          "required": ["prohibit_forks"],
+          "properties": {
+            "prohibit_forks": {"const": true}
+          }
+        },
+        {
+          "required": ["prohibit_templates"],
+          "properties": {
+            "prohibit_templates": {"const": true}
+          }
+        }
+      ]
+    },
     "stringArray": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "requirement": {"enum": ["", "required", "disabled"]},
     "duration": {"type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)([0-9]+(ns|us|µs|ms|s|m|h))*$"}

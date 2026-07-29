@@ -16,9 +16,11 @@ GitHub-native tooling owns generic security infrastructure:
 
 ```text
 Organization ruleset / central required workflow
-  ├─ pinned scanner tools and actions
-  ├─ github/codeql-action/upload-sarif (one category per scanner)
+  ├─ read-only pinned scanner tools and actions
   └─ retained raw SARIF artifacts
+
+Trusted workflow_run follow-up
+  └─ github/codeql-action/upload-sarif (one category per scanner)
 
 Code Scanning merge protection
   └─ required analyses and severity thresholds
