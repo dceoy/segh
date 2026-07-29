@@ -1,0 +1,11 @@
+registries:
+  - type: standard
+    ref: v4.544.0
+
+packages:
+  - name: zizmorcore/zizmor@v1.28.0
+  - name: aquasecurity/trivy@v0.72.0
+  - name: ossf/scorecard@v5.5.0
+  - name: astral-sh/uv@0.11.32
+  - name: golangci/golangci-lint@v2.12.2
+  - name: rhysd/actionlint@v1.7.12

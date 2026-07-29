@@ -1,0 +1,928 @@
+package github
+
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/dceoy/segh/internal/config"
+	"github.com/dceoy/segh/internal/logging"
+	"github.com/dceoy/segh/internal/model"
+	"gopkg.in/yaml.v3"
+)
+
+var actionTagPattern = regexp.MustCompile(`^[A-Za-z0-9_.+/-]+$`)
+var fullSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+var dockerDigestPattern = regexp.MustCompile(`(?i)^sha256:[0-9a-f]{64}$`)
+
+type InventoryService struct {
+	cfg    config.Config
+	client *Client
+	log    *logging.Logger
+}
+
+type apiRepository struct {
+	ID                  int64    `json:"id"`
+	FullName            string   `json:"full_name"`
+	HTMLURL             string   `json:"html_url"`
+	CloneURL            string   `json:"clone_url"`
+	Visibility          string   `json:"visibility"`
+	Private             bool     `json:"private"`
+	Archived            bool     `json:"archived"`
+	Disabled            bool     `json:"disabled"`
+	Fork                bool     `json:"fork"`
+	IsTemplate          bool     `json:"is_template"`
+	DefaultBranch       string   `json:"default_branch"`
+	Topics              []string `json:"topics"`
+	SecurityAndAnalysis map[string]struct {
+		Status string `json:"status"`
+	} `json:"security_and_analysis"`
+}
+
+func NewInventoryService(cfg config.Config, client *Client, log *logging.Logger) *InventoryService {
+	return &InventoryService{cfg: cfg, client: client, log: log}
+}
+
+func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
+	inventory := model.Inventory{
+		SchemaVersion: model.InventorySchemaVersion,
+		Organization:  s.cfg.Organization,
+		GitHubHost:    s.cfg.GitHub.WebURL,
+		GeneratedAt:   time.Now().UTC(),
+		Complete:      true,
+	}
+	repos, err := s.listRepositories(ctx)
+	if err != nil {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{Component: "inventory", Kind: "enumeration", Message: err.Error()})
+		return inventory, err
+	}
+	inventory.Total = len(repos)
+
+	concurrency := s.cfg.Execution.Concurrency
+	jobs := make(chan apiRepository)
+	results := make(chan model.Repository, len(repos))
+	var workers sync.WaitGroup
+	for range concurrency {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for repo := range jobs {
+				results <- s.enrich(ctx, repo)
+			}
+		}()
+	}
+	go func() {
+		defer close(results)
+		for _, repo := range repos {
+			select {
+			case <-ctx.Done():
+				close(jobs)
+				workers.Wait()
+				return
+			case jobs <- repo:
+			}
+		}
+		close(jobs)
+		workers.Wait()
+	}()
+
+	for repo := range results {
+		reason, propertiesUnknown := s.exclusionReason(repo)
+		if propertiesUnknown {
+			inventory.Complete = false
+			inventory.Errors = append(inventory.Errors, model.RunError{
+				Repository: repo.FullName, Component: "selectors", Kind: "custom_properties_unknown",
+				Message: "custom properties unavailable; selection based on selectors.custom_properties could not be verified",
+			})
+		}
+		if reason == "" {
+			inventory.Repositories = append(inventory.Repositories, repo)
+		} else {
+			inventory.Exclusions = append(inventory.Exclusions, model.RepositoryExclusion{Repository: repo.FullName, Reason: reason})
+		}
+	}
+	inventory.Selected = len(inventory.Repositories)
+	inventory.Excluded = len(inventory.Exclusions)
+	if err := ctx.Err(); err != nil {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{Component: "inventory", Kind: "timeout", Message: err.Error()})
+	}
+	sort.Slice(inventory.Repositories, func(i, j int) bool {
+		return inventory.Repositories[i].FullName < inventory.Repositories[j].FullName
+	})
+	sort.Slice(inventory.Exclusions, func(i, j int) bool {
+		return inventory.Exclusions[i].Repository < inventory.Exclusions[j].Repository
+	})
+	if !inventory.Complete {
+		return inventory, fmt.Errorf("repository enumeration incomplete")
+	}
+	return inventory, nil
+}
+
+func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepository, error) {
+	var all []apiRepository
+	for page := 1; ; page++ {
+		var batch []apiRepository
+		path := fmt.Sprintf("/orgs/%s/repos?per_page=100&page=%d&type=all&sort=full_name&direction=asc", pathEscape(s.cfg.Organization), page)
+		if err := s.client.Get(ctx, path, &batch); err != nil {
+			return nil, err
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 {
+			return all, nil
+		}
+	}
+}
+
+func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.Repository {
+	visibility := raw.Visibility
+	if visibility == "" {
+		if raw.Private {
+			visibility = "private"
+		} else {
+			visibility = "public"
+		}
+	}
+	repo := model.Repository{
+		ID:               raw.ID,
+		FullName:         raw.FullName,
+		HTMLURL:          raw.HTMLURL,
+		CloneURL:         raw.CloneURL,
+		Visibility:       visibility,
+		Archived:         raw.Archived,
+		Disabled:         raw.Disabled,
+		Fork:             raw.Fork,
+		Template:         raw.IsTemplate,
+		DefaultBranch:    raw.DefaultBranch,
+		Topics:           sortedStrings(raw.Topics),
+		Capabilities:     map[string]model.Availability{},
+		CustomProperties: map[string]string{},
+	}
+	repo.SecretScanning = observedSecurity(raw, "secret_scanning")
+	repo.PushProtection = observedSecurity(raw, "secret_scanning_push_protection")
+	base := "/repos/" + escapeFullName(raw.FullName)
+	repo.DependencyGraph = s.endpointFeatureEnabled(ctx, base+"/dependency-graph/sbom", "dependency_graph/sbom")
+	repo.DependabotSecurityUpdates = s.endpointFeatureEnabled(ctx, base+"/automated-security-fixes", "automated_security_fixes")
+
+	var branch struct {
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	repo.DefaultBranchSHA = s.getObservedString(ctx, base+"/branches/"+pathEscape(raw.DefaultBranch), "default_branch", func() (string, error) {
+		if err := s.client.Get(ctx, base+"/branches/"+pathEscape(raw.DefaultBranch), &branch); err != nil {
+			return "", err
+		}
+		return branch.Commit.SHA, nil
+	})
+
+	var languages map[string]int64
+	if err := s.client.Get(ctx, base+"/languages", &languages); err == nil {
+		repo.Languages = languages
+	} else {
+		repo.Capabilities["languages"] = stateFor(err)
+	}
+	var properties []struct {
+		PropertyName string `json:"property_name"`
+		Value        any    `json:"value"`
+	}
+	if err := s.client.Get(ctx, base+"/properties/values", &properties); err == nil {
+		for _, property := range properties {
+			repo.CustomProperties[property.PropertyName] = fmt.Sprint(property.Value)
+		}
+	} else {
+		repo.Capabilities["custom_properties"] = stateFor(err)
+	}
+
+	var actions struct {
+		Enabled            bool   `json:"enabled"`
+		AllowedActions     string `json:"allowed_actions"`
+		SHAPinningRequired *bool  `json:"sha_pinning_required"`
+	}
+	repo.ActionsEnabled = s.getObservedBool(ctx, base+"/actions/permissions", "actions_permissions", func() (bool, error) {
+		if err := s.client.Get(ctx, base+"/actions/permissions", &actions); err != nil {
+			return false, err
+		}
+		return actions.Enabled, nil
+	})
+	repo.AllowedActions = s.getObservedString(ctx, base+"/actions/permissions", "actions_permissions", func() (string, error) {
+		if err := s.client.Get(ctx, base+"/actions/permissions", &actions); err != nil {
+			return "", err
+		}
+		return actions.AllowedActions, nil
+	})
+	if err := s.client.Get(ctx, base+"/actions/permissions", &actions); err != nil {
+		state, reason := ErrorState(err)
+		repo.SHAPinningEnforced = model.Observed[bool]{State: model.Availability(state), Source: "actions_permissions", Reason: reason}
+	} else if actions.SHAPinningRequired == nil {
+		repo.SHAPinningEnforced = model.Observed[bool]{State: model.Unknown, Source: "actions_permissions", Reason: "field unavailable"}
+	} else {
+		repo.SHAPinningEnforced = model.Observed[bool]{State: model.Available, Value: *actions.SHAPinningRequired, Source: "actions_permissions"}
+	}
+	var workflowPermissions struct {
+		DefaultWorkflowPermissions   string `json:"default_workflow_permissions"`
+		CanApprovePullRequestReviews bool   `json:"can_approve_pull_request_reviews"`
+	}
+	repo.DefaultWorkflowPermissions = s.getObservedString(ctx, base+"/actions/permissions/workflow", "workflow_permissions", func() (string, error) {
+		if err := s.client.Get(ctx, base+"/actions/permissions/workflow", &workflowPermissions); err != nil {
+			return "", err
+		}
+		return workflowPermissions.DefaultWorkflowPermissions, nil
+	})
+	var forkApproval struct {
+		ApprovalPolicy string `json:"approval_policy"`
+	}
+	repo.ForkPRApproval = s.getObservedBool(ctx, base+"/actions/permissions/fork-pr-contributor-approval", "fork_pr_approval", func() (bool, error) {
+		if err := s.client.Get(ctx, base+"/actions/permissions/fork-pr-contributor-approval", &forkApproval); err != nil {
+			return false, err
+		}
+		return forkApproval.ApprovalPolicy != "first_time_contributors_new_to_github", nil
+	})
+	rulesSource := "rules_branches"
+	var effectiveRules []struct {
+		Type string `json:"type"`
+	}
+	rulesErr := s.client.Get(ctx, base+"/rules/branches/"+pathEscape(raw.DefaultBranch), &effectiveRules)
+	ruleTypes := map[string]bool{}
+	if rulesErr == nil {
+		for _, rule := range effectiveRules {
+			ruleTypes[rule.Type] = true
+		}
+		repo.Ruleset = model.Observed[bool]{State: model.Available, Value: len(effectiveRules) > 0, Source: rulesSource}
+	} else {
+		state, reason := ErrorState(rulesErr)
+		repo.Ruleset = model.Observed[bool]{State: model.Availability(state), Source: rulesSource, Reason: reason}
+	}
+	var protection struct {
+		RequiredPullRequestReviews any `json:"required_pull_request_reviews"`
+		RequiredStatusChecks       any `json:"required_status_checks"`
+		AllowForcePushes           *struct {
+			Enabled bool `json:"enabled"`
+		} `json:"allow_force_pushes"`
+		AllowDeletions *struct {
+			Enabled bool `json:"enabled"`
+		} `json:"allow_deletions"`
+	}
+	protectionSource := "branch_protection"
+	var classicProtection, classicPullRequests, classicChecks, classicForcePush, classicDeletion model.Observed[bool]
+	protectionErr := s.client.Get(ctx, base+"/branches/"+pathEscape(raw.DefaultBranch)+"/protection", &protection)
+	var protectionAPIErr *APIError
+	if errors.As(protectionErr, &protectionAPIErr) && protectionAPIErr.StatusCode == 404 {
+		classicProtection = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicPullRequests = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicChecks = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicForcePush = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicDeletion = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+	} else if protectionErr != nil {
+		state, reason := ErrorState(protectionErr)
+		unknown := model.Observed[bool]{State: model.Availability(state), Source: protectionSource, Reason: reason}
+		classicProtection, classicPullRequests, classicChecks = unknown, unknown, unknown
+		classicForcePush, classicDeletion = unknown, unknown
+	} else {
+		classicProtection = model.Observed[bool]{State: model.Available, Value: true, Source: protectionSource}
+		classicPullRequests = model.Observed[bool]{State: model.Available, Value: protection.RequiredPullRequestReviews != nil, Source: protectionSource}
+		classicChecks = model.Observed[bool]{State: model.Available, Value: protection.RequiredStatusChecks != nil, Source: protectionSource}
+		if protection.AllowForcePushes == nil {
+			classicForcePush = model.Observed[bool]{State: model.Unknown, Source: protectionSource, Reason: "field unavailable"}
+		} else {
+			classicForcePush = model.Observed[bool]{State: model.Available, Value: !protection.AllowForcePushes.Enabled, Source: protectionSource}
+		}
+		if protection.AllowDeletions == nil {
+			classicDeletion = model.Observed[bool]{State: model.Unknown, Source: protectionSource, Reason: "field unavailable"}
+		} else {
+			classicDeletion = model.Observed[bool]{State: model.Available, Value: !protection.AllowDeletions.Enabled, Source: protectionSource}
+		}
+	}
+	// A repository can be governed by an organization ruleset, its own repository
+	// ruleset, classic branch protection, or a combination; GitHub enforces the union
+	// of whichever apply. Merge both sources instead of trusting either alone, so a
+	// ruleset-only repository is not misreported as unprotected (previously the classic
+	// branch-protection 404 branch forced all four booleans to false) and a repository
+	// with an inactive/wrong-branch/other-branch ruleset is not misreported as protected
+	// (previously any nonempty rulesets response short-circuited repository.ruleset).
+	repo.BranchProtection = mergeControl(rulesErr, len(ruleTypes) > 0, classicProtection)
+	repo.RequiredPullRequests = mergeControl(rulesErr, ruleTypes["pull_request"], classicPullRequests)
+	repo.RequiredChecks = mergeControl(rulesErr, ruleTypes["required_status_checks"], classicChecks)
+	repo.ForcePushRestricted = mergeControl(rulesErr, ruleTypes["non_fast_forward"], classicForcePush)
+	repo.DeletionRestricted = mergeControl(rulesErr, ruleTypes["deletion"], classicDeletion)
+	var securityConfig struct {
+		Name string `json:"name"`
+	}
+	repo.CodeSecurityConfiguration = s.getObservedString(ctx, base+"/code-security-configuration", "code_security_configuration", func() (string, error) {
+		if err := s.client.Get(ctx, base+"/code-security-configuration", &securityConfig); err != nil {
+			return "", err
+		}
+		return securityConfig.Name, nil
+	})
+	var defaultSetup struct {
+		State string `json:"state"`
+	}
+	repo.CodeQL = s.getObservedBool(ctx, base+"/code-scanning/default-setup", "codeql_default_setup", func() (bool, error) {
+		if err := s.client.Get(ctx, base+"/code-scanning/default-setup", &defaultSetup); err != nil {
+			return false, err
+		}
+		return defaultSetup.State == "configured", nil
+	})
+	var alert []jsonObject
+	repo.DependabotAlerts = s.getObservedBool(ctx, base+"/dependabot/alerts?per_page=1", "dependabot_alerts", func() (bool, error) {
+		err := s.client.Get(ctx, base+"/dependabot/alerts?per_page=1", &alert)
+		return err == nil, err
+	})
+	repo.SecurityMD = s.securityPolicyExists(ctx, base, raw.DefaultBranch)
+	repo.RenovateConfigured = s.anyContentExists(ctx, base, raw.DefaultBranch, []string{
+		"renovate.json", "renovate.json5", ".github/renovate.json", ".github/renovate.json5",
+	}, "renovate_config")
+	repo.FullSHAPinning, repo.ActionPinningStatus = s.workflowPinning(ctx, base, raw.DefaultBranch)
+	return repo
+}
+
+type jsonObject map[string]any
+
+// mergeControl combines a boolean policy control derived from GitHub's effective
+// rules-for-branch evaluation (rulesErr/ruleTypePresent) with the equivalent control
+// derived from classic branch protection (classic). Either mechanism enforcing the
+// control is sufficient, matching GitHub's own behavior of enforcing the union of
+// whatever rulesets and branch protection both require.
+func mergeControl(rulesErr error, ruleTypePresent bool, classic model.Observed[bool]) model.Observed[bool] {
+	if rulesErr == nil {
+		if ruleTypePresent {
+			return model.Observed[bool]{State: model.Available, Value: true, Source: "rules_branches"}
+		}
+		return classic
+	}
+	if classic.State == model.Available && classic.Value {
+		return classic
+	}
+	state, reason := ErrorState(rulesErr)
+	return model.Observed[bool]{State: model.Availability(state), Source: "rules_branches", Reason: "ruleset evaluation unavailable: " + reason}
+}
+
+func observedSecurity(raw apiRepository, key string) model.Observed[bool] {
+	item, ok := raw.SecurityAndAnalysis[key]
+	if !ok {
+		return model.Observed[bool]{State: model.Unknown, Source: "GET repository", Reason: "field unavailable"}
+	}
+	return model.Observed[bool]{State: model.Available, Value: item.Status == "enabled", Source: "GET repository"}
+}
+
+func (s *InventoryService) getObservedBool(_ context.Context, _ string, source string, getter func() (bool, error)) model.Observed[bool] {
+	value, err := getter()
+	if err == nil {
+		return model.Observed[bool]{State: model.Available, Value: value, Source: source}
+	}
+	state, reason := ErrorState(err)
+	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason}
+}
+
+func (s *InventoryService) getObservedString(_ context.Context, _ string, source string, getter func() (string, error)) model.Observed[string] {
+	value, err := getter()
+	if err == nil {
+		return model.Observed[string]{State: model.Available, Value: value, Source: source}
+	}
+	state, reason := ErrorState(err)
+	return model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
+}
+
+// endpointFeatureEnabled probes a feature-specific read endpoint. A successful
+// response proves that the feature is enabled. These endpoints return 404 for a
+// known repository when the corresponding feature is disabled; other failures
+// remain unknown or unsupported instead of being mistaken for a disabled control.
+func (s *InventoryService) endpointFeatureEnabled(ctx context.Context, path, source string) model.Observed[bool] {
+	err := s.client.Get(ctx, path, nil)
+	if err == nil {
+		return model.Observed[bool]{State: model.Available, Value: true, Source: source}
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+		return model.Observed[bool]{State: model.Available, Value: false, Source: source}
+	}
+	state, reason := ErrorState(err)
+	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason}
+}
+
+func (s *InventoryService) contentExists(ctx context.Context, path, source string) model.Observed[bool] {
+	var content jsonObject
+	err := s.client.Get(ctx, path, &content)
+	if err == nil {
+		return model.Observed[bool]{State: model.Available, Value: true, Source: source}
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+		return model.Observed[bool]{State: model.Available, Value: false, Source: source}
+	}
+	state, reason := ErrorState(err)
+	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason}
+}
+
+// securityMDPaths lists the repository locations GitHub itself accepts a security
+// policy at, checked as a fallback when the community profile API is unavailable or
+// reports no policy.
+var securityMDPaths = []string{"SECURITY.md", ".github/SECURITY.md", "docs/SECURITY.md"}
+
+// securityPolicyExists prefers the community profile API over probing a fixed
+// SECURITY.md path: GitHub itself resolves a repository's security policy from the
+// root, .github/, or docs/ directory, and falls back to the organization's default
+// .github community-health repository when the repository has none of its own, so a
+// profile hit is treated as authoritative. A miss or an unavailable profile (some
+// repository visibility/permission combinations don't expose it) falls back to
+// checking the supported locations directly rather than assuming absence, since
+// checking only "SECURITY.md" at the repository root missed all of those cases.
+func (s *InventoryService) securityPolicyExists(ctx context.Context, base, branch string) model.Observed[bool] {
+	var profile struct {
+		Files struct {
+			Security *jsonObject `json:"security"`
+		} `json:"files"`
+	}
+	err := s.client.Get(ctx, base+"/community/profile", &profile)
+	switch {
+	case err == nil && profile.Files.Security != nil:
+		return model.Observed[bool]{State: model.Available, Value: true, Source: "community/profile"}
+	case err == nil:
+		return s.anyContentExists(ctx, base, branch, securityMDPaths, "security_md")
+	default:
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+			return s.anyContentExists(ctx, base, branch, securityMDPaths, "security_md")
+		}
+		state, reason := ErrorState(err)
+		return model.Observed[bool]{State: model.Availability(state), Source: "community/profile", Reason: reason}
+	}
+}
+
+func (s *InventoryService) anyContentExists(ctx context.Context, base, branch string, paths []string, source string) model.Observed[bool] {
+	for _, candidate := range paths {
+		result := s.contentExists(ctx, base+"/contents/"+candidate+"?ref="+pathEscape(branch), source)
+		if result.State != model.Available {
+			return result
+		}
+		if result.Value {
+			return result
+		}
+	}
+	return model.Observed[bool]{State: model.Available, Value: false, Source: source}
+}
+
+func (s *InventoryService) workflowPinning(ctx context.Context, base, branch string) (model.Observed[bool], model.Observed[string]) {
+	var files []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	source := "contents/.github/workflows"
+	err := s.client.Get(ctx, base+"/contents/.github/workflows?ref="+pathEscape(branch), &files)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+		return model.Observed[bool]{State: model.Available, Value: true, Source: source, Reason: "no workflows"},
+			model.Observed[string]{State: model.Available, Value: "no_actions", Source: source}
+	}
+	if err != nil {
+		state, reason := ErrorState(err)
+		return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
+			model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
+	}
+	counts := &pinningCounts{}
+	visited := map[string]bool{}
+	for _, file := range files {
+		if file.Type != "file" || (!strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml")) {
+			continue
+		}
+		decoded, err := s.fetchContent(ctx, base+"/contents/.github/workflows/"+pathEscape(file.Name)+"?ref="+pathEscape(branch))
+		if err != nil {
+			return pinningError(source, fmt.Errorf("%s: %w", file.Name, err))
+		}
+		unpinnedIn, err := s.scanUses(ctx, base, branch, file.Name, decoded, visited, counts)
+		if err != nil {
+			return pinningError(source, err)
+		}
+		if unpinnedIn != "" {
+			return model.Observed[bool]{State: model.Available, Value: false, Source: source, Reason: unpinnedIn + " contains a mutable action reference"},
+				model.Observed[string]{State: model.Available, Value: "unpinned", Source: source, Reason: unpinnedIn}
+		}
+	}
+	actionCount, resolvedCount, staleCount := counts.actions, counts.resolved, counts.stale
+	status := "pinned_freshness_unknown"
+	switch {
+	case actionCount == 0:
+		status = "no_actions"
+	case staleCount > 0:
+		status = "pinned_stale"
+	case resolvedCount == actionCount:
+		status = "pinned_current"
+	}
+	return model.Observed[bool]{State: model.Available, Value: true, Source: source},
+		model.Observed[string]{State: model.Available, Value: status, Source: source}
+}
+
+type pinningCounts struct {
+	actions  int
+	resolved int
+	stale    int
+}
+
+type actionUse struct {
+	action string
+	ref    string
+	tag    string
+}
+
+var errContentUnavailable = errors.New("content unavailable")
+
+func pinningError(source string, err error) (model.Observed[bool], model.Observed[string]) {
+	state, reason := ErrorState(err)
+	if errors.Is(err, errContentUnavailable) {
+		state, reason = string(model.Unknown), err.Error()
+	}
+	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
+		model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
+}
+
+// fetchContent returns decoded GitHub contents API data. Existing content that
+// cannot be inspected is an error so callers cannot silently treat an oversized
+// workflow or local action definition as successfully verified.
+func (s *InventoryService) fetchContent(ctx context.Context, path string) ([]byte, error) {
+	var item struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+		Size     int64  `json:"size"`
+	}
+	if err := s.client.Get(ctx, path, &item); err != nil {
+		return nil, err
+	}
+	if item.Encoding != "base64" {
+		return nil, fmt.Errorf("%w: unsupported encoding %q", errContentUnavailable, item.Encoding)
+	}
+	if item.Size > 1<<20 {
+		return nil, fmt.Errorf("%w: exceeds 1 MiB limit", errContentUnavailable)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(item.Content, "\n", ""))
+	if err != nil {
+		return nil, fmt.Errorf("invalid content encoding")
+	}
+	return decoded, nil
+}
+
+// scanUses walks every `uses:` reference in decoded workflow/action content, recursing
+// into repository-local composite actions (./...) so their own third-party references
+// are also evaluated for SHA pinning. visited guards against local-action reference
+// cycles. It returns the name of the first source containing a mutable (non-SHA)
+// third-party reference, or "" if every reference found is fully SHA-pinned.
+func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceName string, decoded []byte, visited map[string]bool, counts *pinningCounts) (string, error) {
+	uses, err := parseActionUses(decoded)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", sourceName, err)
+	}
+	for _, use := range uses {
+		action, ref := use.action, use.ref
+		if strings.HasPrefix(action, "docker://") {
+			// docker:// tags carry no freshness signal comparable to a GitHub ref, so a
+			// digest-pinned image is counted as an action but never marked "resolved";
+			// an unpinned tag (or no tag/digest at all) is treated as mutable.
+			counts.actions++
+			if !dockerDigestPattern.MatchString(ref) {
+				return sourceName, nil
+			}
+			continue
+		}
+		if strings.HasPrefix(action, "./") {
+			localPath := strings.Trim(strings.TrimPrefix(action, "."), "/")
+			if strings.HasSuffix(localPath, ".yml") || strings.HasSuffix(localPath, ".yaml") {
+				// A local reusable-workflow call, not a composite action directory; it has no action.yml to fetch.
+				continue
+			}
+			if visited[localPath] {
+				continue
+			}
+			visited[localPath] = true
+			actionFile, content, err := s.fetchLocalActionDefinition(ctx, base, branch, localPath)
+			if err != nil {
+				return "", err
+			}
+			if actionFile == "" {
+				continue
+			}
+			unpinnedIn, err := s.scanUses(ctx, base, branch, actionFile, content, visited, counts)
+			if err != nil || unpinnedIn != "" {
+				return unpinnedIn, err
+			}
+			continue
+		}
+		if ref == "" {
+			continue
+		}
+		counts.actions++
+		if !fullSHAPattern.MatchString(ref) {
+			return sourceName, nil
+		}
+		if use.tag != "" {
+			if current, ok := s.resolveActionTag(ctx, action, use.tag); ok {
+				counts.resolved++
+				if !strings.EqualFold(current, ref) {
+					counts.stale++
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
+// parseActionUses decodes Actions YAML and visits only the structural locations where
+// GitHub accepts `uses`: reusable-workflow jobs, workflow steps, and composite-action
+// steps. Parsing errors fail pinning evaluation closed instead of allowing malformed or
+// parser-differential input to be reported as fully pinned.
+func parseActionUses(content []byte) ([]actionUse, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		return nil, fmt.Errorf("parse Actions YAML: %w", err)
+	}
+	if len(document.Content) == 0 {
+		return nil, nil
+	}
+	root, err := dereferenceYAMLNode(document.Content[0])
+	if err != nil {
+		return nil, err
+	}
+	if root.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("actions YAML root must be a mapping")
+	}
+
+	var uses []actionUse
+	jobs, found, err := yamlMappingValue(root, "jobs")
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		jobs, err = dereferenceYAMLNode(jobs)
+		if err != nil {
+			return nil, err
+		}
+		if jobs.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("actions YAML jobs must be a mapping")
+		}
+		for index := 1; index < len(jobs.Content); index += 2 {
+			job, err := dereferenceYAMLNode(jobs.Content[index])
+			if err != nil {
+				return nil, err
+			}
+			if job.Kind != yaml.MappingNode {
+				return nil, fmt.Errorf("actions YAML job must be a mapping")
+			}
+			uses, err = appendActionUse(uses, job)
+			if err != nil {
+				return nil, err
+			}
+			uses, err = appendStepUses(uses, job)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	runs, found, err := yamlMappingValue(root, "runs")
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		runs, err = dereferenceYAMLNode(runs)
+		if err != nil {
+			return nil, err
+		}
+		if runs.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("actions YAML runs must be a mapping")
+		}
+		uses, err = appendStepUses(uses, runs)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return uses, nil
+}
+
+func appendStepUses(uses []actionUse, parent *yaml.Node) ([]actionUse, error) {
+	steps, found, err := yamlMappingValue(parent, "steps")
+	if err != nil || !found {
+		return uses, err
+	}
+	steps, err = dereferenceYAMLNode(steps)
+	if err != nil {
+		return nil, err
+	}
+	if steps.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("actions YAML steps must be a sequence")
+	}
+	for _, rawStep := range steps.Content {
+		step, err := dereferenceYAMLNode(rawStep)
+		if err != nil {
+			return nil, err
+		}
+		if step.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("actions YAML step must be a mapping")
+		}
+		uses, err = appendActionUse(uses, step)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return uses, nil
+}
+
+func appendActionUse(uses []actionUse, mapping *yaml.Node) ([]actionUse, error) {
+	value, found, err := yamlMappingValue(mapping, "uses")
+	if err != nil || !found {
+		return uses, err
+	}
+	value, err = dereferenceYAMLNode(value)
+	if err != nil {
+		return nil, err
+	}
+	if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+		return nil, fmt.Errorf("actions YAML uses value must be a string")
+	}
+	raw := strings.TrimSpace(value.Value)
+	action, ref := raw, ""
+	if separator := strings.LastIndexByte(raw, '@'); separator >= 0 {
+		action, ref = raw[:separator], raw[separator+1:]
+	}
+	tag := strings.TrimSpace(strings.TrimPrefix(value.LineComment, "#"))
+	if !actionTagPattern.MatchString(tag) {
+		tag = ""
+	}
+	return append(uses, actionUse{action: action, ref: ref, tag: tag}), nil
+}
+
+func yamlMappingValue(mapping *yaml.Node, name string) (*yaml.Node, bool, error) {
+	mapping, err := dereferenceYAMLNode(mapping)
+	if err != nil {
+		return nil, false, err
+	}
+	if mapping.Kind != yaml.MappingNode {
+		return nil, false, fmt.Errorf("actions YAML value containing %q must be a mapping", name)
+	}
+	var found *yaml.Node
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		key, err := dereferenceYAMLNode(mapping.Content[index])
+		if err != nil {
+			return nil, false, err
+		}
+		if key.Kind != yaml.ScalarNode || key.Value != name {
+			continue
+		}
+		if found != nil {
+			return nil, false, fmt.Errorf("actions YAML contains duplicate %q keys", name)
+		}
+		found = mapping.Content[index+1]
+	}
+	return found, found != nil, nil
+}
+
+func dereferenceYAMLNode(node *yaml.Node) (*yaml.Node, error) {
+	visited := map[*yaml.Node]bool{}
+	for node != nil && node.Kind == yaml.AliasNode {
+		if node.Alias == nil || visited[node] {
+			return nil, fmt.Errorf("actions YAML contains an invalid alias")
+		}
+		visited[node] = true
+		node = node.Alias
+	}
+	if node == nil {
+		return nil, fmt.Errorf("actions YAML contains an empty node")
+	}
+	return node, nil
+}
+
+// fetchLocalActionDefinition resolves a repository-local composite action directory
+// (e.g. ".github/actions/example") to its action.yml/action.yaml content. It returns a
+// nil content and nil error when neither file exists, since a local `uses:` path that
+// carries no action metadata cannot itself introduce an unpinned third-party reference.
+func (s *InventoryService) fetchLocalActionDefinition(ctx context.Context, base, branch, dirPath string) (string, []byte, error) {
+	escaped := escapeContentPath(dirPath)
+	for _, name := range []string{"action.yml", "action.yaml"} {
+		content, err := s.fetchContent(ctx, base+"/contents/"+escaped+"/"+name+"?ref="+pathEscape(branch))
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+			continue
+		}
+		if err != nil {
+			return "", nil, fmt.Errorf("%s/%s: %w", dirPath, name, err)
+		}
+		return dirPath + "/" + name, content, nil
+	}
+	return "", nil, nil
+}
+
+func escapeContentPath(value string) string {
+	parts := strings.Split(value, "/")
+	for i, part := range parts {
+		parts[i] = pathEscape(part)
+	}
+	return strings.Join(parts, "/")
+}
+
+func (s *InventoryService) resolveActionTag(ctx context.Context, action, tag string) (string, bool) {
+	parts := strings.Split(action, "/")
+	if len(parts) < 2 {
+		return "", false
+	}
+	base := "/repos/" + pathEscape(parts[0]) + "/" + pathEscape(parts[1])
+	var ref struct {
+		Object struct {
+			Type string `json:"type"`
+			SHA  string `json:"sha"`
+		} `json:"object"`
+	}
+	if err := s.client.Get(ctx, base+"/git/ref/tags/"+pathEscape(tag), &ref); err != nil {
+		return "", false
+	}
+	if ref.Object.Type == "commit" {
+		return ref.Object.SHA, true
+	}
+	if ref.Object.Type != "tag" {
+		return "", false
+	}
+	var annotated struct {
+		Object struct {
+			Type string `json:"type"`
+			SHA  string `json:"sha"`
+		} `json:"object"`
+	}
+	if err := s.client.Get(ctx, base+"/git/tags/"+pathEscape(ref.Object.SHA), &annotated); err != nil || annotated.Object.Type != "commit" {
+		return "", false
+	}
+	return annotated.Object.SHA, true
+}
+
+func (s *InventoryService) exclusionReason(repo model.Repository) (reason string, propertiesUnknown bool) {
+	selectors := s.cfg.Selectors
+	if selectors.ExcludeArchived && repo.Archived {
+		return "archived", false
+	}
+	if selectors.ExcludeDisabled && repo.Disabled {
+		return "disabled", false
+	}
+	if selectors.ExcludeForks && repo.Fork {
+		return "fork", false
+	}
+	if len(selectors.Repositories) > 0 && !slices.Contains(selectors.Repositories, repo.FullName) {
+		return "not explicitly included", false
+	}
+	if slices.Contains(selectors.Exclude, repo.FullName) {
+		return "explicitly excluded", false
+	}
+	if len(selectors.Visibilities) > 0 && !slices.Contains(selectors.Visibilities, repo.Visibility) {
+		return "visibility", false
+	}
+	if len(selectors.IncludeTopics) > 0 && !intersects(repo.Topics, selectors.IncludeTopics) {
+		return "required topic missing", false
+	}
+	if intersects(repo.Topics, selectors.ExcludeTopics) {
+		return "excluded topic", false
+	}
+	if len(selectors.CustomProperties) > 0 {
+		if _, unavailable := repo.Capabilities["custom_properties"]; unavailable {
+			// The custom-properties API call failed, so repo.CustomProperties holds no
+			// reliable data. Treating missing keys as mismatches here would silently
+			// exclude the repository from the audit instead of surfacing the gap.
+			return "", true
+		}
+		for key, expected := range selectors.CustomProperties {
+			if repo.CustomProperties[key] != expected {
+				return "custom property " + key, false
+			}
+		}
+	}
+	return "", false
+}
+
+func escapeFullName(fullName string) string {
+	parts := strings.Split(fullName, "/")
+	if len(parts) != 2 {
+		return pathEscape(fullName)
+	}
+	return pathEscape(parts[0]) + "/" + pathEscape(parts[1])
+}
+
+func stateFor(err error) model.Availability {
+	state, _ := ErrorState(err)
+	return model.Availability(state)
+}
+
+func sortedStrings(values []string) []string {
+	result := slices.Clone(values)
+	sort.Strings(result)
+	return result
+}
+
+func intersects(left, right []string) bool {
+	for _, value := range left {
+		if slices.Contains(right, value) {
+			return true
+		}
+	}
+	return false
+}
