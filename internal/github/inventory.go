@@ -135,9 +135,20 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 // organization, so a selected-repository installation would otherwise let
 // listRepositories succeed against that narrower set while Complete remains
 // true, silently omitting ungoverned repositories from the report.
+//
+// repository_selection alone only describes the installation behind the
+// token; it does not prove that installation targets cfg.Organization
+// rather than some other account. An installation belongs to exactly one
+// account, so the owner of any repository it returns reveals that account;
+// binding on that owner (instead of trusting an unauthenticated
+// /orgs/{org}/repos response) rules out a stale or mistyped organization
+// and a token from another all-repositories installation.
 func (s *InventoryService) verifyInstallationCoversOrganization(ctx context.Context) error {
 	var installation struct {
 		RepositorySelection string `json:"repository_selection"`
+		Repositories        []struct {
+			FullName string `json:"full_name"`
+		} `json:"repositories"`
 	}
 	if err := s.client.Get(ctx, "/installation/repositories?per_page=1", &installation); err != nil {
 		return fmt.Errorf("verify installation repository selection: %w", err)
@@ -146,6 +157,19 @@ func (s *InventoryService) verifyInstallationCoversOrganization(ctx context.Cont
 		return fmt.Errorf(
 			"installation repository_selection is %q, not \"all\"; organization-wide inventory coverage cannot be verified",
 			installation.RepositorySelection,
+		)
+	}
+	if len(installation.Repositories) == 0 {
+		return fmt.Errorf(
+			"installation reports repository_selection \"all\" but returned no repositories; cannot verify it covers organization %q",
+			s.cfg.Organization,
+		)
+	}
+	owner, _, ok := strings.Cut(installation.Repositories[0].FullName, "/")
+	if !ok || !strings.EqualFold(owner, s.cfg.Organization) {
+		return fmt.Errorf(
+			"installation account %q does not match configured organization %q; organization-wide inventory coverage cannot be verified",
+			owner, s.cfg.Organization,
 		)
 	}
 	return nil
