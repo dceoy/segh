@@ -59,6 +59,14 @@ policy. Exclude `dceoy/segh` itself from the rule: its ordinary
 controls that workflow revision. GitHub also recommends disabling the
 individual workflow in the source repository.
 
+`pr-security.yml` only subscribes to `pull_request` and does not support merge
+queues. A `merge_group` event carries no pull request number or stable ref:
+`publish-pr-security.yml` resolves its analyzed commit through
+`refs/pull/<number>/head`, which a merge group never has, and the queue's own
+ref is deleted once the group is decided, so the `workflow_run` follow-up
+could not reliably re-resolve it. Do not enable a required merge queue on a
+repository where this ruleset workflow is required until this is addressed.
+
 For each target repository:
 
 1. Install the publisher workflow on its protected default branch.

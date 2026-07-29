@@ -48,6 +48,10 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		GeneratedAt:   time.Now().UTC(),
 		Complete:      true,
 	}
+	if err := s.verifyInstallationCoversOrganization(ctx); err != nil {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{Component: "inventory", Kind: "installation_scope", Message: err.Error()})
+	}
 	repos, err := s.listRepositories(ctx)
 	if err != nil {
 		inventory.Complete = false
@@ -115,6 +119,29 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		return inventory, fmt.Errorf("repository enumeration incomplete")
 	}
 	return inventory, nil
+}
+
+// verifyInstallationCoversOrganization fails closed when the GitHub App
+// installation backing the token is scoped to selected repositories rather
+// than all repositories. actions/create-github-app-token with owner expands
+// to every repository in the installation, not every repository in the
+// organization, so a selected-repository installation would otherwise let
+// listRepositories succeed against that narrower set while Complete remains
+// true, silently omitting ungoverned repositories from the report.
+func (s *InventoryService) verifyInstallationCoversOrganization(ctx context.Context) error {
+	var installation struct {
+		RepositorySelection string `json:"repository_selection"`
+	}
+	if err := s.client.Get(ctx, "/installation/repositories?per_page=1", &installation); err != nil {
+		return fmt.Errorf("verify installation repository selection: %w", err)
+	}
+	if installation.RepositorySelection != "all" {
+		return fmt.Errorf(
+			"installation repository_selection is %q, not \"all\"; organization-wide inventory coverage cannot be verified",
+			installation.RepositorySelection,
+		)
+	}
+	return nil
 }
 
 func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepository, error) {

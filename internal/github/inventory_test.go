@@ -116,6 +116,60 @@ func TestEnrichUsesFeatureSpecificSecurityEndpoints(t *testing.T) {
 	}
 }
 
+func TestRunFailsClosedWhenInstallationIsScopedToSelectedRepositories(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/installation/repositories":
+			_, _ = io.WriteString(writer, `{"total_count":1,"repository_selection":"selected"}`)
+		case "/orgs/org/repos":
+			_, _ = io.WriteString(writer, `[]`)
+		default:
+			t.Errorf("unexpected path = %s", request.URL.Path)
+		}
+	})
+	inventory, err := service.Run(context.Background())
+	if err == nil {
+		t.Fatalf("err = nil, want error for incomplete inventory")
+	}
+	if inventory.Complete {
+		t.Fatalf("Complete = true, want false when installation repository_selection is not \"all\"")
+	}
+	found := false
+	for _, runErr := range inventory.Errors {
+		if runErr.Kind == "installation_scope" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("errors = %#v, want an installation_scope error", inventory.Errors)
+	}
+}
+
+func TestRunSucceedsWhenInstallationCoversWholeOrganization(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/installation/repositories":
+			_, _ = io.WriteString(writer, `{"total_count":1,"repository_selection":"all"}`)
+		case "/orgs/org/repos":
+			_, _ = io.WriteString(writer, `[]`)
+		default:
+			t.Errorf("unexpected path = %s", request.URL.Path)
+		}
+	})
+	inventory, err := service.Run(context.Background())
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if !inventory.Complete {
+		t.Fatalf("Complete = false, want true when installation repository_selection is \"all\"")
+	}
+	for _, runErr := range inventory.Errors {
+		if runErr.Kind == "installation_scope" {
+			t.Fatalf("errors = %#v, want no installation_scope error", inventory.Errors)
+		}
+	}
+}
+
 func TestEnrichDecodesAttachedCodeSecurityConfiguration(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/repos/org/repo/code-security-configuration" {

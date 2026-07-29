@@ -23,6 +23,13 @@ grants the token access to every repository in the App installation. The
 workflow passes the short-lived result to `segh` through `GH_TOKEN`; `segh`
 never accepts an App private key, installation ID, or publication credential.
 
+**Install the App on all repositories, not a selected subset.** `owner:` on
+`actions/create-github-app-token` expands to every repository *in the
+installation*, not every repository in the organization; a selected-repository
+installation would silently limit `inventory` to that subset. `segh inventory`
+checks the token's `GET /installation/repositories` `repository_selection`
+and fails closed (`Complete: false`, exit code 4) when it is not `all`.
+
 SARIF publication uses a protected per-target-repository `workflow_run`
 follow-up's narrowly scoped `GITHUB_TOKEN` with `security-events: write` and the
 pinned CodeQL upload action. Before downloading artifacts, the follow-up
