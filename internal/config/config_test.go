@@ -32,6 +32,17 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "segh.yaml")
+	data := "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n---\norganization: ignored\n"
+	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "multiple YAML documents are not allowed") {
+		t.Fatalf("expected multiple-document error, got %v", err)
+	}
+}
+
 func TestLoadRejectsMissingPolicies(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
 	data := "version: 2\norganization: test\n"
@@ -55,6 +66,103 @@ func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	}
 	if cfg.GitHub.WebURL != "https://github.com" || cfg.Inventory.Concurrency != 4 || cfg.Output.Directory != "segh-results" {
 		t.Fatalf("defaults were not applied: %#v", cfg)
+	}
+}
+
+func TestSchemaAndRuntimeRejectDuplicateArrayItems(t *testing.T) {
+	type arraySchema struct {
+		Ref         string `json:"$ref"`
+		UniqueItems bool   `json:"uniqueItems"`
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Selectors struct {
+				Properties map[string]arraySchema `json:"properties"`
+			} `json:"selectors"`
+			Policies struct {
+				Properties struct {
+					Repository struct {
+						Properties map[string]arraySchema `json:"properties"`
+					} `json:"repository"`
+				} `json:"properties"`
+			} `json:"policies"`
+		} `json:"properties"`
+		Definitions map[string]arraySchema `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if !schema.Properties.Selectors.Properties["visibilities"].UniqueItems {
+		t.Error("selectors.visibilities schema must require unique items")
+	}
+	if !schema.Properties.Policies.Properties.Repository.Properties["allowed_visibilities"].UniqueItems {
+		t.Error("policies.repository.allowed_visibilities schema must require unique items")
+	}
+	if !schema.Definitions["stringArray"].UniqueItems {
+		t.Error("$defs/stringArray schema must require unique items")
+	}
+	for _, name := range []string{"include_topics", "exclude_topics", "repositories", "exclude"} {
+		if ref := schema.Properties.Selectors.Properties[name].Ref; ref != "#/$defs/stringArray" {
+			t.Errorf("selectors.%s schema must use the unique stringArray definition, got %q", name, ref)
+		}
+	}
+
+	cases := []struct {
+		name      string
+		configure func(*Config)
+	}{
+		{
+			name: "selectors.visibilities",
+			configure: func(cfg *Config) {
+				cfg.Selectors.Visibilities = []string{"private", "private"}
+			},
+		},
+		{
+			name: "selectors.include_topics",
+			configure: func(cfg *Config) {
+				cfg.Selectors.IncludeTopics = []string{"security", "security"}
+			},
+		},
+		{
+			name: "selectors.exclude_topics",
+			configure: func(cfg *Config) {
+				cfg.Selectors.ExcludeTopics = []string{"archived", "archived"}
+			},
+		},
+		{
+			name: "selectors.repositories",
+			configure: func(cfg *Config) {
+				cfg.Selectors.Repositories = []string{"example/repository", "example/repository"}
+			},
+		},
+		{
+			name: "selectors.exclude",
+			configure: func(cfg *Config) {
+				cfg.Selectors.Exclude = []string{"example/legacy", "example/legacy"}
+			},
+		},
+		{
+			name: "policies.repository.allowed_visibilities",
+			configure: func(cfg *Config) {
+				cfg.Policies.Repository.AllowedVisibilities = []string{"private", "private"}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Organization = "test"
+			cfg.Policies.Repository.RequireRuleset = true
+			tc.configure(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.name+" contains duplicate value") {
+				t.Fatalf("expected duplicate-value error for %s, got %v", tc.name, err)
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path"
@@ -123,6 +124,12 @@ func Load(configPath string) (Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
+	var trailing any
+	if err := dec.Decode(&trailing); err == nil {
+		return Config{}, fmt.Errorf("decode config: multiple YAML documents are not allowed")
+	} else if !errors.Is(err, io.EOF) {
+		return Config{}, fmt.Errorf("decode config: %w", err)
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -151,6 +158,18 @@ func (c Config) Validate() error {
 	}
 	if c.Output.Directory == "" {
 		errs = append(errs, fmt.Errorf("output.directory is required"))
+	}
+	for name, values := range map[string][]string{
+		"selectors.visibilities":                   c.Selectors.Visibilities,
+		"selectors.include_topics":                 c.Selectors.IncludeTopics,
+		"selectors.exclude_topics":                 c.Selectors.ExcludeTopics,
+		"selectors.repositories":                   c.Selectors.Repositories,
+		"selectors.exclude":                        c.Selectors.Exclude,
+		"policies.repository.allowed_visibilities": c.Policies.Repository.AllowedVisibilities,
+	} {
+		if duplicate, ok := firstDuplicate(values); ok {
+			errs = append(errs, fmt.Errorf("%s contains duplicate value %q", name, duplicate))
+		}
 	}
 	for _, visibility := range append(slices.Clone(c.Selectors.Visibilities), c.Policies.Repository.AllowedVisibilities...) {
 		if !slices.Contains([]string{"public", "private", "internal"}, visibility) {
@@ -184,6 +203,17 @@ func (c Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func firstDuplicate(values []string) (string, bool) {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			return value, true
+		}
+		seen[value] = struct{}{}
+	}
+	return "", false
 }
 
 func (p Policies) configured() bool {
