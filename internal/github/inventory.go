@@ -145,16 +145,21 @@ func (s *InventoryService) verifyInstallationCoversOrganization(ctx context.Cont
 }
 
 func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepository, error) {
-	var pages [][]apiRepository
-	apiPath := fmt.Sprintf("/orgs/%s/repos?per_page=100&type=all&sort=full_name&direction=asc", pathEscape(s.cfg.Organization))
-	if err := s.client.GetPaginated(ctx, apiPath, &pages); err != nil {
-		return nil, err
-	}
 	var repositories []apiRepository
-	for _, page := range pages {
-		repositories = append(repositories, page...)
+	for page := 1; ; page++ {
+		var batch []apiRepository
+		apiPath := fmt.Sprintf(
+			"/orgs/%s/repos?per_page=100&page=%d&type=all&sort=full_name&direction=asc",
+			pathEscape(s.cfg.Organization), page,
+		)
+		if err := s.client.Get(ctx, apiPath, &batch); err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, batch...)
+		if len(batch) < 100 {
+			return repositories, nil
+		}
 	}
-	return repositories, nil
 }
 
 func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.Repository {

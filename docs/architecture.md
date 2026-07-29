@@ -49,11 +49,13 @@ request.
 
 Inventory normalization remains in Go because it combines several
 capability-sensitive GitHub endpoints into stable observations. Requests are
-delegated to `gh api`. Repository enumeration uses
-`gh api --paginate --slurp`; every request uses `--hostname` derived from
-`github.web_url`. The GitHub CLI owns token discovery, REST transport, and
-pagination. `segh` retries transient transport failures, HTTP 429/5xx
-responses, and explicit rate-limit responses with bounded exponential backoff.
+delegated to `gh api`; every request uses `--hostname` derived from
+`github.web_url`. Repository enumeration decodes one page at a time, each
+independently bounded, rather than accumulating every page behind a single
+response cap. The GitHub CLI owns token discovery and REST transport; `segh`
+drives pagination itself and retries transient transport failures, HTTP
+429/5xx responses, and explicit rate-limit responses with bounded exponential
+backoff.
 
 `GH_TOKEN` is required. GitHub Actions generates it from a read-only App using
 `actions/create-github-app-token`; local use requires an externally supplied

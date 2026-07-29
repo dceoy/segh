@@ -2,8 +2,11 @@ package github
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/dceoy/segh/internal/model"
@@ -113,6 +116,43 @@ func TestEnrichUsesFeatureSpecificSecurityEndpoints(t *testing.T) {
 		if observed.State != model.Available || !observed.Value {
 			t.Fatalf("%s = %#v, want endpoint-derived Available/true", name, observed)
 		}
+	}
+}
+
+func TestListRepositoriesFetchesEachPageIndependently(t *testing.T) {
+	// A full-size first page must trigger a second request rather than being
+	// treated as the final page, and each page must be decoded on its own so
+	// no single request's bound is inflated by organization size.
+	var pageParams []string
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/orgs/org/repos" {
+			t.Errorf("path = %s", request.URL.Path)
+			return
+		}
+		page := request.URL.Query().Get("page")
+		pageParams = append(pageParams, page)
+		switch page {
+		case "1":
+			repos := make([]string, 100)
+			for i := range repos {
+				repos[i] = fmt.Sprintf(`{"id":%d,"full_name":"org/repo-%d"}`, i, i)
+			}
+			_, _ = io.WriteString(writer, "["+strings.Join(repos, ",")+"]")
+		case "2":
+			_, _ = io.WriteString(writer, `[{"id":100,"full_name":"org/repo-100"}]`)
+		default:
+			t.Errorf("unexpected page = %s", page)
+		}
+	})
+	repositories, err := service.listRepositories(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 101 {
+		t.Fatalf("len(repositories) = %d, want 101", len(repositories))
+	}
+	if !reflect.DeepEqual(pageParams, []string{"1", "2"}) {
+		t.Fatalf("pageParams = %#v, want [1 2]", pageParams)
 	}
 }
 

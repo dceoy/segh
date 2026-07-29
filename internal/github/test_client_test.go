@@ -40,19 +40,6 @@ func (c testAPIClient) Get(ctx context.Context, apiPath string, out any) error {
 	return nil
 }
 
-func (c testAPIClient) GetPaginated(ctx context.Context, apiPath string, out any) error {
-	var page []apiRepository
-	if err := c.Get(ctx, apiPath, &page); err != nil {
-		return err
-	}
-	pages, ok := out.(*[][]apiRepository)
-	if !ok {
-		return fmt.Errorf("unexpected paginated output type %T", out)
-	}
-	*pages = [][]apiRepository{page}
-	return nil
-}
-
 func newInventoryTestService(t *testing.T, handler http.HandlerFunc) *InventoryService {
 	t.Helper()
 	server := httptest.NewServer(handler)

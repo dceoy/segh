@@ -12,10 +12,10 @@ import (
 	"github.com/dceoy/segh/internal/config"
 )
 
-func TestClientDelegatesPaginationAndHostnameToGitHubCLI(t *testing.T) {
+func TestClientUsesHostnameAndAPIVersionHeaderPerRequest(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "gh")
-	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$GH_TEST_ARGS\"\nprintf '%s' '[[{\"id\":1,\"full_name\":\"org/repo\"}]]'\n"
+	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$GH_TEST_ARGS\"\nprintf '%s' '[{\"id\":1,\"full_name\":\"org/repo\"}]'\n"
 	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -34,8 +34,8 @@ func TestClientDelegatesPaginationAndHostnameToGitHubCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var pages [][]apiRepository
-	if err := client.GetPaginated(context.Background(), "/orgs/org/repos?per_page=100", &pages); err != nil {
+	var page []apiRepository
+	if err := client.Get(context.Background(), "/orgs/org/repos?per_page=100&page=1", &page); err != nil {
 		t.Fatal(err)
 	}
 	args, err := os.ReadFile(argsPath) // #nosec G304 -- argsPath is created inside this test's unique temporary directory.
@@ -44,12 +44,15 @@ func TestClientDelegatesPaginationAndHostnameToGitHubCLI(t *testing.T) {
 	}
 	if !strings.Contains(
 		string(args),
-		"api --hostname github.example --method GET --header X-GitHub-Api-Version: 2022-11-28 --paginate --slurp",
+		"api --hostname github.example --method GET --header X-GitHub-Api-Version: 2022-11-28 /orgs/org/repos?per_page=100&page=1",
 	) {
 		t.Fatalf("args = %q", args)
 	}
-	if len(pages) != 1 || len(pages[0]) != 1 {
-		t.Fatalf("pages = %#v", pages)
+	if strings.Contains(string(args), "--paginate") || strings.Contains(string(args), "--slurp") {
+		t.Fatalf("args = %q, want no CLI-side pagination since pages are decoded individually", args)
+	}
+	if len(page) != 1 {
+		t.Fatalf("page = %#v", page)
 	}
 }
 

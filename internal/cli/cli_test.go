@@ -12,6 +12,7 @@ import (
 
 	"github.com/dceoy/segh/internal/config"
 	"github.com/dceoy/segh/internal/model"
+	"github.com/dceoy/segh/internal/policy"
 )
 
 func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
@@ -75,6 +76,28 @@ func TestReportUsesConfiguredOutputDirectory(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("%s was not written: %v", name, err)
 		}
+	}
+}
+
+func TestValidateReportArtifactsAcceptsSliceTypedExpectedValueAfterJSONRoundTrip(t *testing.T) {
+	// repository.visibility's Expected value is a []string, decoded from JSON
+	// into []any on the audit side but left as []string on the freshly
+	// evaluated side; the comparison must normalize both before comparing.
+	cfg := testConfig(t.TempDir())
+	cfg.Policies.Repository.AllowedVisibilities = []string{"public", "internal"}
+	inventory := validInventory(cfg)
+	audit := policy.New(cfg, time.Now().UTC()).Evaluate(inventory)
+
+	data, err := json.Marshal(audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTripped model.Audit
+	if err := json.Unmarshal(data, &roundTripped); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReportArtifacts(inventory, roundTripped, cfg); err != nil {
+		t.Fatalf("validateReportArtifacts() = %v, want nil for a legitimate round-tripped audit", err)
 	}
 }
 
@@ -144,6 +167,17 @@ func TestValidateReportArtifactsRejectsInconsistentInputs(t *testing.T) {
 			},
 			want: "results do not match the inventory and configuration",
 		},
+		{
+			// Repository, PolicyID, and Status are unchanged and Counts still
+			// balances, so only a full comparison of the re-evaluated result
+			// catches tampered evidence/remediation content.
+			name: "tampered evidence and remediation",
+			change: func(_ *model.Inventory, audit *model.Audit) {
+				audit.Results[0].Evidence = "fabricated evidence"
+				audit.Results[0].Remediation = "fabricated remediation"
+			},
+			want: "results do not match the inventory and configuration",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -183,17 +217,7 @@ func validInventory(cfg config.Config) model.Inventory {
 }
 
 func validAudit(cfg config.Config) model.Audit {
-	return model.Audit{
-		SchemaVersion: model.PolicySchemaVersion,
-		Organization:  cfg.Organization,
-		GeneratedAt:   time.Now().UTC(),
-		Results: []model.PolicyResult{{
-			Repository: "example/repository",
-			PolicyID:   "repository.ruleset",
-			Status:     model.PolicyPass,
-		}},
-		Counts: map[string]int{string(model.PolicyPass): 1},
-	}
+	return policy.New(cfg, time.Now().UTC()).Evaluate(validInventory(cfg))
 }
 
 func writeJSON(t *testing.T, path string, value any) {

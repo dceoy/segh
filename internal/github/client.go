@@ -16,8 +16,8 @@ import (
 	"github.com/dceoy/segh/internal/config"
 )
 
-// Pagination slurps all repository pages into one bounded document. Sixty-four
-// MiB accommodates large organizations while still capping peak response data.
+// Sixty-four MiB bounds each individual response so a single page cannot
+// exhaust memory, while organization size no longer bounds total pages.
 const (
 	maxResponseBytes    = 64 << 20
 	maxAPIAttempts      = 4
@@ -31,7 +31,6 @@ var rateLimitPattern = regexp.MustCompile(`(?i)(rate limit|retry[- ]after|abuse 
 
 type API interface {
 	Get(context.Context, string, any) error
-	GetPaginated(context.Context, string, any) error
 }
 
 type Client struct {
@@ -68,19 +67,11 @@ func NewClient(cfg config.Config) (*Client, error) {
 }
 
 func (c *Client) Get(ctx context.Context, apiPath string, out any) error {
-	return c.run(ctx, apiPath, false, out)
-}
-
-func (c *Client) GetPaginated(ctx context.Context, apiPath string, out any) error {
-	return c.run(ctx, apiPath, true, out)
-}
-
-func (c *Client) run(ctx context.Context, apiPath string, paginate bool, out any) error {
 	if !strings.HasPrefix(apiPath, "/") || strings.HasPrefix(apiPath, "//") {
 		return fmt.Errorf("API path must be absolute and host-relative")
 	}
 	for attempt := 1; ; attempt++ {
-		err := c.runOnce(ctx, apiPath, paginate, out)
+		err := c.runOnce(ctx, apiPath, out)
 		if err == nil || !retryableAPIError(err) || attempt == maxAPIAttempts {
 			return err
 		}
@@ -91,17 +82,14 @@ func (c *Client) run(ctx context.Context, apiPath string, paginate bool, out any
 	}
 }
 
-func (c *Client) runOnce(ctx context.Context, apiPath string, paginate bool, out any) error {
+func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
 	args := []string{
 		"api",
 		"--hostname", c.hostname,
 		"--method", http.MethodGet,
 		"--header", "X-GitHub-Api-Version: " + githubAPIVersion,
+		apiPath,
 	}
-	if paginate {
-		args = append(args, "--paginate", "--slurp")
-	}
-	args = append(args, apiPath)
 	cmd := exec.CommandContext(ctx, c.executable, args...) // #nosec G204 -- executable is resolved with LookPath and arguments never pass through a shell.
 	cmd.Env = os.Environ()
 	if c.hostname != "github.com" && !strings.HasSuffix(c.hostname, ".ghe.com") {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -269,14 +270,28 @@ func validateReportArtifacts(inventory model.Inventory, audit model.Audit, cfg c
 		return fmt.Errorf("audit counts do not match its policy results")
 	}
 	expected := policy.New(cfg, audit.GeneratedAt).Evaluate(inventory)
-	if len(audit.Results) != len(expected.Results) {
-		return fmt.Errorf("audit results do not match the inventory and configuration")
+	// audit.Results was JSON-decoded, so its Observed/Expected any fields hold
+	// generic decode shapes (e.g. []string becomes []any). Round-trip expected
+	// through the same encode/decode path before comparing so both sides use
+	// identical representations rather than only their originating Go types.
+	expectedJSON, err := json.Marshal(expected.Results)
+	if err != nil {
+		return fmt.Errorf("encode expected audit results: %w", err)
 	}
-	for i, result := range audit.Results {
-		want := expected.Results[i]
-		if result.Repository != want.Repository || result.PolicyID != want.PolicyID || result.Status != want.Status {
-			return fmt.Errorf("audit results do not match the inventory and configuration")
-		}
+	var normalizedExpected []model.PolicyResult
+	if err := json.Unmarshal(expectedJSON, &normalizedExpected); err != nil {
+		return fmt.Errorf("decode expected audit results: %w", err)
+	}
+	resultsJSON, err := json.Marshal(audit.Results)
+	if err != nil {
+		return fmt.Errorf("encode audit results: %w", err)
+	}
+	normalizedJSON, err := json.Marshal(normalizedExpected)
+	if err != nil {
+		return fmt.Errorf("encode normalized expected audit results: %w", err)
+	}
+	if !bytes.Equal(resultsJSON, normalizedJSON) {
+		return fmt.Errorf("audit results do not match the inventory and configuration")
 	}
 	return nil
 }
