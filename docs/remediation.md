@@ -1,8 +1,9 @@
 # Remediation and settings ownership
 
-`segh remediate --audit ...` produces a grouped plan and never writes GitHub
-settings. Code Security Configurations, Actions policy, and branch governance
-belong to GitHub-native organization or enterprise controls.
+Policy results and the consolidated Markdown report include remediation
+guidance. `segh` never writes GitHub settings. Code Security Configurations,
+Actions policy, and branch governance belong to GitHub-native organization or
+enterprise controls.
 
 Safe Settings is justified only when a required setting is not expressible
 through Code Security Configurations, organization/enterprise Actions policy,

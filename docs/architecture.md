@@ -52,8 +52,8 @@ token. No private key or long-lived installation token is parsed or cached by
 ## Determinism and capability states
 
 Repository and policy arrays are sorted by stable identifiers. JSON is the
-canonical automation format, optional JSONL contains one record per line, and
-Markdown is an operator summary. Incompatible schema versions are rejected.
+canonical automation format, and the consolidated Markdown report is the
+operator summary. Incompatible schema versions are rejected.
 
 Unavailable endpoints never silently pass policy:
 

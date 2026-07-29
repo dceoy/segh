@@ -9,13 +9,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/dceoy/segh/internal/config"
 	gh "github.com/dceoy/segh/internal/github"
-	"github.com/dceoy/segh/internal/logging"
 	"github.com/dceoy/segh/internal/model"
 	"github.com/dceoy/segh/internal/output"
 	"github.com/dceoy/segh/internal/policy"
@@ -89,13 +86,11 @@ func Run(ctx context.Context, args []string, version string, stdout, stderr io.W
 		writef(stdout, "configuration is valid\n")
 		return nil
 	case "inventory":
-		return runInventory(ctx, cfg, commandArgs, stdout, logging.New(stderr))
+		return runInventory(ctx, cfg, commandArgs, stdout)
 	case "audit":
 		return runAudit(cfg, commandArgs, stdout)
 	case "report":
 		return runReport(commandArgs, stdout)
-	case "remediate":
-		return runRemediate(commandArgs, stdout)
 	default:
 		return usageError(fmt.Errorf("unknown command %q", remaining[0]))
 	}
@@ -112,7 +107,7 @@ func ExitCode(err error) int {
 	return exitRuntime
 }
 
-func runInventory(ctx context.Context, cfg config.Config, args []string, stdout io.Writer, log *logging.Logger) error {
+func runInventory(ctx context.Context, cfg config.Config, args []string, stdout io.Writer) error {
 	flags := commandFlags("inventory")
 	outputPath := flags.String("output", filepath.Join(cfg.Output.Directory, "inventory.json"), "inventory JSON output")
 	if err := flags.Parse(args); err != nil {
@@ -121,20 +116,15 @@ func runInventory(ctx context.Context, cfg config.Config, args []string, stdout 
 	if flags.NArg() != 0 {
 		return usageError(fmt.Errorf("inventory does not accept positional arguments"))
 	}
-	client, err := gh.NewClient(cfg, log)
+	client, err := gh.NewClient(cfg)
 	if err != nil {
 		return authError(err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, cfg.Inventory.Timeout)
 	defer cancel()
-	inventory, runErr := gh.NewInventoryService(cfg, client, log).Run(ctx)
+	inventory, runErr := gh.NewInventoryService(cfg, client).Run(ctx)
 	if err := output.JSON(*outputPath, inventory); err != nil {
 		return runtimeError(err)
-	}
-	if cfg.Output.JSONL {
-		if err := output.JSONL(strings.TrimSuffix(*outputPath, filepath.Ext(*outputPath))+".jsonl", inventory.Repositories); err != nil {
-			return runtimeError(err)
-		}
 	}
 	writef(stdout, "wrote %d repositories to %s\n", len(inventory.Repositories), *outputPath)
 	if runErr != nil || !inventory.Complete {
@@ -151,7 +141,6 @@ func runAudit(cfg config.Config, args []string, stdout io.Writer) error {
 	flags := commandFlags("audit")
 	inputPath := flags.String("inventory", filepath.Join(cfg.Output.Directory, "inventory.json"), "inventory JSON input")
 	outputPath := flags.String("output", filepath.Join(cfg.Output.Directory, "audit.json"), "audit JSON output")
-	markdownPath := flags.String("markdown", filepath.Join(cfg.Output.Directory, "audit.md"), "Markdown summary output")
 	if err := flags.Parse(args); err != nil {
 		return usageError(err)
 	}
@@ -167,15 +156,6 @@ func runAudit(cfg config.Config, args []string, stdout io.Writer) error {
 	}
 	audit := policy.New(cfg, time.Now()).Evaluate(inventory)
 	if err := output.JSON(*outputPath, audit); err != nil {
-		return runtimeError(err)
-	}
-	if cfg.Output.JSONL {
-		if err := output.JSONL(strings.TrimSuffix(*outputPath, filepath.Ext(*outputPath))+".jsonl", audit.Results); err != nil {
-			return runtimeError(err)
-		}
-	}
-	consolidated := report.Build(&inventory, &audit)
-	if err := output.Text(*markdownPath, report.Markdown(consolidated)); err != nil {
 		return runtimeError(err)
 	}
 	writef(stdout, "wrote %d policy results to %s\n", len(audit.Results), *outputPath)
@@ -225,52 +205,6 @@ func runReport(args []string, stdout io.Writer) error {
 	return nil
 }
 
-func runRemediate(args []string, stdout io.Writer) error {
-	flags := commandFlags("remediate")
-	auditPath := flags.String("audit", "segh-results/audit.json", "audit JSON input")
-	outputPath := flags.String("output", "segh-results/remediation.md", "remediation plan output")
-	if err := flags.Parse(args); err != nil {
-		return usageError(err)
-	}
-	if flags.NArg() != 0 {
-		return usageError(fmt.Errorf("remediate does not accept positional arguments"))
-	}
-	var audit model.Audit
-	if err := readJSON(*auditPath, &audit); err != nil {
-		return runtimeError(err)
-	}
-	var builder strings.Builder
-	builder.WriteString("# segh remediation plan\n\n")
-	builder.WriteString("This is guidance only. `segh` does not mutate repository or organization settings.\n\n")
-	groups := map[string][]model.PolicyResult{}
-	for _, result := range audit.Results {
-		if result.Status == model.PolicyFail {
-			class := policy.RemediationClass(result.PolicyID)
-			groups[class] = append(groups[class], result)
-		}
-	}
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		fmt.Fprintf(&builder, "## %s\n\n", key)
-		for _, result := range groups[key] {
-			fmt.Fprintf(&builder, "- `%s` / `%s`: %s\n", result.Repository, result.PolicyID, result.Remediation)
-		}
-		builder.WriteByte('\n')
-	}
-	if len(keys) == 0 {
-		builder.WriteString("No unsuppressed policy violations require remediation.\n")
-	}
-	if err := output.Text(*outputPath, builder.String()); err != nil {
-		return runtimeError(err)
-	}
-	writef(stdout, "wrote remediation plan to %s\n", *outputPath)
-	return nil
-}
-
 func readJSON(path string, value any) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -313,7 +247,6 @@ Commands:
   inventory    Assess GitHub-native control coverage
   audit        Evaluate inventory against explicit policy
   report       Build deterministic JSON and Markdown reports
-  remediate    Generate non-mutating remediation guidance
   version      Print the build version
 
 Global options:

@@ -11,14 +11,12 @@ import (
 	"time"
 
 	"github.com/dceoy/segh/internal/config"
-	"github.com/dceoy/segh/internal/logging"
 	"github.com/dceoy/segh/internal/model"
 )
 
 type InventoryService struct {
 	cfg    config.Config
 	client API
-	log    *logging.Logger
 }
 
 type apiRepository struct {
@@ -38,8 +36,8 @@ type apiRepository struct {
 	} `json:"security_and_analysis"`
 }
 
-func NewInventoryService(cfg config.Config, client API, log *logging.Logger) *InventoryService {
-	return &InventoryService{cfg: cfg, client: client, log: log}
+func NewInventoryService(cfg config.Config, client API) *InventoryService {
+	return &InventoryService{cfg: cfg, client: client}
 }
 
 func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {

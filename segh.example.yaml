@@ -56,5 +56,3 @@ suppressions:
 
 output:
   directory: segh-results
-  jsonl: true
-  retention_days: 14

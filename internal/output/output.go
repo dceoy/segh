@@ -1,7 +1,6 @@
 package output
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,45 +17,6 @@ func JSON(path string, value any) error {
 	}
 	data = append(data, '\n')
 	return atomicWrite(path, data, 0o600)
-}
-
-func JSONL[T any](path string, values []T) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".segh-jsonl-*")
-	if err != nil {
-		return fmt.Errorf("create temporary output: %w", err)
-	}
-	name := temp.Name()
-	defer func() { _ = os.Remove(name) }()
-	if err := temp.Chmod(0o600); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	writer := bufio.NewWriter(temp)
-	encoder := json.NewEncoder(writer)
-	for _, value := range values {
-		if err := encoder.Encode(value); err != nil {
-			_ = temp.Close()
-			return fmt.Errorf("encode JSONL: %w", err)
-		}
-	}
-	if err := writer.Flush(); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, path); err != nil {
-		return fmt.Errorf("replace output: %w", err)
-	}
-	return nil
 }
 
 func Text(path, content string) error {

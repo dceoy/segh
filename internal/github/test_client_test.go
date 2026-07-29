@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/dceoy/segh/internal/config"
-	"github.com/dceoy/segh/internal/logging"
 )
 
 type testAPIClient struct {
@@ -60,5 +59,5 @@ func newInventoryTestService(t *testing.T, handler http.HandlerFunc) *InventoryS
 	t.Cleanup(server.Close)
 	cfg := config.Default()
 	cfg.Organization = "org"
-	return NewInventoryService(cfg, testAPIClient{baseURL: server.URL}, logging.New(io.Discard))
+	return NewInventoryService(cfg, testAPIClient{baseURL: server.URL})
 }

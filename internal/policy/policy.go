@@ -5,7 +5,6 @@ import (
 	"path"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/dceoy/segh/internal/config"
@@ -255,17 +254,4 @@ func Violations(audit model.Audit) bool {
 
 func Partial(audit model.Audit) bool {
 	return audit.Counts[string(model.PolicyUnknown)] > 0 || audit.Counts[string(model.PolicyUnsupported)] > 0
-}
-
-func RemediationClass(policyID string) string {
-	switch {
-	case strings.HasPrefix(policyID, "actions."):
-		return "GitHub Actions organization settings"
-	case strings.HasPrefix(policyID, "code_security."):
-		return "GitHub Code Security Configuration"
-	case strings.HasPrefix(policyID, "repository."):
-		return "GitHub organization ruleset"
-	default:
-		return "manual review"
-	}
 }

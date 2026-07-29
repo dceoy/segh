@@ -87,9 +87,7 @@ type RepositoryPolicy struct {
 }
 
 type Output struct {
-	Directory     string `yaml:"directory"`
-	JSONL         bool   `yaml:"jsonl"`
-	RetentionDays int    `yaml:"retention_days"`
+	Directory string `yaml:"directory"`
 }
 
 func Default() Config {
@@ -103,7 +101,7 @@ func Default() Config {
 			Timeout:     30 * time.Minute,
 		},
 		Selectors: Selectors{ExcludeArchived: true, ExcludeForks: true},
-		Output:    Output{Directory: "segh-results", JSONL: true, RetentionDays: 14},
+		Output:    Output{Directory: "segh-results"},
 	}
 }
 
@@ -150,9 +148,6 @@ func (c Config) Validate() error {
 	}
 	if c.Inventory.Timeout <= 0 {
 		errs = append(errs, fmt.Errorf("inventory.timeout must be positive"))
-	}
-	if c.Output.RetentionDays < 1 || c.Output.RetentionDays > 400 {
-		errs = append(errs, fmt.Errorf("output.retention_days must be between 1 and 400"))
 	}
 	if c.Output.Directory == "" {
 		errs = append(errs, fmt.Errorf("output.directory is required"))

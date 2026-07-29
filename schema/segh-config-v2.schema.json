@@ -106,11 +106,8 @@
     "output": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["directory", "jsonl", "retention_days"],
       "properties": {
-        "directory": {"type": "string", "minLength": 1},
-        "jsonl": {"type": "boolean"},
-        "retention_days": {"type": "integer", "minimum": 1, "maximum": 400}
+        "directory": {"type": "string", "minLength": 1}
       }
     }
   },

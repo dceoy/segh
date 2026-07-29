@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/dceoy/segh/internal/config"
-	"github.com/dceoy/segh/internal/logging"
 )
 
 func TestClientDelegatesPaginationAndHostnameToGitHubCLI(t *testing.T) {
@@ -30,7 +29,7 @@ func TestClientDelegatesPaginationAndHostnameToGitHubCLI(t *testing.T) {
 	cfg := config.Default()
 	cfg.Organization = "org"
 	cfg.GitHub.WebURL = "https://github.example"
-	client, err := NewClient(cfg, logging.New(os.Stderr))
+	client, err := NewClient(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +63,7 @@ func TestClientMapsGitHubCLIHTTPError(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token")
 	cfg := config.Default()
 	cfg.Organization = "org"
-	client, err := NewClient(cfg, logging.New(os.Stderr))
+	client, err := NewClient(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +101,7 @@ printf '%s' '{"ok":true}'
 	t.Setenv("GH_TEST_COUNT", countPath)
 	cfg := config.Default()
 	cfg.Organization = "org"
-	client, err := NewClient(cfg, logging.New(os.Stderr))
+	client, err := NewClient(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +145,7 @@ exit 1
 	t.Setenv("GH_TEST_COUNT", countPath)
 	cfg := config.Default()
 	cfg.Organization = "org"
-	client, err := NewClient(cfg, logging.New(os.Stderr))
+	client, err := NewClient(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +169,7 @@ func TestClientRequiresExternalToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	cfg := config.Default()
 	cfg.Organization = "org"
-	if _, err := NewClient(cfg, logging.New(os.Stderr)); err == nil {
+	if _, err := NewClient(cfg); err == nil {
 		t.Fatal("expected GH_TOKEN requirement")
 	}
 }

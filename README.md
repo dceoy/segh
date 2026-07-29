@@ -40,7 +40,6 @@ an installation token or App private key in `segh` configuration.
 | `inventory` | Capability-aware coverage assessment of native controls |
 | `audit` | Deterministic policy and suppression evaluation |
 | `report` | Consolidated JSON and Markdown compliance report |
-| `remediate` | Guidance only; no settings mutation |
 
 Exit codes are `0` success, `1` policy violations, `2` invalid configuration or
 arguments, `3` authentication/permission failure, `4` partial or unsupported

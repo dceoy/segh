@@ -7,8 +7,8 @@
 - `audit.json`: sorted policy results, suppressions, and status counts;
 - `report.json`: the inventory and audit plus a deterministic coverage summary.
 
-JSONL companions for inventory repositories and audit results are optional.
-Markdown reports contain the same compliance status for operators.
+The `report` command is the sole producer of the consolidated Markdown operator
+summary. Inventory and audit commands write only their canonical JSON evidence.
 
 Scanner and SARIF schemas are intentionally absent. Raw SARIF is owned and
 retained by the central security workflow, and GitHub Code Scanning is the

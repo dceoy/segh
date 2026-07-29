@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/dceoy/segh/internal/config"
-	"github.com/dceoy/segh/internal/logging"
 )
 
 // Pagination slurps all repository pages into one bounded document. Sixty-four
@@ -36,7 +35,6 @@ type API interface {
 type Client struct {
 	executable string
 	hostname   string
-	log        *logging.Logger
 	wait       func(context.Context, time.Duration) error
 }
 
@@ -52,7 +50,7 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("GitHub API returned %d: %s", e.StatusCode, e.Message)
 }
 
-func NewClient(cfg config.Config, log *logging.Logger) (*Client, error) {
+func NewClient(cfg config.Config) (*Client, error) {
 	if os.Getenv("GH_TOKEN") == "" {
 		return nil, fmt.Errorf("GH_TOKEN is required")
 	}
@@ -64,7 +62,7 @@ func NewClient(cfg config.Config, log *logging.Logger) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{executable: executable, hostname: hostname, log: log, wait: waitForRetry}, nil
+	return &Client{executable: executable, hostname: hostname, wait: waitForRetry}, nil
 }
 
 func (c *Client) Get(ctx context.Context, apiPath string, out any) error {
@@ -85,7 +83,6 @@ func (c *Client) run(ctx context.Context, apiPath string, paginate bool, out any
 			return err
 		}
 		delay := retryBaseDelay << (attempt - 1)
-		c.log.Info("retrying GitHub CLI request", "attempt", attempt+1, "delay", delay)
 		if err := c.wait(ctx, delay); err != nil {
 			return err
 		}
