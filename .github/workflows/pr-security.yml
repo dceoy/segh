@@ -26,6 +26,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           path: _target
           persist-credentials: false
+      - name: Write trusted publication metadata
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p security-results
+          printf '%s\n' "$PR_NUMBER" > security-results/pr-number
+          printf '%s\n' "$HEAD_SHA" > security-results/head-sha
       - name: Install checksum-verified scanners
         uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49 # v4.0.5
         with:
@@ -65,7 +73,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: security-sarif-${{ github.event.pull_request.number }}
+          name: pr-security-publication
           path: security-results
           if-no-files-found: warn
           retention-days: 14

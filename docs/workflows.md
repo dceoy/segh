@@ -34,10 +34,12 @@ runs scanners directly, and uploads:
 Every SARIF file is also retained as an artifact, including when Code Scanning
 is unavailable. `.github/workflows/publish-pr-security.yml` is a trusted
 `workflow_run` follow-up with `security-events: write`; it downloads only the
-triggering run's artifact, never checks out or executes pull-request code, and
-uploads against the pull-request head SHA. This preserves publication for fork
-and Dependabot pull requests while the scanner remains read-only. The upload
-action waits for GitHub processing.
+triggering run's fixed-name artifact, validates the retained pull-request
+number and head SHA, and checks out that exact commit without credentials
+solely so the upload action can preserve SARIF fingerprints. It never executes
+pull-request code. This preserves publication for fork and Dependabot pull
+requests while the scanner remains read-only. The upload action waits for
+GitHub processing.
 
 Keep the workflow on a protected branch in the central repository. Configure an
 organization ruleset to require that repository, branch, and workflow file for

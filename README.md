@@ -51,8 +51,10 @@ The supplied central pull-request workflow runs checksum-pinned zizmor and
 Trivy binaries plus the pinned OpenSSF Scorecard action with a read-only token.
 Each SARIF file is retained as an artifact, then a trusted `workflow_run`
 follow-up uploads it through `github/codeql-action/upload-sarif` with a stable
-scanner category. The follow-up never checks out or executes pull-request code,
-so publication also works for fork and Dependabot pull requests.
+scanner category. The follow-up validates artifact metadata against the
+triggering run and checks out the exact analyzed commit without credentials
+solely to preserve SARIF fingerprints; it never executes pull-request code.
+Publication therefore also works for fork and Dependabot pull requests.
 Configure an organization ruleset to require the central workflow and Code
 Scanning results for selected repositories; Code Scanning merge protection
 owns severity thresholds and required-tool enforcement.
