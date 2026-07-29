@@ -28,6 +28,32 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMissingPolicies(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "segh.yaml")
+	data := "version: 2\norganization: test\n"
+	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "at least one policy must be configured") {
+		t.Fatalf("expected missing-policy error, got %v", err)
+	}
+}
+
+func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "segh.yaml")
+	data := "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n"
+	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitHub.WebURL != "https://github.com" || cfg.Inventory.Concurrency != 4 || cfg.Output.Directory != "segh-results" {
+		t.Fatalf("defaults were not applied: %#v", cfg)
+	}
+}
+
 func TestValidateRejectsSpoofedLocalEndpoints(t *testing.T) {
 	unsafe := []string{
 		"http://localhost.attacker.example",
@@ -39,6 +65,7 @@ func TestValidateRejectsSpoofedLocalEndpoints(t *testing.T) {
 	for _, raw := range unsafe {
 		cfg := Default()
 		cfg.Organization = "test"
+		cfg.Policies.Repository.RequireRuleset = true
 		cfg.GitHub.WebURL = raw
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("%s: expected URL rejection", raw)
@@ -51,6 +78,7 @@ func TestValidateAcceptsGenuineLocalEndpoints(t *testing.T) {
 	for _, raw := range safe {
 		cfg := Default()
 		cfg.Organization = "test"
+		cfg.Policies.Repository.RequireRuleset = true
 		cfg.GitHub.WebURL = raw
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("%s: unexpected rejection: %v", raw, err)

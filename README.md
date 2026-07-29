@@ -58,8 +58,9 @@ owns severity thresholds and required-tool enforcement.
 
 Organization audits are read-only. The supplied audit workflow uses
 `actions/create-github-app-token` and exposes the result only as `GH_TOKEN` to
-the inventory step. GitHub CLI owns authentication, pagination, retries,
-rate-limit behavior, and GHES hostname handling.
+the inventory step. GitHub CLI owns authentication, pagination, transport, and
+GHES hostname handling; `segh` adds bounded exponential retries for transient
+transport, server, and rate-limit failures.
 
 See [architecture](docs/architecture.md), [workflow rollout](docs/workflows.md),
 [App permissions](docs/github-app-permissions.md), and

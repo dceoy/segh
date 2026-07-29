@@ -139,6 +139,9 @@ func (c Config) Validate() error {
 	if c.Organization == "" {
 		errs = append(errs, fmt.Errorf("organization is required"))
 	}
+	if !c.Policies.configured() {
+		errs = append(errs, fmt.Errorf("at least one policy must be configured"))
+	}
 	if err := validateGitHubURL(c.GitHub.WebURL); err != nil {
 		errs = append(errs, fmt.Errorf("github.web_url %w", err))
 	}
@@ -186,6 +189,24 @@ func (c Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (p Policies) configured() bool {
+	actions := p.Actions
+	if actions.Enabled != nil || actions.AllowedActions != "" || actions.DefaultWorkflowPermissions != "" ||
+		actions.RequireSHAPinningEnforcement || actions.RequireForkPRApproval != nil {
+		return true
+	}
+	code := p.CodeSecurity
+	if code.Configuration != "" || code.CodeQL != "" || code.SecretScanning != "" || code.PushProtection != "" ||
+		code.DependencyGraph != "" || code.DependabotAlerts != "" || code.DependabotUpdates != "" {
+		return true
+	}
+	repository := p.Repository
+	return repository.RequireRuleset || repository.RequireBranchProtection || repository.RequirePullRequest ||
+		repository.RequireRequiredChecks || repository.RestrictForcePushes || repository.RestrictDeletions ||
+		repository.RequireSecurityMD || len(repository.AllowedVisibilities) > 0 || repository.ProhibitArchived ||
+		repository.ProhibitForks || repository.ProhibitTemplates
 }
 
 func validateGitHubURL(raw string) error {

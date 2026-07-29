@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dceoy/segh/internal/config"
 	"github.com/dceoy/segh/internal/logging"
@@ -18,9 +19,14 @@ import (
 
 // Pagination slurps all repository pages into one bounded document. Sixty-four
 // MiB accommodates large organizations while still capping peak response data.
-const maxResponseBytes = 64 << 20
+const (
+	maxResponseBytes = 64 << 20
+	maxAPIAttempts   = 4
+	retryBaseDelay   = time.Second
+)
 
 var httpStatusPattern = regexp.MustCompile(`(?i)\bHTTP ([0-9]{3})\b`)
+var rateLimitPattern = regexp.MustCompile(`(?i)(rate limit|retry[- ]after|abuse detection)`)
 
 type API interface {
 	Get(context.Context, string, any) error
@@ -31,6 +37,7 @@ type Client struct {
 	executable string
 	hostname   string
 	log        *logging.Logger
+	wait       func(context.Context, time.Duration) error
 }
 
 type APIError struct {
@@ -57,7 +64,7 @@ func NewClient(cfg config.Config, log *logging.Logger) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{executable: executable, hostname: hostname, log: log}, nil
+	return &Client{executable: executable, hostname: hostname, log: log, wait: waitForRetry}, nil
 }
 
 func (c *Client) Get(ctx context.Context, apiPath string, out any) error {
@@ -72,6 +79,20 @@ func (c *Client) run(ctx context.Context, apiPath string, paginate bool, out any
 	if !strings.HasPrefix(apiPath, "/") || strings.HasPrefix(apiPath, "//") {
 		return fmt.Errorf("API path must be absolute and host-relative")
 	}
+	for attempt := 1; ; attempt++ {
+		err := c.runOnce(ctx, apiPath, paginate, out)
+		if err == nil || !retryableAPIError(err) || attempt == maxAPIAttempts {
+			return err
+		}
+		delay := retryBaseDelay << (attempt - 1)
+		c.log.Info("retrying GitHub CLI request", "attempt", attempt+1, "delay", delay)
+		if err := c.wait(ctx, delay); err != nil {
+			return err
+		}
+	}
+}
+
+func (c *Client) runOnce(ctx context.Context, apiPath string, paginate bool, out any) error {
 	args := []string{"api", "--hostname", c.hostname, "--method", http.MethodGet}
 	if paginate {
 		args = append(args, "--paginate", "--slurp")
@@ -101,7 +122,6 @@ func (c *Client) run(ctx context.Context, apiPath string, paginate bool, out any
 		if matches := httpStatusPattern.FindAllStringSubmatch(message, -1); len(matches) > 0 {
 			_, _ = fmt.Sscanf(matches[len(matches)-1][1], "%d", &status)
 		}
-		c.log.Info("GitHub CLI request failed", "status", status)
 		return &APIError{StatusCode: status, Message: message}
 	}
 	if out == nil || len(stdout.Bytes()) == 0 {
@@ -111,6 +131,27 @@ func (c *Client) run(ctx context.Context, apiPath string, paginate bool, out any
 		return fmt.Errorf("decode GitHub CLI response: %w", err)
 	}
 	return nil
+}
+
+func retryableAPIError(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.StatusCode == 0 || apiErr.StatusCode == http.StatusRequestTimeout ||
+		apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500 ||
+		apiErr.StatusCode == http.StatusForbidden && rateLimitPattern.MatchString(apiErr.Message)
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func sanitizeCLIError(message string) string {

@@ -4,7 +4,7 @@
   "title": "segh governance configuration v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "organization", "github", "inventory", "selectors", "policies", "output"],
+  "required": ["version", "organization", "policies"],
   "properties": {
     "version": {"const": 2},
     "organization": {"type": "string", "minLength": 1},

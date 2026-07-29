@@ -25,7 +25,17 @@ jobs:
         with:
           app-id: ${{ secrets.SEGH_READ_APP_ID }}
           private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+          # Organization-wide inventory requires every repository in the App
+          # installation; the permissions below still constrain the token to
+          # the exact read-only API surface used by segh.
+          owner: ${{ github.repository_owner }} # zizmor: ignore[github-app]
+          permission-actions: read
+          permission-administration: read
+          permission-contents: read
+          permission-metadata: read
+          permission-repository-custom-properties: read
+          permission-security-events: read
+          permission-vulnerability-alerts: read
       - name: Require a private control repository
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

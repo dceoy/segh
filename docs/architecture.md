@@ -31,8 +31,8 @@ segh
 ```
 
 The Go CLI contains no scanner process runner, clone manager, SARIF parser or
-publisher, fingerprint gate, GitHub App signer, retrying HTTP transport,
-batcher, or workflow engine.
+publisher, fingerprint gate, GitHub App signer, custom HTTP transport, batcher,
+or workflow engine.
 
 ## API and authentication
 
@@ -40,8 +40,9 @@ Inventory normalization remains in Go because it combines several
 capability-sensitive GitHub endpoints into stable observations. Requests are
 delegated to `gh api`. Repository enumeration uses
 `gh api --paginate --slurp`; every request uses `--hostname` derived from
-`github.web_url`. The GitHub CLI owns token discovery, REST transport, retries,
-rate limits, and pagination.
+`github.web_url`. The GitHub CLI owns token discovery, REST transport, and
+pagination. `segh` retries transient transport failures, HTTP 429/5xx
+responses, and explicit rate-limit responses with bounded exponential backoff.
 
 `GH_TOKEN` is required. GitHub Actions generates it from a read-only App using
 `actions/create-github-app-token`; local use requires an externally supplied

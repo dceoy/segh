@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dceoy/segh/internal/config"
 	"github.com/dceoy/segh/internal/logging"
@@ -71,6 +72,97 @@ func TestClientMapsGitHubCLIHTTPError(t *testing.T) {
 	state, _ := ErrorState(err)
 	if state != "unsupported" {
 		t.Fatalf("err = %v, state = %s", err, state)
+	}
+}
+
+func TestClientRetriesTransientGitHubCLIError(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "gh")
+	body := `#!/bin/sh
+count=0
+test ! -f "$GH_TEST_COUNT" || count=$(cat "$GH_TEST_COUNT")
+count=$((count + 1))
+printf '%s' "$count" > "$GH_TEST_COUNT"
+if test "$count" -eq 1; then
+  printf '%s' 'gh: Service Unavailable (HTTP 503)' >&2
+  exit 1
+fi
+printf '%s' '{"ok":true}'
+`
+	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G302 -- this temporary test fixture must be executable.
+	if err := os.Chmod(script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	countPath := filepath.Join(dir, "count")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GH_TOKEN", "test-token")
+	t.Setenv("GH_TEST_COUNT", countPath)
+	cfg := config.Default()
+	cfg.Organization = "org"
+	client, err := NewClient(cfg, logging.New(os.Stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.wait = func(context.Context, time.Duration) error { return nil }
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.Get(context.Background(), "/transient", &response); err != nil {
+		t.Fatal(err)
+	}
+	count, err := os.ReadFile(countPath) // #nosec G304 -- countPath is created inside this test's unique temporary directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(count) != "2" || !response.OK {
+		t.Fatalf("attempts = %q, response = %#v", count, response)
+	}
+}
+
+func TestClientDoesNotRetryPermanentGitHubCLIError(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "gh")
+	body := `#!/bin/sh
+count=0
+test ! -f "$GH_TEST_COUNT" || count=$(cat "$GH_TEST_COUNT")
+count=$((count + 1))
+printf '%s' "$count" > "$GH_TEST_COUNT"
+printf '%s' 'gh: Unauthorized (HTTP 401)' >&2
+exit 1
+`
+	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G302 -- this temporary test fixture must be executable.
+	if err := os.Chmod(script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	countPath := filepath.Join(dir, "count")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GH_TOKEN", "test-token")
+	t.Setenv("GH_TEST_COUNT", countPath)
+	cfg := config.Default()
+	cfg.Organization = "org"
+	client, err := NewClient(cfg, logging.New(os.Stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.wait = func(context.Context, time.Duration) error {
+		t.Fatal("permanent failures must not wait for a retry")
+		return nil
+	}
+	if err := client.Get(context.Background(), "/permanent", &struct{}{}); err == nil {
+		t.Fatal("expected API error")
+	}
+	count, err := os.ReadFile(countPath) // #nosec G304 -- countPath is created inside this test's unique temporary directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(count) != "1" {
+		t.Fatalf("attempts = %q, want 1", count)
 	}
 }
 
