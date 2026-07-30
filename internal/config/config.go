@@ -5,12 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path"
 	"regexp"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/dceoy/segh/internal/model"
@@ -20,16 +18,10 @@ import (
 type Config struct {
 	Version      int                 `yaml:"version"`
 	Organization string              `yaml:"organization"`
-	GitHub       GitHub              `yaml:"github"`
 	Inventory    Inventory           `yaml:"inventory"`
 	Selectors    Selectors           `yaml:"selectors"`
 	Policies     Policies            `yaml:"policies"`
 	Suppressions []model.Suppression `yaml:"suppressions"`
-	Output       Output              `yaml:"output"`
-}
-
-type GitHub struct {
-	WebURL string `yaml:"web_url"`
 }
 
 type Duration time.Duration
@@ -53,7 +45,7 @@ type Selectors struct {
 
 type Policies struct {
 	Actions      ActionsPolicy      `yaml:"actions"`
-	CodeSecurity CodeSecurityPolicy `yaml:"code_security"`
+	Dependencies DependenciesPolicy `yaml:"dependencies"`
 	Repository   RepositoryPolicy   `yaml:"repository"`
 }
 
@@ -65,14 +57,10 @@ type ActionsPolicy struct {
 	RequireForkPRApproval        *bool  `yaml:"require_fork_pr_approval"`
 }
 
-type CodeSecurityPolicy struct {
-	Configuration     string `yaml:"configuration"`
-	CodeQL            string `yaml:"codeql"`
-	SecretScanning    string `yaml:"secret_scanning"`
-	PushProtection    string `yaml:"push_protection"`
-	DependencyGraph   string `yaml:"dependency_graph"`
-	DependabotAlerts  string `yaml:"dependabot_alerts"`
-	DependabotUpdates string `yaml:"dependabot_security_updates"`
+type DependenciesPolicy struct {
+	DependencyGraph           *bool `yaml:"dependency_graph"`
+	DependabotAlerts          *bool `yaml:"dependabot_alerts"`
+	DependabotSecurityUpdates *bool `yaml:"dependabot_security_updates"`
 }
 
 type RepositoryPolicy struct {
@@ -89,22 +77,14 @@ type RepositoryPolicy struct {
 	ProhibitTemplates       bool     `yaml:"prohibit_templates"`
 }
 
-type Output struct {
-	Directory string `yaml:"directory"`
-}
-
 func Default() Config {
 	return Config{
-		Version: 2,
-		GitHub: GitHub{
-			WebURL: "https://github.com",
-		},
+		Version: 4,
 		Inventory: Inventory{
 			Concurrency: 4,
 			Timeout:     Duration(30 * time.Minute),
 		},
 		Selectors: Selectors{ExcludeArchived: true, ExcludeForks: true},
-		Output:    Output{Directory: "segh-results"},
 	}
 }
 
@@ -132,6 +112,9 @@ func Load(configPath string) (Config, error) {
 	} else if !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
+	if err := rejectNullValues(data); err != nil {
+		return Config{}, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -140,8 +123,8 @@ func Load(configPath string) (Config, error) {
 
 func (c Config) Validate() error {
 	var errs []error
-	if c.Version != 2 {
-		errs = append(errs, fmt.Errorf("version must be 2"))
+	if c.Version != 4 {
+		errs = append(errs, fmt.Errorf("version must be 4"))
 	}
 	if c.Organization == "" {
 		errs = append(errs, fmt.Errorf("organization is required"))
@@ -149,17 +132,11 @@ func (c Config) Validate() error {
 	if !c.Policies.configured() {
 		errs = append(errs, fmt.Errorf("at least one policy must be configured"))
 	}
-	if err := validateGitHubURL(c.GitHub.WebURL); err != nil {
-		errs = append(errs, fmt.Errorf("github.web_url %w", err))
-	}
 	if c.Inventory.Concurrency < 1 || c.Inventory.Concurrency > 64 {
 		errs = append(errs, fmt.Errorf("inventory.concurrency must be between 1 and 64"))
 	}
 	if time.Duration(c.Inventory.Timeout) <= 0 {
 		errs = append(errs, fmt.Errorf("inventory.timeout must be positive"))
-	}
-	if c.Output.Directory == "" {
-		errs = append(errs, fmt.Errorf("output.directory is required"))
 	}
 	for name, values := range map[string][]string{
 		"selectors.visibilities":                   c.Selectors.Visibilities,
@@ -183,18 +160,6 @@ func (c Config) Validate() error {
 	}
 	if value := c.Policies.Actions.AllowedActions; value != "" && !slices.Contains([]string{"all", "local_only", "selected"}, value) {
 		errs = append(errs, fmt.Errorf("policies.actions.allowed_actions must be all, local_only, or selected"))
-	}
-	for name, value := range map[string]string{
-		"policies.code_security.codeql":                      c.Policies.CodeSecurity.CodeQL,
-		"policies.code_security.secret_scanning":             c.Policies.CodeSecurity.SecretScanning,
-		"policies.code_security.push_protection":             c.Policies.CodeSecurity.PushProtection,
-		"policies.code_security.dependency_graph":            c.Policies.CodeSecurity.DependencyGraph,
-		"policies.code_security.dependabot_alerts":           c.Policies.CodeSecurity.DependabotAlerts,
-		"policies.code_security.dependabot_security_updates": c.Policies.CodeSecurity.DependabotUpdates,
-	} {
-		if value != "" && value != "required" && value != "disabled" {
-			errs = append(errs, fmt.Errorf("%s must be required or disabled", name))
-		}
 	}
 	for i, suppression := range c.Suppressions {
 		if suppression.Policy == "" || suppression.Owner == "" || suppression.Rationale == "" {
@@ -230,6 +195,42 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
+// rejectNullValues re-parses the raw document because yaml.v3 maps explicit
+// nulls to Go zero values. The JSON schema permits null nowhere, so accepting a
+// direct, bare, or aliased null would make runtime validation weaker than the
+// published contract.
+func rejectNullValues(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("decode config node tree: %w", err)
+	}
+	if len(doc.Content) == 0 {
+		return nil
+	}
+	if containsNull(&doc) {
+		return fmt.Errorf("configuration must not contain null values")
+	}
+	return nil
+}
+
+func containsNull(node *yaml.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.Tag == "!!null" {
+		return true
+	}
+	if node.Kind == yaml.AliasNode {
+		return containsNull(node.Alias)
+	}
+	for _, child := range node.Content {
+		if containsNull(child) {
+			return true
+		}
+	}
+	return false
+}
+
 func firstDuplicate(values []string) (string, bool) {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
@@ -247,9 +248,9 @@ func (p Policies) configured() bool {
 		actions.RequireSHAPinningEnforcement || actions.RequireForkPRApproval != nil {
 		return true
 	}
-	code := p.CodeSecurity
-	if code.Configuration != "" || code.CodeQL != "" || code.SecretScanning != "" || code.PushProtection != "" ||
-		code.DependencyGraph != "" || code.DependabotAlerts != "" || code.DependabotUpdates != "" {
+	dependencies := p.Dependencies
+	if dependencies.DependencyGraph != nil || dependencies.DependabotAlerts != nil ||
+		dependencies.DependabotSecurityUpdates != nil {
 		return true
 	}
 	repository := p.Repository
@@ -257,42 +258,4 @@ func (p Policies) configured() bool {
 		repository.RequireRequiredChecks || repository.RestrictForcePushes || repository.RestrictDeletions ||
 		repository.RequireSecurityMD || len(repository.AllowedVisibilities) > 0 || repository.ProhibitArchived ||
 		repository.ProhibitForks || repository.ProhibitTemplates
-}
-
-// loopbackIPv4Pattern matches only the canonical dotted-quad 127.0.0.0/8
-// spellings that the github.web_url JSON Schema pattern also accepts.
-// Alternate loopback representations (IPv4-mapped IPv6 such as
-// ::ffff:127.0.0.1, or expanded IPv6 forms such as 0:0:0:0:0:0:0:1) are
-// deliberately rejected here so the schema stays an exact, auditable
-// description of what this validator accepts rather than an approximation
-// of net.IP.IsLoopback's broader notion of "loopback".
-var loopbackIPv4Pattern = regexp.MustCompile(
-	`^127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$`,
-)
-
-func isLoopbackHostname(hostname string) bool {
-	return hostname == "localhost" || hostname == "::1" || loopbackIPv4Pattern.MatchString(hostname)
-}
-
-func validateGitHubURL(raw string) error {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
-		(parsed.EscapedPath() != "" && parsed.EscapedPath() != "/") {
-		return fmt.Errorf("must be an origin URL without credentials, path, query, or fragment")
-	}
-	if parsed.Scheme == "https" {
-		return nil
-	}
-	if parsed.Scheme == "http" && isLoopbackHostname(parsed.Hostname()) {
-		return nil
-	}
-	return fmt.Errorf("must use HTTPS (HTTP is allowed only for local tests)")
-}
-
-func (c Config) GitHubHostname() (string, error) {
-	parsed, err := url.Parse(c.GitHub.WebURL)
-	if err != nil || parsed.Hostname() == "" {
-		return "", fmt.Errorf("invalid github.web_url")
-	}
-	return strings.ToLower(parsed.Host), nil
 }

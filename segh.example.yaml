@@ -1,8 +1,5 @@
-version: 2
+version: 4
 organization: example-org
-
-github:
-  web_url: https://github.com
 
 inventory:
   concurrency: 4
@@ -26,14 +23,10 @@ policies:
     default_workflow_permissions: read
     require_sha_pinning_enforcement: false
     require_fork_pr_approval: true
-  code_security:
-    configuration: Organization default
-    codeql: required
-    secret_scanning: required
-    push_protection: required
-    dependency_graph: required
-    dependabot_alerts: required
-    dependabot_security_updates: required
+  dependencies:
+    dependency_graph: true
+    dependabot_alerts: true
+    dependabot_security_updates: true
   repository:
     require_ruleset: true
     require_branch_protection: true
@@ -53,6 +46,3 @@ suppressions:
     owner: security@example.com
     rationale: Migration is tracked in the security program.
     expires: 2026-12-31T00:00:00Z
-
-output:
-  directory: segh-results

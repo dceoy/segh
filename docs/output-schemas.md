@@ -1,22 +1,41 @@
 # Output schemas
 
-`segh` produces three schema-version 2 JSON documents:
+`segh audit` writes three version 4 artifacts.
 
-- `inventory.json`: selected and excluded repositories, capability-aware native
-  control observations, and bounded collection errors;
-- `audit.json`: sorted policy results, suppressions, and status counts;
-- `report.json`: the inventory and audit plus a deterministic coverage summary.
+## `inventory.json`
 
-The `report` command is the sole producer of the consolidated Markdown operator
-summary. Inventory and audit commands write only their canonical JSON evidence.
-Repository custom-property values retain GitHub's `null`, string, or string-array
-shape. A scalar `selectors.custom_properties` value matches an equal scalar or
-membership in a multi-select array.
+Inventory contains organization metadata, selected and excluded repository
+counts, sorted repository observations, and bounded collection errors.
+Observations use:
 
-Scanner and SARIF schemas are intentionally absent. Raw SARIF is owned and
-retained by the central security workflow, and GitHub Code Scanning is the
-finding and merge-enforcement system of record.
+```json
+{
+  "state": "available",
+  "value": true,
+  "source": "vulnerability_alerts"
+}
+```
 
-Version 2 removes scanner execution, publication, and PR-gate fields from the
-configuration and result pipeline. Version 1 inputs are rejected rather than
-silently reinterpreted.
+`state` is `available`, `unknown`, or `unsupported`. Repository fields include
+Actions, dependency graph, Dependabot, branch governance, custom properties,
+and security-policy observations. There are no Advanced Security feature or
+configuration fields.
+
+## `audit.json`
+
+Audit is the canonical automation result. It contains schema version,
+organization, generation time, repository counts, policy counts, final
+coverage, and sorted policy results. Each result contains repository, policy ID,
+status, severity, observed and expected values, evidence source, remediation,
+and an optional applied suppression.
+
+## `report.md`
+
+The Markdown report is a deterministic operator rendering of repository counts,
+coverage, policy counts, and all non-passing results.
+
+Artifacts are generated and cross-validated in one process. No artifact embeds
+a full copy of another, and removed schema versions are not translated.
+
+Pull-request scanner JSON, text, status, and log files are workflow evidence,
+not part of the `segh` configuration or audit schema.

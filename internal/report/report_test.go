@@ -7,24 +7,26 @@ import (
 	"github.com/dceoy/segh/internal/model"
 )
 
-func TestBuildMarksIncompleteNativeCoveragePartial(t *testing.T) {
-	inventory := &model.Inventory{Selected: 2, Complete: true}
-	audit := &model.Audit{Counts: map[string]int{"unknown": 1}}
-	result := Build(inventory, audit)
-	if result.Summary.Coverage != "partial" || result.Summary.Repositories != 2 {
-		t.Fatalf("summary = %#v", result.Summary)
+func TestMarkdownUsesCanonicalAuditSummaryAndEscapesRows(t *testing.T) {
+	inventory := model.Inventory{Total: 3, Selected: 2, Excluded: 1}
+	audit := model.Audit{
+		Coverage:     "partial",
+		PolicyCounts: map[string]int{"unknown": 1},
+		Results: []model.PolicyResult{{
+			Repository: "example/repo|line\nbreak", PolicyID: "repository.test",
+			Status: model.PolicyUnknown, Severity: "high", Remediation: "<review>",
+		}},
 	}
-	if markdown := Markdown(result); !strings.Contains(markdown, "Coverage: partial") ||
-		!strings.Contains(markdown, "unknown=1") {
-		t.Fatalf("markdown = %s", markdown)
-	}
-}
-
-func TestBuildDoesNotRequireScannerResults(t *testing.T) {
-	inventory := &model.Inventory{Selected: 4, Complete: true}
-	audit := &model.Audit{Counts: map[string]int{"pass": 4}}
-	result := Build(inventory, audit)
-	if result.Summary.Coverage != "complete" {
-		t.Fatalf("coverage = %s, want complete", result.Summary.Coverage)
+	markdown := Markdown(inventory, audit)
+	for _, want := range []string{
+		"Repositories: 2 selected, 1 excluded, 3 total",
+		"Coverage: partial",
+		"unknown=1",
+		"example/repo\\|line break",
+		"&lt;review&gt;",
+	} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("Markdown() missing %q:\n%s", want, markdown)
+		}
 	}
 }

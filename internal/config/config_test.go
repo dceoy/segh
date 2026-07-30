@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,14 +18,14 @@ func TestLoadExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != 2 || cfg.Organization != "example-org" || cfg.Inventory.Concurrency != 4 {
+	if cfg.Version != 4 || cfg.Organization != "example-org" || cfg.Inventory.Concurrency != 4 {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
 }
 
 func TestLoadRejectsUnknownField(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 2\norganization: test\nsurprise: true\n"
+	data := "version: 4\norganization: test\nsurprise: true\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +36,7 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 
 func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n---\norganization: ignored\n"
+	data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n---\norganization: ignored\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
 
 func TestLoadRejectsUnboundedDuration(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 2\norganization: test\ninventory:\n  timeout: 999999999999999999999999999h\npolicies:\n  repository:\n    require_ruleset: true\n"
+	data := "version: 4\norganization: test\ninventory:\n  timeout: 999999999999999999999999999h\npolicies:\n  repository:\n    require_ruleset: true\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestLoadRejectsUnboundedDuration(t *testing.T) {
 
 func TestLoadRejectsMissingPolicies(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 2\norganization: test\n"
+	data := "version: 4\norganization: test\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -66,9 +67,51 @@ func TestLoadRejectsMissingPolicies(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsRemovedCodeSecurityPolicy(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "segh.yaml")
+	data := "version: 4\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n"
+	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "field code_security not found") {
+		t.Fatalf("Load() = %v, want removed code-security field error", err)
+	}
+}
+
+func TestSchemaAndRuntimeRejectNullValues(t *testing.T) {
+	schemaData, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(schemaData), `"null"`) {
+		t.Fatal("schema unexpectedly permits null values")
+	}
+	for _, tc := range []struct {
+		name string
+		data string
+	}{
+		{"section", "version: 4\norganization: test\ninventory: null\npolicies:\n  repository:\n    require_ruleset: true\n"},
+		{"array", "version: 4\norganization: test\nselectors:\n  repositories: null\npolicies:\n  repository:\n    require_ruleset: true\n"},
+		{"nested scalar", "version: 4\norganization: test\npolicies:\n  actions:\n    enabled: null\n  repository:\n    require_ruleset: true\n"},
+		{"bare key", "version: 4\norganization: test\npolicies:\n  dependencies:\n  repository:\n    require_ruleset: true\n"},
+		{"alias", "version: 4\norganization: test\nselectors:\n  repositories: &empty null\npolicies:\n  actions:\n    enabled: *empty\n  repository:\n    require_ruleset: true\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "segh.yaml")
+			if err := os.WriteFile(configPath, []byte(tc.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(configPath); err == nil ||
+				!strings.Contains(err.Error(), "configuration must not contain null values") {
+				t.Fatalf("Load() = %v, want null-value error", err)
+			}
+		})
+	}
+}
+
 func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n"
+	data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +119,7 @@ func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GitHub.WebURL != "https://github.com" || cfg.Inventory.Concurrency != 4 || cfg.Output.Directory != "segh-results" {
+	if cfg.Inventory.Concurrency != 4 || time.Duration(cfg.Inventory.Timeout) != 30*time.Minute {
 		t.Fatalf("defaults were not applied: %#v", cfg)
 	}
 }
@@ -86,7 +129,7 @@ func TestSchemaAndRuntimeRejectDuplicateArrayItems(t *testing.T) {
 		Ref         string `json:"$ref"`
 		UniqueItems bool   `json:"uniqueItems"`
 	}
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +222,7 @@ func TestSchemaAndRuntimeRejectDuplicateArrayItems(t *testing.T) {
 }
 
 func TestSchemaAllowsDefaultedNestedSections(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +234,7 @@ func TestSchemaAllowsDefaultedNestedSections(t *testing.T) {
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatal(err)
 	}
-	for _, section := range []string{"github", "inventory", "policies"} {
+	for _, section := range []string{"inventory", "policies"} {
 		if required := schema.Properties[section].Required; len(required) != 0 {
 			t.Fatalf("%s schema requirements conflict with loader defaults: %v", section, required)
 		}
@@ -199,7 +242,7 @@ func TestSchemaAllowsDefaultedNestedSections(t *testing.T) {
 }
 
 func TestSchemaRequiresAnEffectivePolicy(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +254,8 @@ func TestSchemaRequiresAnEffectivePolicy(t *testing.T) {
 			} `json:"anyOf"`
 		} `json:"properties"`
 		Definitions map[string]struct {
-			AnyOf []json.RawMessage `json:"anyOf"`
+			AnyOf    []json.RawMessage `json:"anyOf"`
+			Required []string          `json:"required"`
 		} `json:"$defs"`
 	}
 	if err := json.Unmarshal(data, &schema); err != nil {
@@ -221,7 +265,7 @@ func TestSchemaRequiresAnEffectivePolicy(t *testing.T) {
 	if len(policies.AnyOf) != 3 {
 		t.Fatalf("policies schema must require one configured subsection, got %d alternatives", len(policies.AnyOf))
 	}
-	for _, section := range []string{"actions", "code_security", "repository"} {
+	for _, section := range []string{"actions", "dependencies", "repository"} {
 		found := false
 		for _, alternative := range policies.AnyOf {
 			if len(alternative.Required) == 1 && alternative.Required[0] == section && alternative.Properties[section] != nil {
@@ -233,122 +277,41 @@ func TestSchemaRequiresAnEffectivePolicy(t *testing.T) {
 			t.Errorf("policies schema does not require an effective %s subsection", section)
 		}
 	}
-	for _, name := range []string{"configuredActionsPolicy", "configuredCodeSecurityPolicy", "configuredRepositoryPolicy"} {
+	for _, name := range []string{"configuredActionsPolicy", "configuredDependenciesPolicy", "configuredRepositoryPolicy"} {
 		if len(schema.Definitions[name].AnyOf) == 0 {
 			t.Errorf("%s must define effective policy values", name)
 		}
 	}
 }
 
-func TestValidateRejectsSpoofedLocalEndpoints(t *testing.T) {
-	unsafe := []string{
-		"http://localhost.attacker.example",
-		"http://localhost@attacker.example",
-		"http://localhost:80@attacker.example",
-		"http://attacker.example#localhost",
-		"https://github.example/api/v3",
-	}
-	for _, raw := range unsafe {
-		cfg := Default()
-		cfg.Organization = "test"
-		cfg.Policies.Repository.RequireRuleset = true
-		cfg.GitHub.WebURL = raw
-		if err := cfg.Validate(); err == nil {
-			t.Fatalf("%s: expected URL rejection", raw)
-		}
-	}
-}
-
-func TestValidateAcceptsGenuineLocalEndpoints(t *testing.T) {
-	safe := []string{"http://localhost", "http://localhost:8080", "http://127.0.0.1:9000", "http://[::1]:9000"}
-	for _, raw := range safe {
-		cfg := Default()
-		cfg.Organization = "test"
-		cfg.Policies.Repository.RequireRuleset = true
-		cfg.GitHub.WebURL = raw
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("%s: unexpected rejection: %v", raw, err)
-		}
-	}
-}
-
-func TestSchemaWebURLPatternMatchesRuntimeValidation(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var schema struct {
-		Properties struct {
-			GitHub struct {
-				Properties struct {
-					WebURL struct {
-						Pattern string `json:"pattern"`
-					} `json:"web_url"`
-				} `json:"properties"`
-			} `json:"github"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(data, &schema); err != nil {
-		t.Fatal(err)
-	}
-	pattern := schema.Properties.GitHub.Properties.WebURL.Pattern
-	if pattern == "" {
-		t.Fatal("github.web_url schema is missing a pattern constraint")
-	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		t.Fatalf("invalid github.web_url pattern: %v", err)
-	}
-
-	// Each case must agree between the schema pattern and validateGitHubURL:
-	// the schema is meant to be an exact static description of the runtime
-	// contract, not merely an example-based approximation of it.
-	cases := []struct {
-		raw   string
-		valid bool
+func TestLoadRejectsPreviousVersionsAndRemovedRuntimeFields(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data string
+		want string
 	}{
-		{"https://github.com", true},
-		{"http://localhost", true},
-		{"http://localhost:8080", true},
-		{"http://127.0.0.1:9000", true},
-		{"http://127.255.255.255", true},
-		{"http://[::1]:9000", true},
-
-		{"http://example.com", false},
-		{"http://localhost.attacker.example", false},
-		{"http://localhost@attacker.example", false},
-		{"http://localhost:80@attacker.example", false},
-		{"http://attacker.example#localhost", false},
-		{"https://github.example/api/v3", false},
-		{"https://user:pass@github.com", false},
-		{"https://github.com?query=1", false},
-		{"https://github.com#frag", false},
-
-		// Invalid IPv4 octets: the pattern must reject these by range,
-		// not merely by digit count.
-		{"http://127.999.999.999", false},
-		{"http://127.256.0.1", false},
-
-		// Alternate loopback spellings that net.IP.IsLoopback would
-		// accept but the schema pattern does not encode: the runtime
-		// validator must reject these too so the schema remains an
-		// exact description of what it accepts.
-		{"http://[0:0:0:0:0:0:0:1]", false},
-		{"http://[::ffff:127.0.0.1]", false},
-		{"http://[::ffff:7f00:1]", false},
-	}
-	for _, tc := range cases {
-		if got := re.MatchString(tc.raw); got != tc.valid {
-			t.Errorf("%s: schema pattern match = %v, want %v", tc.raw, got, tc.valid)
-		}
-		if got := validateGitHubURL(tc.raw) == nil; got != tc.valid {
-			t.Errorf("%s: validateGitHubURL acceptance = %v, want %v", tc.raw, got, tc.valid)
-		}
+		{"version 1", "version: 1\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "version must be 4"},
+		{"version 2", "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "version must be 4"},
+		{"version 3", "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "version must be 4"},
+		{"github host", "version: 4\norganization: test\ngithub:\n  web_url: https://github.com\npolicies:\n  repository:\n    require_ruleset: true\n", "field github not found"},
+		{"output directory", "version: 4\norganization: test\noutput:\n  directory: results\npolicies:\n  repository:\n    require_ruleset: true\n", "field output not found"},
+		{"code security policy", "version: 4\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n", "field code_security not found"},
+		{"CodeQL policy", "version: 4\norganization: test\npolicies:\n  dependencies:\n    codeql: true\n", "field codeql not found"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "segh.yaml")
+			if err := os.WriteFile(configPath, []byte(test.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Load() = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
 func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +413,7 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 }
 
 func TestSchemaSuppressionRepositoryPatternMatchesRuntimeValidation(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v2.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

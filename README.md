@@ -1,84 +1,101 @@
 # segh
 
-`segh` is a focused security-governance audit tool for GitHub organizations. It
-inventories coverage by GitHub-native controls, selects repositories using
-organization metadata and custom properties, evaluates explicit policy and
-time-bounded suppressions, and writes deterministic compliance reports.
+`segh` audits GitHub Enterprise organization governance and supplies a central,
+read-only pull-request security workflow. It is designed for private
+repositories without GitHub Code Security or GitHub Secret Protection
+licenses.
 
-Scanner execution, SARIF publication, and merge enforcement belong to GitHub
-Actions, Code Scanning, Security Configurations, and organization rulesets.
-`segh` does not clone repositories, run scanners, publish SARIF, generate
-GitHub App JWTs, or reconstruct pull-request baselines.
+The supported baseline is:
+
+- organization rulesets and ordinary required checks enforce merges;
+- zizmor audits GitHub Actions;
+- Trivy gates secrets, dependency vulnerabilities, and infrastructure
+  misconfigurations;
+- scanner JSON, text, and logs are retained as Actions artifacts;
+- OpenSSF Scorecard is informational;
+- dependency graph, Dependabot alerts, and Dependabot security updates remain
+  GitHub-native controls; and
+- no scanner result is sent to the GitHub Code Scanning service.
 
 ## Quick start
 
-Requirements are Go 1.23 or later, the GitHub CLI, a read-only `GH_TOKEN`, and
-the matching GitHub App installation ID.
+Copy the example and edit the organization and policies:
 
-```console
+```bash
 cp segh.example.yaml segh.yaml
 export GH_TOKEN=...
 export SEGH_GITHUB_INSTALLATION_ID=...
 go build -o bin/segh ./cmd/segh
-bin/segh validate
-bin/segh inventory
-bin/segh audit
-bin/segh report
+bin/segh audit --config segh.yaml
 ```
 
-The governance-only configuration is version 2. Version 1 scanner, execution,
-publication, and pull-request sections are intentionally rejected; remove them
-when migrating.
+`audit` strictly validates the version 4 configuration before making API
+requests, collects inventory, evaluates policy, and writes:
 
-The token must be authorized for the configured organization and host. In
-GitHub Actions, generate it with `actions/create-github-app-token`; do not store
-an installation token or App private key in `segh` configuration.
+- `segh-results/inventory.json`
+- `segh-results/audit.json`
+- `segh-results/report.md`
 
-## Commands and stable exit codes
+Use `bin/segh audit --config segh.yaml --validate-only` for offline validation.
+Only schema version 4 is accepted. Older versions and removed fields are
+rejected without aliases or migration logic.
+
+## Commands and exit codes
 
 | Command | Purpose |
 |---|---|
-| `validate` | Strict configuration validation |
-| `inventory` | Capability-aware coverage assessment of native controls |
-| `audit` | Deterministic policy and suppression evaluation |
-| `report` | Consolidated JSON and Markdown compliance report |
+| `audit` | Validate, inventory, evaluate policy, and write evidence |
 
 Exit codes are `0` success, `1` policy violations, `2` invalid configuration or
-arguments, `3` authentication/permission failure, `4` partial or unsupported
-coverage, and `5` runtime failure.
+arguments, `3` authentication or permission failure, `4` incomplete coverage,
+and `5` runtime failure.
 
-## GitHub-native scanner enforcement
+## Pull-request gate
 
-The supplied central pull-request workflow runs checksum-pinned zizmor and
-Trivy binaries plus the pinned OpenSSF Scorecard action with a read-only token.
-Each SARIF file is retained as an artifact. A protected `workflow_run`
-publisher installed in every target repository validates the central workflow
-identity and artifact metadata, then uploads through
-`github/codeql-action/upload-sarif` with a stable scanner category. It checks
-out the exact analyzed commit without credentials solely to preserve SARIF
-fingerprints and never executes pull-request code, so publication also works
-for fork and Dependabot pull requests. The central source repository is
-excluded from its own scanner and publisher. Configure an organization ruleset
-to require the central workflow and Code Scanning results for selected target
-repositories; Code Scanning merge protection owns severity thresholds and
-required-tool enforcement.
+Install `.github/workflows/pr-security.yml` as an organization ruleset required
+workflow for selected repositories. Target repositories do not install a local
+publisher or grant a write-capable token.
 
-Organization audits are read-only. The supplied audit workflow uses
-`actions/create-github-app-token` and exposes its short-lived token and
-non-secret installation ID to the inventory step. GitHub CLI owns
-authentication, pagination, transport, and GHES hostname handling; `segh` adds
-bounded exponential retries for transient transport, server, and rate-limit
-failures.
+The stable `PR security / scan` check fails when:
 
-See [architecture](docs/architecture.md), [workflow rollout](docs/workflows.md),
-[App permissions](docs/github-app-permissions.md), and
-[policy mapping](docs/policies.md).
+- zizmor reports a medium-or-higher, high-confidence finding or cannot strictly
+  collect the workflow files;
+- Trivy finds a high or critical misconfiguration;
+- Trivy finds a high or critical dependency vulnerability; or
+- Trivy finds a secret at any severity.
 
-## Development
+The workflow runs all scanners before enforcing the combined result, so reports
+remain available when the check fails. Configuration, thresholds, and ignore
+behavior are fixed in the trusted `segh` workflow rather than read from the
+pull-request checkout. See [docs/workflows.md](docs/workflows.md).
 
-```console
-make fmt
-make test
-make lint
-make build
-```
+## Organization audit
+
+The organization audit is read-only. Its GitHub App inventories Actions policy,
+rulesets, branch protection, custom properties, dependency graph, Dependabot
+coverage, and repository metadata. It does not clone repositories or run
+scanners.
+
+`GH_HOST` selects GitHub Enterprise Server and defaults to `github.com`.
+The matching short-lived App token and installation ID are required for a live
+audit. See [docs/github-app-permissions.md](docs/github-app-permissions.md).
+
+## Cost and limitations
+
+This design requires GitHub Enterprise seats and enough GitHub Actions capacity.
+It does not require GitHub Code Security or GitHub Secret Protection licenses.
+
+The tradeoff is deliberate: there is no server-side secret push prevention,
+GitHub security-alert lifecycle or organization security overview,
+CodeQL-equivalent deep interprocedural SAST, or native finding dismissal,
+campaign, fingerprint, baseline, and severity-gate UI. Scanner artifacts and
+ordinary check results are the evidence and enforcement boundary.
+
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Workflows and rollout](docs/workflows.md)
+- [GitHub App permissions](docs/github-app-permissions.md)
+- [Policies](docs/policies.md)
+- [Output schemas](docs/output-schemas.md)
+- [Remediation](docs/remediation.md)

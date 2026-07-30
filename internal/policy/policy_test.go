@@ -29,14 +29,17 @@ func TestEvaluateStatusesAndSuppressionExpiry(t *testing.T) {
 		}},
 	}
 	audit := New(cfg, now).Evaluate(inventory)
-	if audit.Counts[string(model.PolicyExempt)] != 1 {
-		t.Fatalf("expected exempt result: %#v", audit.Counts)
+	if audit.PolicyCounts[string(model.PolicyExempt)] != 1 {
+		t.Fatalf("expected exempt result: %#v", audit.PolicyCounts)
 	}
-	if audit.Counts[string(model.PolicyUnknown)] != 1 {
-		t.Fatalf("expected unknown result: %#v", audit.Counts)
+	if audit.PolicyCounts[string(model.PolicyUnknown)] != 1 {
+		t.Fatalf("expected unknown result: %#v", audit.PolicyCounts)
 	}
-	if audit.Counts[string(model.PolicyFail)] != 1 {
-		t.Fatalf("expected expired-suppression failure: %#v", audit.Counts)
+	if audit.PolicyCounts[string(model.PolicyFail)] != 1 {
+		t.Fatalf("expected expired-suppression failure: %#v", audit.PolicyCounts)
+	}
+	if audit.Coverage != "partial" {
+		t.Fatalf("coverage = %q, want partial", audit.Coverage)
 	}
 }
 
@@ -77,10 +80,10 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 		RequireSHAPinningEnforcement: true,
 		RequireForkPRApproval:        &enabled,
 	}
-	cfg.Policies.CodeSecurity = config.CodeSecurityPolicy{
-		Configuration: "default", CodeQL: "required", SecretScanning: "required",
-		PushProtection: "required", DependencyGraph: "required", DependabotAlerts: "required",
-		DependabotUpdates: "required",
+	cfg.Policies.Dependencies = config.DependenciesPolicy{
+		DependencyGraph:           &enabled,
+		DependabotAlerts:          &enabled,
+		DependabotSecurityUpdates: &enabled,
 	}
 	cfg.Policies.Repository = config.RepositoryPolicy{
 		RequireRuleset: true, RequireBranchProtection: true, RequirePullRequest: true,
@@ -92,22 +95,59 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 	repository := model.Repository{
 		FullName: "example/repo", Visibility: "private",
 		ActionsEnabled: availableTrue, DefaultWorkflowPermissions: model.Observed[string]{State: model.Available, Value: "read"},
-		AllowedActions:     model.Observed[string]{State: model.Available, Value: "selected"},
-		SHAPinningEnforced: availableTrue,
-		ForkPRApproval:     availableTrue, CodeSecurityConfiguration: model.Observed[string]{State: model.Available, Value: "default"},
-		CodeQL: availableTrue, SecretScanning: availableTrue, PushProtection: availableTrue,
-		DependencyGraph: availableTrue, DependabotAlerts: availableTrue, DependabotSecurityUpdates: availableTrue,
-		Ruleset: availableTrue, BranchProtection: availableTrue, RequiredPullRequests: availableTrue,
+		AllowedActions:            model.Observed[string]{State: model.Available, Value: "selected"},
+		SHAPinningEnforced:        availableTrue,
+		ForkPRApproval:            availableTrue,
+		DependencyGraph:           availableTrue,
+		DependabotAlerts:          availableTrue,
+		DependabotSecurityUpdates: availableTrue,
+		Ruleset:                   availableTrue, BranchProtection: availableTrue, RequiredPullRequests: availableTrue,
 		RequiredChecks: availableTrue, ForcePushRestricted: availableTrue, DeletionRestricted: availableTrue,
 		SecurityMD: availableTrue,
 	}
 	audit := New(cfg, time.Now()).Evaluate(model.Inventory{Organization: "example", Repositories: []model.Repository{repository}})
-	if len(audit.Results) != 23 || audit.Counts[string(model.PolicyPass)] != 23 {
-		t.Fatalf("results=%d counts=%#v", len(audit.Results), audit.Counts)
+	if len(audit.Results) != 19 || audit.PolicyCounts[string(model.PolicyPass)] != 19 {
+		t.Fatalf("results=%d counts=%#v", len(audit.Results), audit.PolicyCounts)
 	}
 	for i := 1; i < len(audit.Results); i++ {
 		if audit.Results[i-1].PolicyID > audit.Results[i].PolicyID {
 			t.Fatal("policy output is not deterministic")
+		}
+	}
+}
+
+func TestDependencyPoliciesAreIndependentAndFailClosed(t *testing.T) {
+	enabled := true
+	cfg := config.Default()
+	cfg.Organization = "example"
+	cfg.Policies.Dependencies = config.DependenciesPolicy{
+		DependencyGraph:           &enabled,
+		DependabotAlerts:          &enabled,
+		DependabotSecurityUpdates: &enabled,
+	}
+	repository := model.Repository{
+		FullName:                  "example/repo",
+		DependencyGraph:           model.Observed[bool]{State: model.Available, Value: true, Source: "sbom"},
+		DependabotAlerts:          model.Observed[bool]{State: model.Available, Value: false, Source: "alerts"},
+		DependabotSecurityUpdates: model.Observed[bool]{State: model.Unknown, Reason: "permission"},
+	}
+	audit := New(cfg, time.Now()).Evaluate(model.Inventory{
+		Organization: "example", Complete: true, Repositories: []model.Repository{repository},
+	})
+	statuses := map[string]model.PolicyStatus{}
+	for _, result := range audit.Results {
+		statuses[result.PolicyID] = result.Status
+	}
+	for _, test := range []struct {
+		id   string
+		want model.PolicyStatus
+	}{
+		{id: "dependencies.dependency_graph", want: model.PolicyPass},
+		{id: "dependencies.dependabot_alerts", want: model.PolicyFail},
+		{id: "dependencies.dependabot_security_updates", want: model.PolicyUnknown},
+	} {
+		if got := statuses[test.id]; got != test.want {
+			t.Errorf("%s status = %s, want %s", test.id, got, test.want)
 		}
 	}
 }

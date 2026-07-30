@@ -28,8 +28,8 @@ jobs:
           aqua_version: v2.62.1
       - name: Validate configuration
         run: |
-          go run ./cmd/segh --config segh.example.yaml validate
-          go run ./cmd/segh --config config/organization.yaml validate
+          go run ./cmd/segh audit --config segh.example.yaml --validate-only
+          go run ./cmd/segh audit --config config/organization.yaml --validate-only
           jq empty schema/*.json config/*.json renovate.json aqua-checksums.json
       - name: Check formatting
         run: |

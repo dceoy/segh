@@ -1,29 +1,28 @@
 name: PR security
 
 on:
-  pull_request:
-  merge_group:
+  pull_request_target:
 
 permissions:
   contents: read
 
 jobs:
-  scan:
-    # Organization rulesets run this workflow in target repositories, pinned
-    # to a dceoy/segh commit (github.workflow_sha) that a target repository's
-    # pull request cannot influence. The source repository's own enforcement
-    # runs in the separate pr-security-self.yml instead: a pull_request_target
-    # workflow whose definition always comes from the base branch, so a pull
-    # request here cannot weaken the job that scans it, and whose trigger is
-    # not declared here, so a pull_request run on the source repository never
-    # emits a skippable scan-self check on the pull request's head commit.
-    # Keep this job's scanner and enforcement steps in sync with scan-self's.
-    # merge_group is required so this workflow, once installed as an
-    # organization ruleset required workflow, still produces the check a
-    # target repository's merge queue needs to complete a queued merge;
-    # without it, GitHub never creates "PR security / scan" for the
-    # merge-group commit and the queue entry can never pass.
-    if: github.repository != 'dceoy/segh' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+  scan-self:
+    # pull_request_target sources this job's definition from the base branch
+    # (never from the pull request's proposed changes), so editing this file
+    # in a pull request cannot disable or weaken the checks that run against
+    # that same pull request. Declaring pull_request_target as this file's
+    # only trigger (instead of alongside pull_request in pr-security.yml)
+    # means an ordinary pull_request run on the source repository never
+    # creates a skipped scan-self job on the pull request's head commit,
+    # which would otherwise satisfy a required "scan-self" check trivially.
+    # The pull request's content is checked out strictly as scan input
+    # below: no secrets are exposed to it, and nothing from it is executed,
+    # only statically analyzed. This property is structural and cannot be
+    # exercised by a pull request against itself; it takes effect once this
+    # job definition is on the base branch. Keep this job's scanner and
+    # enforcement steps in sync with pr-security.yml's scan job.
+    if: github.repository == 'dceoy/segh'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -32,28 +31,26 @@ jobs:
       - name: Check out trusted scanner configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: dceoy/segh
-          # pull_request (unlike pull_request_target) runs the workflow
-          # version proposed by the pull request itself. For a same-repository
-          # pull request, github.workflow_sha can therefore resolve to that
-          # proposal, so a pull request that edits this scanner configuration
-          # must not be allowed to also supply its own "trusted" checkout.
-          # Pin to the pre-pull-request base commit here instead; target
-          # repositories keep github.workflow_sha, which always names a
-          # dceoy/segh commit unrelated to the repository being scanned.
-          ref: ${{ github.repository == 'dceoy/segh' && github.event.pull_request.base.sha || github.workflow_sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           path: _segh
           persist-credentials: false
       - name: Check out pull request
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # merge_group has no github.event.pull_request; scan the merge
-          # group's own head SHA instead, the synthetic commit the queue is
-          # about to merge (which may combine more than one queued pull
-          # request), since that is the actual untrusted content in play.
+          # merge_group never triggers this pull_request_target-only
+          # workflow; kept identical to scan's ref expression so the two
+          # jobs' checkout inputs stay in sync (see
+          # TestPRSecurityScanAndScanSelfStepsStayInSync).
           ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.event.pull_request.head.sha }}
           path: _target
           persist-credentials: false
+          # This pull_request_target job never exposes secrets or executes
+          # anything from the checked-out tree; it only runs static
+          # analysis over it as scanner input. actions/checkout v7 refuses
+          # to check out a fork PR's head SHA under pull_request_target by
+          # default, so fork contributions would otherwise never reach the
+          # scanners below.
+          allow-unsafe-pr-checkout: true
       - name: Install checksum-verified scanners
         uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49 # v4.0.5
         with:
@@ -221,40 +218,62 @@ jobs:
           done
           exit "$failed"
 
-  scorecard:
-    # Scorecard is evidence only. Its action has platform limitations for some
-    # private repositories, so rulesets must not require this job. Gated to
-    # pull_request only so it doesn't double-run now that pull_request_target
-    # is also a workflow trigger.
-    if: github.repository != 'dceoy/segh' && github.event_name == 'pull_request'
-    continue-on-error: true
+  publish-self-check:
+    # GITHUB_SHA for pull_request_target is the base branch's commit, not the
+    # pull request's head, so the check run GitHub creates automatically for
+    # scan-self does not attach to the commit branch protection evaluates.
+    # This job runs after scan-self completes (so its single-shot result is
+    # already known) and publishes an explicit check run pinned to
+    # github.event.pull_request.head.sha, so the gate can actually be
+    # required for this repository. It never checks out or runs anything
+    # from pull-request content.
+    #
+    # It must not publish with github.token: that token's identity is the
+    # shared default "GitHub Actions" App, indistinguishable from the token
+    # any other workflow in this repository also gets. A same-repository
+    # pull request can add an ordinary pull_request-triggered job with
+    # checks:write and forge a successful "segh source scan (head commit)"
+    # run on its own head SHA with that same identity, and repository
+    # secrets are no protection either: pull_request (unlike pull_request_target)
+    # exposes them to same-repository pull requests too. The publisher
+    # identity instead comes from a dedicated GitHub App token minted here,
+    # gated by the self-scan-publisher environment's deployment-branch policy
+    # (restricted to the base branch only). pull_request_target runs with
+    # github.ref set to that base branch, so this job can obtain the
+    # environment secrets; an ordinary pull_request job runs against an
+    # ephemeral merge ref that never matches the policy, so GitHub refuses it
+    # the same secrets before it can mint a token. Require the published
+    # check to come from this dedicated App's ID, not just its name, so a
+    # forged same-named check from the default App identity cannot satisfy
+    # it either. See docs/workflows.md for the one-time rollout steps this
+    # depends on (App creation, environment policy, required-check App
+    # pinning).
+    needs: scan-self
+    if: always() && needs.scan-self.result != 'skipped'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    environment: self-scan-publisher
     permissions:
-      checks: read
       contents: read
-      issues: read
-      pull-requests: read
     steps:
-      - name: Check out pull request
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create dedicated publisher App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-      - name: Prepare Scorecard output
-        run: mkdir -p security-results
-      - name: Run OpenSSF Scorecard
-        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
-        with:
-          results_file: security-results/scorecard.json
-          results_format: json
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_results: false
-      - name: Retain Scorecard report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pr-security-scorecard
-          path: security-results/scorecard.json
-          if-no-files-found: warn
-          retention-days: 14
+          app-id: ${{ secrets.SEGH_SCAN_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY }}
+          permission-checks: write
+          permission-metadata: read
+      - name: Publish the gate result on the pull request's head commit
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          conclusion=failure
+          if [[ "${{ needs.scan-self.result }}" == "success" ]]; then
+            conclusion=success
+          fi
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f "name=segh source scan (head commit)" \
+            -f "head_sha=${{ github.event.pull_request.head.sha }}" \
+            -f "status=completed" \
+            -f "conclusion=$conclusion"

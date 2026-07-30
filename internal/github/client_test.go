@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/dceoy/segh/internal/config"
 )
 
 func TestClientUsesHostnameAndAPIVersionHeaderPerRequest(t *testing.T) {
@@ -26,11 +24,9 @@ func TestClientUsesHostnameAndAPIVersionHeaderPerRequest(t *testing.T) {
 	argsPath := filepath.Join(dir, "args")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GH_TOKEN", "test-token")
+	t.Setenv("GH_HOST", "GitHub.Example")
 	t.Setenv("GH_TEST_ARGS", argsPath)
-	cfg := config.Default()
-	cfg.Organization = "org"
-	cfg.GitHub.WebURL = "https://github.example"
-	client, err := NewClient(cfg)
+	client, err := NewClient()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,11 +44,78 @@ func TestClientUsesHostnameAndAPIVersionHeaderPerRequest(t *testing.T) {
 	) {
 		t.Fatalf("args = %q", args)
 	}
-	if strings.Contains(string(args), "--paginate") || strings.Contains(string(args), "--slurp") {
-		t.Fatalf("args = %q, want no CLI-side pagination since pages are decoded individually", args)
+	if client.Hostname() != "github.example" {
+		t.Fatalf("hostname = %q", client.Hostname())
 	}
 	if len(page) != 1 {
 		t.Fatalf("page = %#v", page)
+	}
+}
+
+func TestClientUsesGitHubCLIPaginationForOrganizationCollections(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "gh")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$GH_TEST_ARGS\"\nprintf '%s' '[[{\"repository_id\":1}]]'\n"
+	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G302 -- this temporary test fixture must be executable.
+	if err := os.Chmod(script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(dir, "args")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GH_TOKEN", "test-token")
+	t.Setenv("GH_HOST", "")
+	t.Setenv("GH_TEST_ARGS", argsPath)
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values []customPropertyRepository
+	if err := client.GetAll(context.Background(), "/orgs/org/properties/values?per_page=100", &values); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsPath) // #nosec G304 -- argsPath is created inside this test's unique temporary directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "--paginate --slurp /orgs/org/properties/values?per_page=100") {
+		t.Fatalf("args = %q", args)
+	}
+	if client.Hostname() != "github.com" || len(values) != 1 {
+		t.Fatalf("hostname = %q, values = %#v", client.Hostname(), values)
+	}
+}
+
+func TestClientSuppressesUnusedResponseBodies(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "gh")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$GH_TEST_ARGS\"\nprintf '%s' '{\"unused\":\"response\"}'\n"
+	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G302 -- this temporary test fixture must be executable.
+	if err := os.Chmod(script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(dir, "args")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GH_TOKEN", "test-token")
+	t.Setenv("GH_TEST_ARGS", argsPath)
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Get(context.Background(), "/repos/org/repo/dependency-graph/sbom", nil); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsPath) // #nosec G304 -- argsPath is inside this test's temporary directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "--silent /repos/org/repo/dependency-graph/sbom") {
+		t.Fatalf("args = %q", args)
 	}
 }
 
@@ -68,9 +131,7 @@ func TestClientMapsGitHubCLIHTTPError(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GH_TOKEN", "test-token")
-	cfg := config.Default()
-	cfg.Organization = "org"
-	client, err := NewClient(cfg)
+	client, err := NewClient()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,9 +167,7 @@ printf '%s' '{"ok":true}'
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GH_TOKEN", "test-token")
 	t.Setenv("GH_TEST_COUNT", countPath)
-	cfg := config.Default()
-	cfg.Organization = "org"
-	client, err := NewClient(cfg)
+	client, err := NewClient()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,9 +209,7 @@ exit 1
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GH_TOKEN", "test-token")
 	t.Setenv("GH_TEST_COUNT", countPath)
-	cfg := config.Default()
-	cfg.Organization = "org"
-	client, err := NewClient(cfg)
+	client, err := NewClient()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,9 +262,7 @@ func TestRetryDelayUsesRateLimitFloor(t *testing.T) {
 
 func TestClientRequiresExternalToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
-	cfg := config.Default()
-	cfg.Organization = "org"
-	if _, err := NewClient(cfg); err == nil {
+	if _, err := NewClient(); err == nil {
 		t.Fatal("expected GH_TOKEN requirement")
 	}
 }

@@ -22,10 +22,14 @@ func New(cfg config.Config, now time.Time) *Evaluator {
 
 func (e *Evaluator) Evaluate(inventory model.Inventory) model.Audit {
 	audit := model.Audit{
-		SchemaVersion: model.PolicySchemaVersion,
+		SchemaVersion: model.SchemaVersion,
 		Organization:  inventory.Organization,
 		GeneratedAt:   e.now,
-		Counts:        map[string]int{},
+		RepositoryCounts: model.RepositoryCounts{
+			Total: inventory.Total, Selected: inventory.Selected, Excluded: inventory.Excluded,
+		},
+		PolicyCounts: map[string]int{},
+		Coverage:     "complete",
 	}
 	for _, repo := range inventory.Repositories {
 		results := e.repository(repo)
@@ -42,7 +46,10 @@ func (e *Evaluator) Evaluate(inventory model.Inventory) model.Audit {
 		return audit.Results[i].PolicyID < audit.Results[j].PolicyID
 	})
 	for _, result := range audit.Results {
-		audit.Counts[string(result.Status)]++
+		audit.PolicyCounts[string(result.Status)]++
+	}
+	if !inventory.Complete || Partial(audit) {
+		audit.Coverage = "partial"
 	}
 	return audit
 }
@@ -71,26 +78,19 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 			"Configure fork pull-request workflow approval in the repository or organization Actions settings."))
 	}
 
-	code := e.cfg.Policies.CodeSecurity
-	if code.Configuration != "" {
-		results = append(results, observed(repo.FullName, "code_security.configuration", "high", repo.CodeSecurityConfiguration, code.Configuration,
-			"Assign the expected GitHub Code Security Configuration at organization scope."))
-	}
+	dependencies := e.cfg.Policies.Dependencies
 	for _, check := range []struct {
+		expected    *bool
 		id          string
-		expected    string
 		observed    model.Observed[bool]
 		remediation string
 	}{
-		{"code_security.codeql", code.CodeQL, repo.CodeQL, "Enable CodeQL default setup through the assigned Code Security Configuration."},
-		{"code_security.secret_scanning", code.SecretScanning, repo.SecretScanning, "Enable secret scanning through GitHub Code Security Configuration."},
-		{"code_security.push_protection", code.PushProtection, repo.PushProtection, "Enable push protection through GitHub Code Security Configuration."},
-		{"code_security.dependency_graph", code.DependencyGraph, repo.DependencyGraph, "Enable the dependency graph in GitHub repository security settings."},
-		{"code_security.dependabot_alerts", code.DependabotAlerts, repo.DependabotAlerts, "Enable Dependabot alerts through GitHub repository or organization security settings."},
-		{"code_security.dependabot_security_updates", code.DependabotUpdates, repo.DependabotSecurityUpdates, "Enable Dependabot security updates through GitHub-native settings."},
+		{dependencies.DependencyGraph, "dependencies.dependency_graph", repo.DependencyGraph, "Enable the dependency graph for the repository."},
+		{dependencies.DependabotAlerts, "dependencies.dependabot_alerts", repo.DependabotAlerts, "Enable Dependabot alerts for the repository."},
+		{dependencies.DependabotSecurityUpdates, "dependencies.dependabot_security_updates", repo.DependabotSecurityUpdates, "Enable Dependabot security updates for the repository."},
 	} {
-		if check.expected != "" {
-			results = append(results, observed(repo.FullName, check.id, "high", check.observed, check.expected == "required", check.remediation))
+		if check.expected != nil {
+			results = append(results, observed(repo.FullName, check.id, "high", check.observed, *check.expected, check.remediation))
 		}
 	}
 
@@ -226,9 +226,10 @@ func repositoryMatches(pattern, repository string) bool {
 }
 
 func Violations(audit model.Audit) bool {
-	return audit.Counts[string(model.PolicyFail)] > 0
+	return audit.PolicyCounts[string(model.PolicyFail)] > 0
 }
 
 func Partial(audit model.Audit) bool {
-	return audit.Counts[string(model.PolicyUnknown)] > 0 || audit.Counts[string(model.PolicyUnsupported)] > 0
+	return audit.PolicyCounts[string(model.PolicyUnknown)] > 0 ||
+		audit.PolicyCounts[string(model.PolicyUnsupported)] > 0
 }
