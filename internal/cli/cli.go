@@ -72,7 +72,7 @@ func ExitCode(err error) int {
 func runAudit(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("segh audit", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	configPath := flags.String("config", "segh.yaml", "path to strict version 3 configuration")
+	configPath := flags.String("config", "segh.yaml", "path to strict version 4 configuration")
 	validateOnly := flags.Bool("validate-only", false, "validate configuration without GitHub credentials")
 	inventoryPath := flags.String("inventory-output", defaultInventoryOutput, "inventory JSON output")
 	auditPath := flags.String("audit-output", defaultAuditOutput, "audit JSON output")

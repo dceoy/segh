@@ -45,7 +45,7 @@ type Selectors struct {
 
 type Policies struct {
 	Actions      ActionsPolicy      `yaml:"actions"`
-	CodeSecurity CodeSecurityPolicy `yaml:"code_security"`
+	Dependencies DependenciesPolicy `yaml:"dependencies"`
 	Repository   RepositoryPolicy   `yaml:"repository"`
 }
 
@@ -57,9 +57,10 @@ type ActionsPolicy struct {
 	RequireForkPRApproval        *bool  `yaml:"require_fork_pr_approval"`
 }
 
-type CodeSecurityPolicy struct {
-	Configuration string `yaml:"configuration"`
-	present       bool
+type DependenciesPolicy struct {
+	DependencyGraph           *bool `yaml:"dependency_graph"`
+	DependabotAlerts          *bool `yaml:"dependabot_alerts"`
+	DependabotSecurityUpdates *bool `yaml:"dependabot_security_updates"`
 }
 
 type RepositoryPolicy struct {
@@ -78,7 +79,7 @@ type RepositoryPolicy struct {
 
 func Default() Config {
 	return Config{
-		Version: 3,
+		Version: 4,
 		Inventory: Inventory{
 			Concurrency: 4,
 			Timeout:     Duration(30 * time.Minute),
@@ -111,7 +112,7 @@ func Load(configPath string) (Config, error) {
 	} else if !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
-	if err := rejectNullPolicySections(data); err != nil {
+	if err := rejectNullValues(data); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -122,17 +123,14 @@ func Load(configPath string) (Config, error) {
 
 func (c Config) Validate() error {
 	var errs []error
-	if c.Version != 3 {
-		errs = append(errs, fmt.Errorf("version must be 3"))
+	if c.Version != 4 {
+		errs = append(errs, fmt.Errorf("version must be 4"))
 	}
 	if c.Organization == "" {
 		errs = append(errs, fmt.Errorf("organization is required"))
 	}
 	if !c.Policies.configured() {
 		errs = append(errs, fmt.Errorf("at least one policy must be configured"))
-	}
-	if c.Policies.CodeSecurity.present && c.Policies.CodeSecurity.Configuration == "" {
-		errs = append(errs, fmt.Errorf("policies.code_security.configuration is required"))
 	}
 	if c.Inventory.Concurrency < 1 || c.Inventory.Concurrency > 64 {
 		errs = append(errs, fmt.Errorf("inventory.concurrency must be between 1 and 64"))
@@ -197,56 +195,40 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-func (p *CodeSecurityPolicy) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("code security policy must be an object")
+// rejectNullValues re-parses the raw document because yaml.v3 maps explicit
+// nulls to Go zero values. The JSON schema permits null nowhere, so accepting a
+// direct, bare, or aliased null would make runtime validation weaker than the
+// published contract.
+func rejectNullValues(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("decode config node tree: %w", err)
 	}
-	for i := 0; i < len(node.Content); i += 2 {
-		if key := node.Content[i].Value; key != "configuration" {
-			return fmt.Errorf("field %s not found in type config.CodeSecurityPolicy", key)
-		}
+	if len(doc.Content) == 0 {
+		return nil
 	}
-	type plain CodeSecurityPolicy
-	var decoded plain
-	if err := node.Decode(&decoded); err != nil {
-		return err
+	if containsNull(&doc) {
+		return fmt.Errorf("configuration must not contain null values")
 	}
-	*p = CodeSecurityPolicy(decoded)
-	p.present = true
 	return nil
 }
 
-// rejectNullPolicySections re-parses the raw document because struct
-// decoding discards node kinds: yaml.v3 leaves the field zero-valued for an
-// explicit null instead of invoking its UnmarshalYAML.
-func rejectNullPolicySections(data []byte) error {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
-		return nil
+func containsNull(node *yaml.Node) bool {
+	if node == nil {
+		return false
 	}
-	root := doc.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return nil
+	if node.Tag == "!!null" {
+		return true
 	}
-	for i := 0; i < len(root.Content); i += 2 {
-		if root.Content[i].Value != "policies" {
-			continue
-		}
-		policies := root.Content[i+1]
-		if policies.Kind != yaml.MappingNode {
-			return nil
-		}
-		for j := 0; j < len(policies.Content); j += 2 {
-			key := policies.Content[j].Value
-			switch key {
-			case "actions", "code_security", "repository":
-				if policies.Content[j+1].Tag == "!!null" {
-					return fmt.Errorf("policies.%s must be an object, not null", key)
-				}
-			}
+	if node.Kind == yaml.AliasNode {
+		return containsNull(node.Alias)
+	}
+	for _, child := range node.Content {
+		if containsNull(child) {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 func firstDuplicate(values []string) (string, bool) {
@@ -266,7 +248,9 @@ func (p Policies) configured() bool {
 		actions.RequireSHAPinningEnforcement || actions.RequireForkPRApproval != nil {
 		return true
 	}
-	if p.CodeSecurity.Configuration != "" {
+	dependencies := p.Dependencies
+	if dependencies.DependencyGraph != nil || dependencies.DependabotAlerts != nil ||
+		dependencies.DependabotSecurityUpdates != nil {
 		return true
 	}
 	repository := p.Repository

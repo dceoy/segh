@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 type Availability string
 
@@ -38,37 +38,33 @@ type RepositoryExclusion struct {
 	Reason     string `json:"reason"`
 }
 
-type CodeSecurityAttachment struct {
-	ConfigurationID   int64  `json:"configuration_id"`
-	ConfigurationName string `json:"configuration_name"`
-	Status            string `json:"status"`
-}
-
 type Repository struct {
-	ID                         int64                             `json:"id"`
-	FullName                   string                            `json:"full_name"`
-	HTMLURL                    string                            `json:"html_url,omitempty"`
-	Visibility                 string                            `json:"visibility"`
-	Archived                   bool                              `json:"archived"`
-	Disabled                   bool                              `json:"disabled"`
-	Fork                       bool                              `json:"fork"`
-	Template                   bool                              `json:"template"`
-	DefaultBranch              string                            `json:"default_branch"`
-	Topics                     []string                          `json:"topics,omitempty"`
-	CustomProperties           Observed[map[string]any]          `json:"custom_properties"`
-	ActionsEnabled             Observed[bool]                    `json:"actions_enabled"`
-	AllowedActions             Observed[string]                  `json:"allowed_actions"`
-	DefaultWorkflowPermissions Observed[string]                  `json:"default_workflow_permissions"`
-	ForkPRApproval             Observed[bool]                    `json:"fork_pr_approval"`
-	Ruleset                    Observed[bool]                    `json:"ruleset"`
-	BranchProtection           Observed[bool]                    `json:"branch_protection"`
-	RequiredPullRequests       Observed[bool]                    `json:"required_pull_requests"`
-	RequiredChecks             Observed[bool]                    `json:"required_checks"`
-	ForcePushRestricted        Observed[bool]                    `json:"force_push_restricted"`
-	DeletionRestricted         Observed[bool]                    `json:"deletion_restricted"`
-	CodeSecurityConfiguration  *Observed[CodeSecurityAttachment] `json:"code_security_configuration,omitempty"`
-	SecurityMD                 Observed[bool]                    `json:"security_md"`
-	SHAPinningEnforced         Observed[bool]                    `json:"sha_pinning_enforced"`
+	ID                         int64                    `json:"id"`
+	FullName                   string                   `json:"full_name"`
+	HTMLURL                    string                   `json:"html_url,omitempty"`
+	Visibility                 string                   `json:"visibility"`
+	Archived                   bool                     `json:"archived"`
+	Disabled                   bool                     `json:"disabled"`
+	Fork                       bool                     `json:"fork"`
+	Template                   bool                     `json:"template"`
+	DefaultBranch              string                   `json:"default_branch"`
+	Topics                     []string                 `json:"topics,omitempty"`
+	CustomProperties           Observed[map[string]any] `json:"custom_properties"`
+	ActionsEnabled             Observed[bool]           `json:"actions_enabled"`
+	AllowedActions             Observed[string]         `json:"allowed_actions"`
+	DefaultWorkflowPermissions Observed[string]         `json:"default_workflow_permissions"`
+	ForkPRApproval             Observed[bool]           `json:"fork_pr_approval"`
+	DependencyGraph            Observed[bool]           `json:"dependency_graph"`
+	DependabotAlerts           Observed[bool]           `json:"dependabot_alerts"`
+	DependabotSecurityUpdates  Observed[bool]           `json:"dependabot_security_updates"`
+	Ruleset                    Observed[bool]           `json:"ruleset"`
+	BranchProtection           Observed[bool]           `json:"branch_protection"`
+	RequiredPullRequests       Observed[bool]           `json:"required_pull_requests"`
+	RequiredChecks             Observed[bool]           `json:"required_checks"`
+	ForcePushRestricted        Observed[bool]           `json:"force_push_restricted"`
+	DeletionRestricted         Observed[bool]           `json:"deletion_restricted"`
+	SecurityMD                 Observed[bool]           `json:"security_md"`
+	SHAPinningEnforced         Observed[bool]           `json:"sha_pinning_enforced"`
 }
 
 type PolicyStatus string

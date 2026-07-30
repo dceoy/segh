@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/dceoy/segh/schema/segh-config-v3.schema.json",
-  "title": "segh governance configuration v3",
+  "$id": "https://github.com/dceoy/segh/schema/segh-config-v4.schema.json",
+  "title": "segh governance configuration v4",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "organization", "policies"],
   "properties": {
-    "version": {"const": 3},
+    "version": {"const": 4},
     "organization": {"type": "string", "minLength": 1},
     "inventory": {
       "type": "object",
@@ -40,8 +40,8 @@
           "properties": {"actions": {"$ref": "#/$defs/configuredActionsPolicy"}}
         },
         {
-          "required": ["code_security"],
-          "properties": {"code_security": {"$ref": "#/$defs/configuredCodeSecurityPolicy"}}
+          "required": ["dependencies"],
+          "properties": {"dependencies": {"$ref": "#/$defs/configuredDependenciesPolicy"}}
         },
         {
           "required": ["repository"],
@@ -60,12 +60,13 @@
             "require_fork_pr_approval": {"type": "boolean"}
           }
         },
-        "code_security": {
+        "dependencies": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["configuration"],
           "properties": {
-            "configuration": {"type": "string", "minLength": 1}
+            "dependency_graph": {"type": "boolean"},
+            "dependabot_alerts": {"type": "boolean"},
+            "dependabot_security_updates": {"type": "boolean"}
           }
         },
         "repository": {
@@ -125,11 +126,12 @@
         }
       ]
     },
-    "configuredCodeSecurityPolicy": {
-      "required": ["configuration"],
-      "properties": {
-        "configuration": {"type": "string", "minLength": 1}
-      }
+    "configuredDependenciesPolicy": {
+      "anyOf": [
+        {"required": ["dependency_graph"]},
+        {"required": ["dependabot_alerts"]},
+        {"required": ["dependabot_security_updates"]}
+      ]
     },
     "configuredRepositoryPolicy": {
       "anyOf": [

@@ -1,4 +1,4 @@
-version: 3
+version: 4
 organization: example-org
 
 inventory:
@@ -23,8 +23,10 @@ policies:
     default_workflow_permissions: read
     require_sha_pinning_enforcement: false
     require_fork_pr_approval: true
-  code_security:
-    configuration: Organization default
+  dependencies:
+    dependency_graph: true
+    dependabot_alerts: true
+    dependabot_security_updates: true
   repository:
     require_ruleset: true
     require_branch_protection: true

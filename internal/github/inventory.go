@@ -98,15 +98,6 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 			Message: "organization custom-property coverage is incomplete: " + customPropertiesErr.Error(),
 		})
 	}
-	codeSecurity, codeSecurityErr := s.codeSecurityAttachments(ctx, repos)
-	if codeSecurityErr != nil {
-		inventory.Complete = false
-		inventory.Errors = append(inventory.Errors, model.RunError{
-			Component: "code_security", Kind: "configuration_associations",
-			Message: "code security configuration coverage is incomplete: " + codeSecurityErr.Error(),
-		})
-	}
-
 	concurrency := s.cfg.Inventory.Concurrency
 	jobs := make(chan apiRepository)
 	results := make(chan model.Repository, len(repos))
@@ -116,7 +107,7 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		go func() {
 			defer workers.Done()
 			for repo := range jobs {
-				results <- s.enrich(ctx, repo, customProperties[repo.ID], codeSecurity[repo.ID])
+				results <- s.enrich(ctx, repo, customProperties[repo.ID])
 			}
 		}()
 	}
@@ -180,11 +171,6 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		if customPropertiesErr != nil && len(s.cfg.Selectors.CustomProperties) > 0 {
 			runErrs = append(runErrs, fmt.Errorf(
 				"collect organization custom properties: %w", customPropertiesErr,
-			))
-		}
-		if codeSecurityErr != nil {
-			runErrs = append(runErrs, fmt.Errorf(
-				"collect code security configuration associations: %w", codeSecurityErr,
 			))
 		}
 		return inventory, errors.Join(runErrs...)
@@ -371,132 +357,6 @@ func unavailableCustomProperties(
 	return observations
 }
 
-type apiCodeSecurityConfiguration struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-}
-
-type codeSecurityAssociation struct {
-	Status     string `json:"status"`
-	Repository struct {
-		Value struct {
-			ID       int64  `json:"id"`
-			FullName string `json:"full_name"`
-		} `json:"value"`
-	} `json:"repository"`
-}
-
-func (s *InventoryService) codeSecurityAttachments(
-	ctx context.Context, repos []apiRepository,
-) (map[int64]*model.Observed[model.CodeSecurityAttachment], error) {
-	if s.cfg.Policies.CodeSecurity.Configuration == "" {
-		return nil, nil
-	}
-	configuration, err := s.resolveCodeSecurityConfiguration(ctx)
-	if err != nil {
-		return unavailableCodeSecurity(repos, err), err
-	}
-	var response []codeSecurityAssociation
-	apiPath := fmt.Sprintf(
-		"/orgs/%s/code-security/configurations/%d/repositories?per_page=100&status=all",
-		pathEscape(s.cfg.Organization), configuration.ID,
-	)
-	if err := s.client.GetAll(ctx, apiPath, &response); err != nil {
-		return unavailableCodeSecurity(repos, err), err
-	}
-	byID, err := repositoryIndex(repos)
-	if err != nil {
-		return unavailableCodeSecurity(repos, err), err
-	}
-	observations := make(map[int64]*model.Observed[model.CodeSecurityAttachment], len(repos))
-	for _, item := range response {
-		repo, ok := byID[item.Repository.Value.ID]
-		if !ok || repo.FullName != item.Repository.Value.FullName {
-			err := fmt.Errorf("code security association does not match an enumerated repository")
-			return unavailableCodeSecurity(repos, err), err
-		}
-		if _, duplicate := observations[item.Repository.Value.ID]; duplicate {
-			err := fmt.Errorf("duplicate code security repository association")
-			return unavailableCodeSecurity(repos, err), err
-		}
-		attachment := model.CodeSecurityAttachment{
-			ConfigurationID: configuration.ID, ConfigurationName: configuration.Name, Status: item.Status,
-		}
-		switch item.Status {
-		case "attached", "enforced", "failed", "detached", "removed", "removed_by_enterprise":
-			observations[item.Repository.Value.ID] = &model.Observed[model.CodeSecurityAttachment]{
-				State: model.Available, Value: attachment, Source: "code_security_configuration_associations",
-			}
-		case "attaching", "updating":
-			observations[item.Repository.Value.ID] = &model.Observed[model.CodeSecurityAttachment]{
-				State: model.Unknown, Value: attachment, Source: "code_security_configuration_associations",
-				Reason: "transitional attachment status " + item.Status,
-			}
-		default:
-			err := fmt.Errorf("unknown code security attachment status %q", item.Status)
-			return unavailableCodeSecurity(repos, err), err
-		}
-	}
-	for _, repo := range repos {
-		if _, ok := observations[repo.ID]; ok {
-			continue
-		}
-		observations[repo.ID] = &model.Observed[model.CodeSecurityAttachment]{
-			State: model.Available,
-			Value: model.CodeSecurityAttachment{
-				ConfigurationID: configuration.ID, ConfigurationName: configuration.Name, Status: "detached",
-			},
-			Source: "code_security_configuration_associations",
-			Reason: "repository is not associated with the approved configuration",
-		}
-	}
-	return observations, nil
-}
-
-func (s *InventoryService) resolveCodeSecurityConfiguration(
-	ctx context.Context,
-) (apiCodeSecurityConfiguration, error) {
-	var configurations []apiCodeSecurityConfiguration
-	apiPath := fmt.Sprintf(
-		"/orgs/%s/code-security/configurations?per_page=100&target_type=all",
-		pathEscape(s.cfg.Organization),
-	)
-	if err := s.client.GetAll(ctx, apiPath, &configurations); err != nil {
-		return apiCodeSecurityConfiguration{}, err
-	}
-	requirement := s.cfg.Policies.CodeSecurity.Configuration
-	seen := make(map[int64]bool, len(configurations))
-	var matches []apiCodeSecurityConfiguration
-	for _, configuration := range configurations {
-		if configuration.ID <= 0 || configuration.Name == "" || seen[configuration.ID] {
-			return apiCodeSecurityConfiguration{}, fmt.Errorf("malformed or duplicate code security configuration")
-		}
-		seen[configuration.ID] = true
-		if configuration.Name == requirement || fmt.Sprint(configuration.ID) == requirement {
-			matches = append(matches, configuration)
-		}
-	}
-	if len(matches) != 1 {
-		return apiCodeSecurityConfiguration{}, fmt.Errorf(
-			"code security configuration %q resolved to %d configurations", requirement, len(matches),
-		)
-	}
-	return matches[0], nil
-}
-
-func unavailableCodeSecurity(
-	repos []apiRepository, err error,
-) map[int64]*model.Observed[model.CodeSecurityAttachment] {
-	state, reason := ErrorState(err)
-	observations := make(map[int64]*model.Observed[model.CodeSecurityAttachment], len(repos))
-	for _, repo := range repos {
-		observations[repo.ID] = &model.Observed[model.CodeSecurityAttachment]{
-			State: model.Availability(state), Source: "code_security_configuration_associations", Reason: reason,
-		}
-	}
-	return observations
-}
-
 func repositoryIndex(repos []apiRepository) (map[int64]apiRepository, error) {
 	byID := make(map[int64]apiRepository, len(repos))
 	names := make(map[string]bool, len(repos))
@@ -542,16 +402,21 @@ func (s *InventoryService) enrich(
 	ctx context.Context,
 	raw apiRepository,
 	customProperties model.Observed[map[string]any],
-	codeSecurity *model.Observed[model.CodeSecurityAttachment],
 ) model.Repository {
 	repo := repositoryFromAPI(raw)
 	repo.CustomProperties = customProperties
-	repo.CodeSecurityConfiguration = codeSecurity
 	base := "/repos/" + escapeFullName(raw.FullName)
 	s.collectActionsControls(ctx, base, &repo)
+	s.collectDependencyControls(ctx, base, &repo)
 	s.collectBranchGovernance(ctx, base, raw.DefaultBranch, &repo)
 	repo.SecurityMD = s.securityPolicyExists(ctx, base, raw.DefaultBranch)
 	return repo
+}
+
+func (s *InventoryService) collectDependencyControls(ctx context.Context, base string, repo *model.Repository) {
+	repo.DependencyGraph = s.probeEndpoint(ctx, base+"/dependency-graph/sbom", "dependency_graph/sbom", nil)
+	repo.DependabotAlerts = s.probeEndpoint(ctx, base+"/vulnerability-alerts", "vulnerability_alerts", nil)
+	repo.DependabotSecurityUpdates = s.probeEndpoint(ctx, base+"/automated-security-fixes", "automated_security_fixes", nil)
 }
 
 func repositoryFromAPI(raw apiRepository) model.Repository {

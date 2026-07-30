@@ -1,19 +1,17 @@
 # Remediation and settings ownership
 
-Policy results and the Markdown report include remediation guidance. `segh`
-never writes GitHub settings. Code Security Configurations,
-Actions policy, and branch governance belong to GitHub-native organization or
-enterprise controls.
+`segh` is read-only. Policy results identify the owning GitHub setting:
 
-Safe Settings is justified only when a required setting is not expressible
-through Code Security Configurations, organization/enterprise Actions policy,
-or organization rulesets, and when the organization accepts another privileged
-controller. Do not introduce Safe Settings merely to duplicate a native
-control. If adopted, keep a reviewed declarative repository, dry-run changes,
-narrow repository selectors, audit every mutation, and document rollback.
+- organization or enterprise Actions policy for Actions controls;
+- repository dependency settings for dependency graph and Dependabot;
+- organization rulesets, or classic branch protection where necessary, for
+  pull requests, required checks, force pushes, and deletion; and
+- repository or inherited community-health files for `SECURITY.md`.
 
-There is intentionally no settings `apply` mode in this version. Adding one
-requires a separate design with an explicit command flag, dry-run output,
-least-privilege write installation, immutable configuration revision, narrow
-selectors, audit log, approval boundary, and tested rollback. A scheduled audit
-must never silently become a settings mutation.
+Merge-time scanner findings are remediated in the pull-request branch. Full
+machine and human reports remain in the `pr-security-reports` artifact. A
+ruleset exception or policy suppression should be narrow, owned, justified, and
+time-bounded.
+
+Changes to scanner versions, thresholds, or exclusions belong in the protected
+central `segh` repository. Target pull requests cannot supply those settings.

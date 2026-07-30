@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestRepositoryUsesVersionThreeTypedCustomPropertyObservation(t *testing.T) {
+func TestRepositoryUsesVersionFourTypedObservations(t *testing.T) {
 	repository := Repository{
 		FullName: "example/repository",
 		CustomProperties: Observed[map[string]any]{
@@ -14,6 +14,9 @@ func TestRepositoryUsesVersionThreeTypedCustomPropertyObservation(t *testing.T) 
 			Value:  map[string]any{"tier": "critical", "teams": []string{"platform", "security"}},
 			Source: "organization_properties/values",
 		},
+		DependencyGraph:           Observed[bool]{State: Available, Value: true},
+		DependabotAlerts:          Observed[bool]{State: Available, Value: true},
+		DependabotSecurityUpdates: Observed[bool]{State: Available, Value: true},
 	}
 	data, err := json.Marshal(repository)
 	if err != nil {
@@ -23,7 +26,10 @@ func TestRepositoryUsesVersionThreeTypedCustomPropertyObservation(t *testing.T) 
 	if !strings.Contains(text, `"custom_properties":{"state":"available","value":{"teams":["platform","security"],"tier":"critical"},"source":"organization_properties/values"}`) {
 		t.Fatalf("repository JSON = %s", text)
 	}
-	for _, removed := range []string{`"capabilities"`, `"codeql"`, `"secret_scanning"`, `"dependabot_alerts"`} {
+	for _, removed := range []string{
+		`"capabilities"`, `"codeql"`, `"code_scanning"`, `"secret_scanning"`,
+		`"push_protection"`, `"code_security_configuration"`,
+	} {
 		if strings.Contains(text, removed) {
 			t.Fatalf("repository JSON retains removed field %s: %s", removed, text)
 		}

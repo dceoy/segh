@@ -6,7 +6,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,14 +18,14 @@ func TestLoadExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != 3 || cfg.Organization != "example-org" || cfg.Inventory.Concurrency != 4 {
+	if cfg.Version != 4 || cfg.Organization != "example-org" || cfg.Inventory.Concurrency != 4 {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
 }
 
 func TestLoadRejectsUnknownField(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 3\norganization: test\nsurprise: true\n"
+	data := "version: 4\norganization: test\nsurprise: true\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +36,7 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 
 func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n---\norganization: ignored\n"
+	data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n---\norganization: ignored\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +47,7 @@ func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
 
 func TestLoadRejectsUnboundedDuration(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 3\norganization: test\ninventory:\n  timeout: 999999999999999999999999999h\npolicies:\n  repository:\n    require_ruleset: true\n"
+	data := "version: 4\norganization: test\ninventory:\n  timeout: 999999999999999999999999999h\npolicies:\n  repository:\n    require_ruleset: true\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +58,7 @@ func TestLoadRejectsUnboundedDuration(t *testing.T) {
 
 func TestLoadRejectsMissingPolicies(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 3\norganization: test\n"
+	data := "version: 4\norganization: test\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -68,71 +67,51 @@ func TestLoadRejectsMissingPolicies(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsEmptyCodeSecurityPolicy(t *testing.T) {
-	for _, codeSecurity := range []string{
-		"{}",
-		"{configuration: \"\"}",
-	} {
-		configPath := filepath.Join(t.TempDir(), "segh.yaml")
-		data := "version: 3\norganization: test\npolicies:\n  code_security: " + codeSecurity +
-			"\n  repository:\n    require_ruleset: true\n"
-		if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := Load(configPath); err == nil ||
-			!strings.Contains(err.Error(), "policies.code_security.configuration is required") {
-			t.Fatalf("Load() = %v, want empty code-security policy error", err)
-		}
+func TestLoadRejectsRemovedCodeSecurityPolicy(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "segh.yaml")
+	data := "version: 4\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n"
+	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "field code_security not found") {
+		t.Fatalf("Load() = %v, want removed code-security field error", err)
 	}
 }
 
-func TestSchemaAndRuntimeRejectNullPolicySections(t *testing.T) {
-	schemaData, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v3.schema.json"))
+func TestSchemaAndRuntimeRejectNullValues(t *testing.T) {
+	schemaData, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var schema struct {
-		Properties struct {
-			Policies struct {
-				Properties map[string]struct {
-					Type string `json:"type"`
-				} `json:"properties"`
-			} `json:"policies"`
-		} `json:"properties"`
+	if strings.Contains(string(schemaData), `"null"`) {
+		t.Fatal("schema unexpectedly permits null values")
 	}
-	if err := json.Unmarshal(schemaData, &schema); err != nil {
-		t.Fatal(err)
-	}
-
 	for _, tc := range []struct {
-		section string
-		value   string // text after the colon, e.g. " null" or "" for a bare key
-		other   string
+		name string
+		data string
 	}{
-		{"actions", " null", "repository:\n    require_ruleset: true\n"},
-		{"code_security", " null", "repository:\n    require_ruleset: true\n"},
-		{"repository", " null", "actions:\n    enabled: true\n"},
-		{"code_security", "", "repository:\n    require_ruleset: true\n"}, // bare key: the shape a human types by accident
+		{"section", "version: 4\norganization: test\ninventory: null\npolicies:\n  repository:\n    require_ruleset: true\n"},
+		{"array", "version: 4\norganization: test\nselectors:\n  repositories: null\npolicies:\n  repository:\n    require_ruleset: true\n"},
+		{"nested scalar", "version: 4\norganization: test\npolicies:\n  actions:\n    enabled: null\n  repository:\n    require_ruleset: true\n"},
+		{"bare key", "version: 4\norganization: test\npolicies:\n  dependencies:\n  repository:\n    require_ruleset: true\n"},
+		{"alias", "version: 4\norganization: test\nselectors:\n  repositories: &empty null\npolicies:\n  actions:\n    enabled: *empty\n  repository:\n    require_ruleset: true\n"},
 	} {
-		if schemaType := schema.Properties.Policies.Properties[tc.section].Type; schemaType != "object" {
-			t.Fatalf("policies.%s schema type = %q, want object so null is not a valid type", tc.section, schemaType)
-		}
-
-		configPath := filepath.Join(t.TempDir(), "segh.yaml")
-		data := "version: 3\norganization: test\npolicies:\n  " + tc.section + ":" + tc.value + "\n  " + tc.other
-		if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		want := "policies." + tc.section + " must be an object, not null"
-		if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("Load() with %s: null = %v, want error containing %q", tc.section, err, want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "segh.yaml")
+			if err := os.WriteFile(configPath, []byte(tc.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(configPath); err == nil ||
+				!strings.Contains(err.Error(), "configuration must not contain null values") {
+				t.Fatalf("Load() = %v, want null-value error", err)
+			}
+		})
 	}
 }
 
 func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n"
+	data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +129,7 @@ func TestSchemaAndRuntimeRejectDuplicateArrayItems(t *testing.T) {
 		Ref         string `json:"$ref"`
 		UniqueItems bool   `json:"uniqueItems"`
 	}
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v3.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +222,7 @@ func TestSchemaAndRuntimeRejectDuplicateArrayItems(t *testing.T) {
 }
 
 func TestSchemaAllowsDefaultedNestedSections(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v3.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +242,7 @@ func TestSchemaAllowsDefaultedNestedSections(t *testing.T) {
 }
 
 func TestSchemaRequiresAnEffectivePolicy(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v3.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +265,7 @@ func TestSchemaRequiresAnEffectivePolicy(t *testing.T) {
 	if len(policies.AnyOf) != 3 {
 		t.Fatalf("policies schema must require one configured subsection, got %d alternatives", len(policies.AnyOf))
 	}
-	for _, section := range []string{"actions", "code_security", "repository"} {
+	for _, section := range []string{"actions", "dependencies", "repository"} {
 		found := false
 		for _, alternative := range policies.AnyOf {
 			if len(alternative.Required) == 1 && alternative.Required[0] == section && alternative.Properties[section] != nil {
@@ -298,27 +277,26 @@ func TestSchemaRequiresAnEffectivePolicy(t *testing.T) {
 			t.Errorf("policies schema does not require an effective %s subsection", section)
 		}
 	}
-	for _, name := range []string{"configuredActionsPolicy", "configuredRepositoryPolicy"} {
+	for _, name := range []string{"configuredActionsPolicy", "configuredDependenciesPolicy", "configuredRepositoryPolicy"} {
 		if len(schema.Definitions[name].AnyOf) == 0 {
 			t.Errorf("%s must define effective policy values", name)
 		}
 	}
-	if required := schema.Definitions["configuredCodeSecurityPolicy"].Required; !slices.Equal(required, []string{"configuration"}) {
-		t.Errorf("configuredCodeSecurityPolicy must require configuration, got %v", required)
-	}
 }
 
-func TestLoadRejectsVersionOneTwoAndRemovedRuntimeFields(t *testing.T) {
+func TestLoadRejectsPreviousVersionsAndRemovedRuntimeFields(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		data string
 		want string
 	}{
-		{"version 1", "version: 1\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "version must be 3"},
-		{"version 2", "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "version must be 3"},
-		{"github host", "version: 3\norganization: test\ngithub:\n  web_url: https://github.com\npolicies:\n  repository:\n    require_ruleset: true\n", "field github not found"},
-		{"output directory", "version: 3\norganization: test\noutput:\n  directory: results\npolicies:\n  repository:\n    require_ruleset: true\n", "field output not found"},
-		{"feature policy", "version: 3\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n    codeql: required\n", "field codeql not found"},
+		{"version 1", "version: 1\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "version must be 4"},
+		{"version 2", "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "version must be 4"},
+		{"version 3", "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "version must be 4"},
+		{"github host", "version: 4\norganization: test\ngithub:\n  web_url: https://github.com\npolicies:\n  repository:\n    require_ruleset: true\n", "field github not found"},
+		{"output directory", "version: 4\norganization: test\noutput:\n  directory: results\npolicies:\n  repository:\n    require_ruleset: true\n", "field output not found"},
+		{"code security policy", "version: 4\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n", "field code_security not found"},
+		{"CodeQL policy", "version: 4\norganization: test\npolicies:\n  dependencies:\n    codeql: true\n", "field codeql not found"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configPath := filepath.Join(t.TempDir(), "segh.yaml")
@@ -333,7 +311,7 @@ func TestLoadRejectsVersionOneTwoAndRemovedRuntimeFields(t *testing.T) {
 }
 
 func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v3.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +413,7 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 }
 
 func TestSchemaSuppressionRepositoryPatternMatchesRuntimeValidation(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v3.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

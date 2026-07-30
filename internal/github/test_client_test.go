@@ -65,6 +65,5 @@ func enrichForTest(service *InventoryService, repo apiRepository) model.Reposito
 		model.Observed[map[string]any]{
 			State: model.Available, Value: map[string]any{}, Source: "organization_properties/values",
 		},
-		nil,
 	)
 }

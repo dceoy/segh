@@ -173,63 +173,33 @@ func TestCustomPropertiesFailClosedOnIncompleteOrInconsistentOrganizationRespons
 	}
 }
 
-func TestCodeSecurityConfigurationResolutionAndAttachmentStates(t *testing.T) {
-	for _, test := range []struct {
-		name        string
-		requirement string
-		association string
-		wantState   model.Availability
-		wantStatus  string
-	}{
-		{"name", "approved", `[{"status":"attached","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Available, "attached"},
-		{"ID", "42", `[{"status":"enforced","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Available, "enforced"},
-		{"failed", "approved", `[{"status":"failed","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Available, "failed"},
-		{"transitional", "approved", `[{"status":"attaching","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Unknown, "attaching"},
-		{"missing association", "approved", `[]`, model.Available, "detached"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-				switch {
-				case strings.HasSuffix(request.URL.Path, "/code-security/configurations"):
-					_, _ = io.WriteString(writer, `[{"id":42,"name":"approved"}]`)
-				case strings.HasSuffix(request.URL.Path, "/code-security/configurations/42/repositories"):
-					_, _ = io.WriteString(writer, test.association)
-				default:
-					t.Errorf("unexpected path = %s", request.URL.Path)
-				}
-			})
-			service.cfg.Policies.CodeSecurity.Configuration = test.requirement
-			observations, err := service.codeSecurityAttachments(
-				context.Background(), []apiRepository{{ID: 1, FullName: "org/one"}},
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := observations[1]; got.State != test.wantState || got.Value.Status != test.wantStatus {
-				t.Fatalf("observation = %#v", got)
-			}
-		})
-	}
-}
-
-func TestCodeSecurityConfigurationResolutionRejectsAmbiguity(t *testing.T) {
+func TestCollectDependencyControls(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		if strings.HasSuffix(request.URL.Path, "/code-security/configurations") {
-			_, _ = io.WriteString(writer, `[{"id":1,"name":"approved"},{"id":2,"name":"approved"}]`)
-			return
+		switch request.URL.Path {
+		case "/repos/org/repo/dependency-graph/sbom":
+			_, _ = io.WriteString(writer, `{"sbom":{}}`)
+		case "/repos/org/repo/vulnerability-alerts":
+			writer.WriteHeader(http.StatusNotFound)
+		case "/repos/org/repo/automated-security-fixes":
+			writer.WriteHeader(http.StatusForbidden)
+		default:
+			t.Errorf("unexpected path = %s", request.URL.Path)
 		}
-		t.Errorf("unexpected path = %s", request.URL.Path)
 	})
-	service.cfg.Policies.CodeSecurity.Configuration = "approved"
-	observations, err := service.codeSecurityAttachments(
-		context.Background(), []apiRepository{{ID: 1, FullName: "org/one"}},
-	)
-	if err == nil || observations[1].State != model.Unknown {
-		t.Fatalf("err = %v, observations = %#v", err, observations)
+	var repo model.Repository
+	service.collectDependencyControls(context.Background(), "/repos/org/repo", &repo)
+	if repo.DependencyGraph.State != model.Available || !repo.DependencyGraph.Value {
+		t.Errorf("dependency graph = %#v", repo.DependencyGraph)
+	}
+	if repo.DependabotAlerts.State != model.Available || repo.DependabotAlerts.Value {
+		t.Errorf("Dependabot alerts = %#v", repo.DependabotAlerts)
+	}
+	if repo.DependabotSecurityUpdates.State != model.Unknown {
+		t.Errorf("Dependabot security updates = %#v", repo.DependabotSecurityUpdates)
 	}
 }
 
-func TestEnrichmentUsesOnlySixPerRepositoryRequests(t *testing.T) {
+func TestEnrichmentUsesOnlyNinePerRepositoryRequests(t *testing.T) {
 	var paths []string
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		paths = append(paths, request.URL.Path)
@@ -240,6 +210,12 @@ func TestEnrichmentUsesOnlySixPerRepositoryRequests(t *testing.T) {
 			_, _ = io.WriteString(writer, `{"default_workflow_permissions":"read"}`)
 		case "/repos/org/repo/actions/permissions/fork-pr-contributor-approval":
 			_, _ = io.WriteString(writer, `{"approval_policy":"all_external_contributors"}`)
+		case "/repos/org/repo/dependency-graph/sbom":
+			_, _ = io.WriteString(writer, `{"sbom":{}}`)
+		case "/repos/org/repo/vulnerability-alerts":
+			writer.WriteHeader(http.StatusNoContent)
+		case "/repos/org/repo/automated-security-fixes":
+			_, _ = io.WriteString(writer, `{"enabled":true,"paused":false}`)
 		case "/repos/org/repo/rules/branches/main":
 			_, _ = io.WriteString(writer, `[]`)
 		case "/repos/org/repo/branches/main/protection":
@@ -251,8 +227,8 @@ func TestEnrichmentUsesOnlySixPerRepositoryRequests(t *testing.T) {
 		}
 	})
 	_ = enrichForTest(service, apiRepository{ID: 1, FullName: "org/repo", DefaultBranch: "main"})
-	if len(paths) != 6 {
-		t.Fatalf("per-repository requests = %d (%v), want 6", len(paths), paths)
+	if len(paths) != 9 {
+		t.Fatalf("per-repository requests = %d (%v), want 9", len(paths), paths)
 	}
 }
 

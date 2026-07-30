@@ -1,19 +1,18 @@
-# Security
+# Security policy
 
-Report suspected vulnerabilities privately through GitHub Security Advisories
-for this repository. Do not include live GitHub App private keys, installation
-tokens, repository source, or organization inventory in a public issue.
+Report suspected vulnerabilities privately through the repository's GitHub
+security-advisory interface.
 
-`segh` processes repository names and GitHub API responses as untrusted data.
-The supplied scanner workflow also processes target repository contents and
-SARIF as untrusted data. Install only the pinned scanner versions, retain Aqua
-checksum verification, and give scanner jobs no unrelated secrets.
+The central pull-request workflow treats the target checkout as untrusted data.
+It grants only `contents: read`, disables target-provided scanner
+configuration and ignore files, installs checksum-verified scanner versions,
+and retains reports as ordinary workflow artifacts.
 
-Install the SARIF publisher only on protected default branches in target
-repositories, and set `SEGH_PR_SECURITY_WORKFLOW_ID` to the observed central
-ruleset workflow ID. Do not enable the scanner or publisher in the central
-workflow's source repository.
+Install organization required workflows and rulesets only from reviewed commits
+on protected `main`. Keep the App private key in Actions secrets, install the
+read-only inventory App on every organization repository, and run organization
+audits only from a private control repository.
 
-Rotate the GitHub App private key and revoke installations if a key or generated
-token may have reached logs or artifacts. The App key is supplied only to the
-token-generation action and must never reach `segh` or a scanner process.
+Scanner gates reduce risk but do not provide pre-receive secret blocking,
+CodeQL-equivalent deep SAST, or a managed security-alert lifecycle. Rotate any
+secret committed to Git immediately even when a pull-request check catches it.

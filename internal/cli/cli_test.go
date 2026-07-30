@@ -77,7 +77,7 @@ func TestAuditRequiresInstallationIDAfterConfigurationValidation(t *testing.T) {
 	}
 }
 
-func TestAuditWritesOnlyThreeVersionThreeArtifacts(t *testing.T) {
+func TestAuditWritesOnlyThreeVersionFourArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	workingDirectory, err := os.Getwd()
 	if err != nil {
@@ -91,7 +91,7 @@ func TestAuditWritesOnlyThreeVersionThreeArtifacts(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	installFakeGitHubCLI(t, "attached", "")
+	installFakeGitHubCLI(t, "")
 	t.Setenv("GH_TOKEN", "test-token")
 	t.Setenv("GH_HOST", "GHES.EXAMPLE")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
@@ -114,13 +114,13 @@ func TestAuditWritesOnlyThreeVersionThreeArtifacts(t *testing.T) {
 	}
 	var inventory model.Inventory
 	readJSON(t, filepath.Join(resultsDir, "inventory.json"), &inventory)
-	if inventory.SchemaVersion != 3 || inventory.GitHubHost != "ghes.example" ||
+	if inventory.SchemaVersion != 4 || inventory.GitHubHost != "ghes.example" ||
 		inventory.Repositories[0].CustomProperties.State != model.Available {
 		t.Fatalf("inventory = %#v", inventory)
 	}
 	var audit model.Audit
 	readJSON(t, filepath.Join(resultsDir, "audit.json"), &audit)
-	if audit.SchemaVersion != 3 || audit.Coverage != "complete" ||
+	if audit.SchemaVersion != 4 || audit.Coverage != "complete" ||
 		audit.RepositoryCounts != (model.RepositoryCounts{Total: 1, Selected: 1}) ||
 		audit.PolicyCounts[string(model.PolicyPass)] != 1 {
 		t.Fatalf("audit = %#v", audit)
@@ -129,7 +129,7 @@ func TestAuditWritesOnlyThreeVersionThreeArtifacts(t *testing.T) {
 
 func TestIncompleteCoveragePrecedesPolicyViolations(t *testing.T) {
 	dir := t.TempDir()
-	installFakeGitHubCLI(t, "attaching", "")
+	installFakeGitHubCLI(t, "dependency_graph")
 	t.Setenv("GH_TOKEN", "test-token")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
 	var stdout, stderr bytes.Buffer
@@ -159,12 +159,10 @@ func TestOrganizationCollectionPermissionFailuresUseAuthenticationExitCode(t *te
 		customPropertyFilter bool
 	}{
 		{"custom properties", "custom_properties", true},
-		{"code security configurations", "code_security_configurations", false},
-		{"code security associations", "code_security_associations", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
-			installFakeGitHubCLI(t, "attached", test.forbiddenEndpoint)
+			installFakeGitHubCLI(t, test.forbiddenEndpoint)
 			t.Setenv("GH_TOKEN", "test-token")
 			t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
 			var stdout, stderr bytes.Buffer
@@ -185,7 +183,8 @@ func TestOrganizationCollectionPermissionFailuresUseAuthenticationExitCode(t *te
 func TestValidateArtifactsRejectsTamperingAndHostMismatch(t *testing.T) {
 	cfg := config.Default()
 	cfg.Organization = "example"
-	cfg.Policies.CodeSecurity.Configuration = "approved"
+	enabled := true
+	cfg.Policies.Dependencies.DependencyGraph = &enabled
 	inventory := validInventory(cfg)
 	audit := policy.New(cfg, time.Now()).Evaluate(inventory)
 	if err := validateArtifacts(inventory, audit, cfg, "github.com"); err != nil {
@@ -212,8 +211,8 @@ func writeConfig(t *testing.T, requireRuleset, customPropertyFilter bool) string
 	if customPropertyFilter {
 		selectors = "selectors:\n  custom_properties:\n    tier: critical\n"
 	}
-	data := "version: 3\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
-		selectors + "policies:\n  code_security:\n    configuration: approved" + repositoryPolicy + "\n"
+	data := "version: 4\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
+		selectors + "policies:\n  dependencies:\n    dependency_graph: true" + repositoryPolicy + "\n"
 	path := filepath.Join(t.TempDir(), "segh.yaml")
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
@@ -221,7 +220,7 @@ func writeConfig(t *testing.T, requireRuleset, customPropertyFilter bool) string
 	return path
 }
 
-func installFakeGitHubCLI(t *testing.T, attachmentStatus, forbiddenEndpoint string) {
+func installFakeGitHubCLI(t *testing.T, forbiddenEndpoint string) {
 	t.Helper()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "gh")
@@ -229,13 +228,9 @@ func installFakeGitHubCLI(t *testing.T, attachmentStatus, forbiddenEndpoint stri
 	if forbiddenEndpoint == "custom_properties" {
 		customPropertiesResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
 	}
-	codeSecurityConfigurationsResult := `printf '%s' '[[{"id":42,"name":"approved"}]]'`
-	if forbiddenEndpoint == "code_security_configurations" {
-		codeSecurityConfigurationsResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
-	}
-	codeSecurityAssociationsResult := `printf '%s' '[[{"status":"` + attachmentStatus + `","repository":{"value":{"id":1,"full_name":"example/repo"}}}]]'`
-	if forbiddenEndpoint == "code_security_associations" {
-		codeSecurityAssociationsResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
+	dependencyGraphResult := `printf '%s' '{"sbom":{}}'`
+	if forbiddenEndpoint == "dependency_graph" {
+		dependencyGraphResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
 	}
 	body := `#!/bin/sh
 case "$*" in
@@ -251,12 +246,6 @@ case "$*" in
   *"/orgs/example/properties/values?"*)
     ` + customPropertiesResult + `
     ;;
-  *"/orgs/example/code-security/configurations/42/repositories?"*)
-    ` + codeSecurityAssociationsResult + `
-    ;;
-  *"/orgs/example/code-security/configurations?"*)
-    ` + codeSecurityConfigurationsResult + `
-    ;;
   *"/repos/example/repo/actions/permissions/workflow")
     printf '%s' '{"default_workflow_permissions":"read"}'
     ;;
@@ -265,6 +254,15 @@ case "$*" in
     ;;
   *"/repos/example/repo/actions/permissions")
     printf '%s' '{"enabled":true,"allowed_actions":"all","sha_pinning_required":true}'
+    ;;
+  *"/repos/example/repo/dependency-graph/sbom")
+    ` + dependencyGraphResult + `
+    ;;
+  *"/repos/example/repo/vulnerability-alerts")
+    exit 0
+    ;;
+  *"/repos/example/repo/automated-security-fixes")
+    printf '%s' '{"enabled":true,"paused":false}'
     ;;
   *"/repos/example/repo/rules/branches/main")
     printf '%s' '[]'
@@ -303,12 +301,7 @@ func validInventory(cfg config.Config) model.Inventory {
 		Selected:      1,
 		Repositories: []model.Repository{{
 			ID: 1, FullName: "example/repository",
-			CodeSecurityConfiguration: &model.Observed[model.CodeSecurityAttachment]{
-				State: model.Available,
-				Value: model.CodeSecurityAttachment{
-					ConfigurationID: 1, ConfigurationName: "approved", Status: "attached",
-				},
-			},
+			DependencyGraph: model.Observed[bool]{State: model.Available, Value: true},
 		}},
 	}
 }

@@ -88,6 +88,37 @@ func TestClientUsesGitHubCLIPaginationForOrganizationCollections(t *testing.T) {
 	}
 }
 
+func TestClientSuppressesUnusedResponseBodies(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "gh")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$GH_TEST_ARGS\"\nprintf '%s' '{\"unused\":\"response\"}'\n"
+	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G302 -- this temporary test fixture must be executable.
+	if err := os.Chmod(script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(dir, "args")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GH_TOKEN", "test-token")
+	t.Setenv("GH_TEST_ARGS", argsPath)
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Get(context.Background(), "/repos/org/repo/dependency-graph/sbom", nil); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsPath) // #nosec G304 -- argsPath is inside this test's temporary directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "--silent /repos/org/repo/dependency-graph/sbom") {
+		t.Fatalf("args = %q", args)
+	}
+}
+
 func TestClientMapsGitHubCLIHTTPError(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "gh")

@@ -78,15 +78,20 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 			"Configure fork pull-request workflow approval in the repository or organization Actions settings."))
 	}
 
-	code := e.cfg.Policies.CodeSecurity
-	if code.Configuration != "" {
-		observation := model.Observed[model.CodeSecurityAttachment]{
-			State: model.Unknown, Reason: "approved configuration association is missing",
+	dependencies := e.cfg.Policies.Dependencies
+	for _, check := range []struct {
+		expected    *bool
+		id          string
+		observed    model.Observed[bool]
+		remediation string
+	}{
+		{dependencies.DependencyGraph, "dependencies.dependency_graph", repo.DependencyGraph, "Enable the dependency graph for the repository."},
+		{dependencies.DependabotAlerts, "dependencies.dependabot_alerts", repo.DependabotAlerts, "Enable Dependabot alerts for the repository."},
+		{dependencies.DependabotSecurityUpdates, "dependencies.dependabot_security_updates", repo.DependabotSecurityUpdates, "Enable Dependabot security updates for the repository."},
+	} {
+		if check.expected != nil {
+			results = append(results, observed(repo.FullName, check.id, "high", check.observed, *check.expected, check.remediation))
 		}
-		if repo.CodeSecurityConfiguration != nil {
-			observation = *repo.CodeSecurityConfiguration
-		}
-		results = append(results, codeSecurity(repo.FullName, code.Configuration, observation))
 	}
 
 	repository := e.cfg.Policies.Repository
@@ -137,33 +142,6 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 		}
 	}
 	return results
-}
-
-func codeSecurity(
-	repository, expected string,
-	observation model.Observed[model.CodeSecurityAttachment],
-) model.PolicyResult {
-	result := model.PolicyResult{
-		Repository: repository, PolicyID: "code_security.configuration", Severity: "high",
-		Expected: expected, Evidence: observation.Source,
-		Remediation: "Attach the approved GitHub Code Security Configuration at organization scope.",
-	}
-	switch observation.State {
-	case model.Available:
-		result.Observed = observation.Value.Status
-		if observation.Value.Status == "attached" || observation.Value.Status == "enforced" {
-			result.Status = model.PolicyPass
-		} else {
-			result.Status = model.PolicyFail
-		}
-	case model.Unsupported:
-		result.Status = model.PolicyUnsupported
-		result.Observed = observation.Reason
-	default:
-		result.Status = model.PolicyUnknown
-		result.Observed = observation.Reason
-	}
-	return result
 }
 
 func observed[T comparable](repository, id, severity string, value model.Observed[T], expected T, remediation string) model.PolicyResult {

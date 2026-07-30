@@ -8,12 +8,11 @@ permissions:
 
 jobs:
   scan:
-    # Ruleset workflows run in each target repository. Do not run this ordinary
-    # pull_request copy in the protected source repository, where a PR controls
-    # github.workflow_sha.
+    # Organization rulesets run this workflow in target repositories. The
+    # source repository uses its ordinary CI workflow instead.
     if: github.repository != 'dceoy/segh'
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -30,57 +29,166 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           path: _target
           persist-credentials: false
-      - name: Write trusted publication metadata
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          mkdir -p security-results
-          printf '%s\n' "$PR_NUMBER" > security-results/pr-number
-          printf '%s\n' "$HEAD_SHA" > security-results/head-sha
       - name: Install checksum-verified scanners
         uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49 # v4.0.5
         with:
           aqua_version: v2.62.1
           working_directory: _segh
-      - name: Run zizmor
-        id: zizmor
+      - name: Prepare report directory
+        run: mkdir -p security-results
+      - name: Run zizmor gate
         working-directory: _target
         run: |
-          mkdir -p ../security-results
           set +e
-          zizmor --offline --no-config --strict-collection --format=sarif . > ../security-results/zizmor.sarif
+          zizmor \
+            --offline \
+            --no-config \
+            --strict-collection \
+            --persona regular \
+            --min-severity medium \
+            --min-confidence high \
+            --format json \
+            . > "$GITHUB_WORKSPACE/security-results/zizmor.json"
           status=$?
-          if (( status != 0 )); then
-            exit "$status"
+          zizmor \
+            --offline \
+            --no-config \
+            --strict-collection \
+            --persona regular \
+            --min-severity medium \
+            --min-confidence high \
+            --no-exit-codes \
+            --format plain \
+            --color never \
+            --render-links never \
+            --show-audit-urls always \
+            . > "$GITHUB_WORKSPACE/security-results/zizmor.txt" 2>&1
+          render_status=$?
+          if (( render_status != 0 )); then
+            status=$render_status
           fi
-      - name: Run Trivy misconfiguration scan
+          printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/zizmor.status"
+      - name: Run Trivy misconfiguration gate
+        if: always()
         working-directory: _target
         run: |
+          set +e
           trivy fs \
             --config /dev/null \
             --ignorefile /dev/null \
             --scanners misconfig \
-            --format sarif \
-            --output "$GITHUB_WORKSPACE/security-results/trivy.sarif" \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --format json \
+            --output "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.json" \
             --skip-dirs .git \
             --skip-check-update \
             --skip-version-check \
-            --offline-scan \
-            .
-      - name: Retain raw SARIF
+            . 2> "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.log"
+          status=$?
+          trivy convert \
+            --config /dev/null \
+            --scanners misconfig \
+            --format table \
+            --output "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.txt" \
+            "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.json"
+          printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.status"
+      - name: Run Trivy vulnerability gate
+        if: always()
+        working-directory: _target
+        run: |
+          set +e
+          trivy fs \
+            --config /dev/null \
+            --ignorefile /dev/null \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --format json \
+            --output "$GITHUB_WORKSPACE/security-results/trivy-vulnerability.json" \
+            --skip-dirs .git \
+            --skip-version-check \
+            . 2> "$GITHUB_WORKSPACE/security-results/trivy-vulnerability.log"
+          status=$?
+          trivy convert \
+            --config /dev/null \
+            --scanners vuln \
+            --format table \
+            --output "$GITHUB_WORKSPACE/security-results/trivy-vulnerability.txt" \
+            "$GITHUB_WORKSPACE/security-results/trivy-vulnerability.json"
+          printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/trivy-vulnerability.status"
+      - name: Run Trivy secret gate
+        if: always()
+        working-directory: _target
+        run: |
+          set +e
+          trivy fs \
+            --config /dev/null \
+            --ignorefile /dev/null \
+            --secret-config "$GITHUB_WORKSPACE/_segh/.github/security/trivy-secret.yaml" \
+            --scanners secret \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --exit-code 1 \
+            --format json \
+            --output "$GITHUB_WORKSPACE/security-results/trivy-secret.json" \
+            --skip-dirs .git \
+            --skip-version-check \
+            . 2> "$GITHUB_WORKSPACE/security-results/trivy-secret.log"
+          status=$?
+          trivy convert \
+            --config /dev/null \
+            --scanners secret \
+            --format table \
+            --output "$GITHUB_WORKSPACE/security-results/trivy-secret.txt" \
+            "$GITHUB_WORKSPACE/security-results/trivy-secret.json"
+          printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/trivy-secret.status"
+      - name: Publish scanner summary
+        if: always()
+        run: |
+          for scanner in zizmor trivy-misconfiguration trivy-vulnerability trivy-secret; do
+            {
+              printf '## %s\n\n' "$scanner"
+              if [[ -f "security-results/$scanner.txt" ]]; then
+                printf '```\n'
+                sed -n '1,200p' "security-results/$scanner.txt"
+                printf '```\n\n'
+              else
+                printf 'No human-readable report was produced. See the retained logs.\n\n'
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Retain scanner reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pr-security-publication
+          name: pr-security-reports
           path: security-results
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
+      - name: Enforce scanner gates
+        if: always()
+        run: |
+          failed=0
+          for scanner in zizmor trivy-misconfiguration trivy-vulnerability trivy-secret; do
+            status_file="security-results/$scanner.status"
+            if [[ ! -f "$status_file" ]]; then
+              echo "::error::$scanner did not produce a status"
+              failed=1
+              continue
+            fi
+            status=$(<"$status_file")
+            if [[ ! "$status" =~ ^[0-9]+$ ]] || (( status != 0 )); then
+              echo "::error::$scanner gate failed with status $status"
+              failed=1
+            fi
+          done
+          exit "$failed"
 
   scorecard:
-    # Scorecard's pull_request mode analyzes the repository at the workspace
-    # root, so keep it separate from the nested checkouts used by scan.
+    # Scorecard is evidence only. Its action has platform limitations for some
+    # private repositories, so rulesets must not require this job.
     if: github.repository != 'dceoy/segh'
+    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -99,15 +207,15 @@ jobs:
       - name: Run OpenSSF Scorecard
         uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
         with:
-          results_file: security-results/scorecard.sarif
-          results_format: sarif
+          results_file: security-results/scorecard.json
+          results_format: json
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           publish_results: false
-      - name: Retain Scorecard SARIF
+      - name: Retain Scorecard report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pr-security-scorecard
-          path: security-results/scorecard.sarif
+          path: security-results/scorecard.json
           if-no-files-found: warn
           retention-days: 14

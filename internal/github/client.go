@@ -105,6 +105,12 @@ func (c *Client) runOnce(ctx context.Context, apiPath string, out any, paginate 
 		"--method", http.MethodGet,
 		"--header", "X-GitHub-Api-Version: " + githubAPIVersion,
 	}
+	if out == nil {
+		// Probe calls need only the HTTP status. In particular, dependency-graph
+		// availability is checked through the SBOM endpoint; suppressing its body
+		// avoids retaining an otherwise unused organization-scale document.
+		args = append(args, "--silent")
+	}
 	if paginate {
 		args = append(args, "--paginate", "--slurp")
 	}
