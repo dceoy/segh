@@ -238,6 +238,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           path: _target
           persist-credentials: false
+          # This pull_request_target job never exposes secrets or executes
+          # anything from the checked-out tree; it only runs static
+          # analysis over it as scanner input. actions/checkout v7 refuses
+          # to check out a fork PR's head SHA under pull_request_target by
+          # default, so fork contributions would otherwise never reach the
+          # scanners below.
+          allow-unsafe-pr-checkout: true
       - name: Install checksum-verified scanners
         uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49 # v4.0.5
         with:
@@ -407,8 +414,10 @@ jobs:
 
   scorecard:
     # Scorecard is evidence only. Its action has platform limitations for some
-    # private repositories, so rulesets must not require this job.
-    if: github.repository != 'dceoy/segh'
+    # private repositories, so rulesets must not require this job. Gated to
+    # pull_request only so it doesn't double-run now that pull_request_target
+    # is also a workflow trigger.
+    if: github.repository != 'dceoy/segh' && github.event_name == 'pull_request'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 15

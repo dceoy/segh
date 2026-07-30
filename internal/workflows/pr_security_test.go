@@ -16,7 +16,8 @@ import (
 const prSecurityWorkflowPath = "../../.github/workflows/pr-security.yml"
 
 type prSecurityStep struct {
-	Name string `yaml:"name"`
+	Name string         `yaml:"name"`
+	With map[string]any `yaml:"with"`
 }
 
 type prSecurityJob struct {
@@ -113,4 +114,50 @@ func slicesContains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func findStep(steps []prSecurityStep, name string) (prSecurityStep, bool) {
+	for _, step := range steps {
+		if step.Name == name {
+			return step, true
+		}
+	}
+	return prSecurityStep{}, false
+}
+
+// TestPRSecurityScanSelfAllowsForkPullRequestCheckout pins that scan-self's
+// pull_request_target checkout opts into fork PR head SHA checkout.
+// actions/checkout v7 refuses that checkout by default, and since scan-self
+// is the only required gate for fork pull requests once merged (scan
+// excludes the source repository), losing this input would silently stop
+// scan-self from running on any fork contribution.
+func TestPRSecurityScanSelfAllowsForkPullRequestCheckout(t *testing.T) {
+	workflow := loadPRSecurityWorkflow(t)
+	job, ok := workflow.Jobs["scan-self"]
+	if !ok {
+		t.Fatal("jobs.scan-self is missing")
+	}
+	step, ok := findStep(job.Steps, "Check out pull request")
+	if !ok {
+		t.Fatal("jobs.scan-self is missing step \"Check out pull request\"")
+	}
+	if allow, _ := step.With["allow-unsafe-pr-checkout"].(bool); !allow {
+		t.Errorf("jobs.scan-self step \"Check out pull request\" with.allow-unsafe-pr-checkout = %v, want true", step.With["allow-unsafe-pr-checkout"])
+	}
+}
+
+// TestPRSecurityScorecardGatedToOrdinaryPullRequestEvent pins that scorecard
+// only runs for the pull_request-triggered event. This workflow declares
+// both pull_request and pull_request_target as triggers; without this guard
+// a target repository would run the informational Scorecard job twice per
+// pull request.
+func TestPRSecurityScorecardGatedToOrdinaryPullRequestEvent(t *testing.T) {
+	workflow := loadPRSecurityWorkflow(t)
+	job, ok := workflow.Jobs["scorecard"]
+	if !ok {
+		t.Fatal("jobs.scorecard is missing")
+	}
+	if !strings.Contains(job.If, "github.event_name == 'pull_request'") {
+		t.Errorf("jobs.scorecard.if = %q, want it to contain %q", job.If, "github.event_name == 'pull_request'")
+	}
 }
