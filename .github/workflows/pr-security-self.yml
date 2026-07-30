@@ -61,7 +61,7 @@ jobs:
           # scanners below.
           allow-unsafe-pr-checkout: true
       - name: Install checksum-verified scanners
-        uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49  # v4.0.5
+        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e  # v4.0.5
         with:
           aqua_version: v2.62.1
           working_directory: _segh
