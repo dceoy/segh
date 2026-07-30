@@ -43,7 +43,7 @@ blocks. Standalone ShellCheck scans every tracked, non-symlink regular file:
 `*.sh`, `*.bash`, and `*.bats` files unconditionally, plus any other tracked
 file (executable or not) whose first line is a shebang naming a
 ShellCheck-supported interpreter (`sh`, `ash`, `dash`, `bash`, `ksh`,
-`ksh88`, `ksh93`, `oksh`, `zsh`, `bats`, or `busybox` followed by one of
+`ksh88`, `ksh93`, `oksh`, `bats`, or `busybox` followed by one of
 those). An empty relevant file set is recorded as a successful skip.
 
 Checkov runs offline with `--skip-download` and an explicit IaC-only framework

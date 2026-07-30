@@ -153,7 +153,7 @@ jobs:
           set +e
           script_files=()
           declare -A seen_scripts=()
-          shell_shebang='^#![[:space:]]*(/usr/bin/env([[:space:]]+-S)?[[:space:]]+)?(/[^[:space:]]*/)?(busybox[[:space:]]+)?(sh|ash|dash|bash|ksh93|ksh88|ksh|oksh|zsh|bats)([[:space:]]|$)'
+          shell_shebang='^#![[:space:]]*(/usr/bin/env([[:space:]]+-S)?[[:space:]]+)?(/[^[:space:]]*/)?(busybox[[:space:]]+)?(sh|ash|dash|bash|ksh93|ksh88|ksh|oksh|bats)([[:space:]]|$)'
           while IFS= read -r -d '' entry; do
             mode=${entry%% *}
             file=${entry#*$'\t'}

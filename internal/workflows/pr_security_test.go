@@ -19,6 +19,7 @@ import (
 const (
 	prSecurityWorkflowPath     = "../../.github/workflows/pr-security.yml"
 	prSecuritySelfWorkflowPath = "../../.github/workflows/pr-security-self.yml"
+	shellcheckrcPath           = "../../.github/security/shellcheckrc"
 )
 
 type prSecurityStep struct {
@@ -577,9 +578,12 @@ func writeStubShellCheck(t *testing.T, argvLog string) string {
 // even when its name matches a recognized extension, closing the same
 // candidate-list invariant the actionlint gate needs (see
 // TestPRSecurityUsesDedicatedScannerOwnership and the "Reject symlinks from
-// the pull request checkout" step). A stub "shellcheck" on PATH records its
-// arguments so the test exercises only this enumeration logic, not
-// ShellCheck's own installed behavior.
+// the pull request checkout" step). It also pins that a tracked, executable
+// #!/bin/zsh script is never passed to ShellCheck: ShellCheck 0.11 supports
+// only sh/bash/dash/ksh and reports SC1071 for zsh scripts, so admitting one
+// would fail the enforced gate on an otherwise-clean target repository. A
+// stub "shellcheck" on PATH records its arguments so the test exercises only
+// this enumeration logic, not ShellCheck's own installed behavior.
 func TestPRSecurityStandaloneShellCheckGateDiscoversAllTrackedShellScripts(t *testing.T) {
 	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
 	if !ok {
@@ -605,6 +609,9 @@ func TestPRSecurityStandaloneShellCheckGateDiscoversAllTrackedShellScripts(t *te
 	}
 	// Executable, with a shebang the old pattern did not recognize.
 	writeExecutable(t, filepath.Join(target, "scripts", "legacy-ash"), "#!/bin/ash\necho hi\n")
+	// Executable, with a shebang naming an interpreter ShellCheck does not
+	// support: must never be admitted as a scan candidate.
+	writeExecutable(t, filepath.Join(target, "scripts", "legacy-zsh"), "#!/bin/zsh\necho hi\n")
 	// Tracked symlink whose name matches a recognized extension: must never
 	// be admitted as a scan candidate, wherever it points.
 	if err := os.Symlink("/etc/passwd", filepath.Join(target, "scripts", "evil.sh")); err != nil {
@@ -648,6 +655,78 @@ func TestPRSecurityStandaloneShellCheckGateDiscoversAllTrackedShellScripts(t *te
 	}
 	if strings.Contains(string(argv), "evil.sh") {
 		t.Errorf("standalone ShellCheck gate passed a tracked symlink to ShellCheck; argv:\n%s", argv)
+	}
+	if strings.Contains(string(argv), "legacy-zsh") {
+		t.Errorf("standalone ShellCheck gate passed an unsupported zsh script to ShellCheck; argv:\n%s", argv)
+	}
+}
+
+// TestPRSecurityStandaloneShellCheckGateSuppressesAshDialectNote pins that
+// the organization-owned .github/security/shellcheckrc disables SC2187, the
+// advisory ShellCheck emits on every #!/bin/ash script to note that it is
+// checked as dash. ShellCheck has no native ash mode, so this note fires
+// regardless of a script's content; left enabled it would fail the enforced
+// standalone ShellCheck gate for any otherwise-clean tracked ash script. This
+// test runs the real ShellCheck binary (skipping if one is not on PATH,
+// since a stub cannot exercise ShellCheck's own diagnostics) against the
+// gate script and the actual shellcheckrc file, rather than a synthetic
+// fixture, so a regression that re-enables SC2187 is caught here.
+func TestPRSecurityStandaloneShellCheckGateSuppressesAshDialectNote(t *testing.T) {
+	if _, err := exec.LookPath("shellcheck"); err != nil {
+		t.Skip("shellcheck is not installed; skipping a test that exercises its real diagnostics")
+	}
+
+	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	step, ok := findStep(job.Steps, "Run standalone ShellCheck gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing step \"Run standalone ShellCheck gate\"")
+	}
+
+	target := t.TempDir()
+	runGit(t, target, "init", "-q")
+	runGit(t, target, "config", "user.email", "test@example.invalid")
+	runGit(t, target, "config", "user.name", "test")
+
+	// A clean ash script: SC2187 is the only diagnostic ShellCheck would
+	// otherwise raise against it.
+	writeExecutable(t, filepath.Join(target, "legacy-ash"), "#!/bin/ash\necho \"hi\"\n")
+	runGit(t, target, "add", "-A")
+
+	workspace := t.TempDir()
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(filepath.Join(workspace, "security-results"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	shellcheckrcDir := filepath.Join(workspace, "_segh", ".github", "security")
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(shellcheckrcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := os.ReadFile(shellcheckrcPath) // #nosec G304 -- shellcheckrcPath is a fixed repository-relative constant.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shellcheckrcDir, "shellcheckrc"), rc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
+	cmd.Dir = target
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run standalone ShellCheck gate script: %v\n%s", err, out)
+	}
+
+	statusBytes, err := os.ReadFile(filepath.Join(workspace, "security-results", "shellcheck.status")) // #nosec G304 -- the path is created inside this test's unique temporary directory.
+	if err != nil {
+		t.Fatalf("shellcheck.status was not written: %v", err)
+	}
+	if status := strings.TrimSpace(string(statusBytes)); status != "0" {
+		report, _ := os.ReadFile(filepath.Join(workspace, "security-results", "shellcheck.txt")) // #nosec G304 -- the path is created inside this test's unique temporary directory.
+		t.Errorf("standalone ShellCheck gate exited %q against a clean ash script; report:\n%s", status, report)
 	}
 }
 

@@ -1,3 +1,12 @@
-# Organization-owned ShellCheck exclusions belong here. There are no accepted
-# exclusions in the current baseline. Passing this file explicitly prevents a
-# target repository's .shellcheckrc from changing either ShellCheck invocation.
+# Organization-owned ShellCheck exclusions belong here. Passing this file
+# explicitly prevents a target repository's .shellcheckrc from changing
+# either ShellCheck invocation.
+
+# ShellCheck has no native ash mode and always checks ash scripts as dash,
+# emitting this advisory note regardless of the script's content. Left
+# enabled, every tracked ash script would fail the enforced standalone
+# ShellCheck gate unless its author added a per-file silencing comment.
+# Disabling it organization-wide keeps ash scripts admitted to the gate (as
+# dash-checked, catching real dash-compatible diagnostics) without this
+# unconditional false positive.
+disable=SC2187
