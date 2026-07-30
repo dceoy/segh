@@ -12,12 +12,10 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/dceoy/segh/internal/config"
 )
 
-// Sixty-four MiB bounds each individual response so a single page cannot
-// exhaust memory, while organization size no longer bounds total pages.
+// Sixty-four MiB bounds a response, including a flattened paginated
+// organization collection, so untrusted API data cannot exhaust memory.
 const (
 	maxResponseBytes    = 64 << 20
 	maxAPIAttempts      = 4
@@ -31,6 +29,8 @@ var rateLimitPattern = regexp.MustCompile(`(?i)(rate limit|retry[- ]after|abuse 
 
 type API interface {
 	Get(context.Context, string, any) error
+	GetAll(context.Context, string, any) error
+	Hostname() string
 }
 
 type Client struct {
@@ -51,7 +51,7 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("GitHub API returned %d: %s", e.StatusCode, e.Message)
 }
 
-func NewClient(cfg config.Config) (*Client, error) {
+func NewClient() (*Client, error) {
 	if os.Getenv("GH_TOKEN") == "" {
 		return nil, fmt.Errorf("GH_TOKEN is required")
 	}
@@ -59,19 +59,35 @@ func NewClient(cfg config.Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("GitHub CLI is required: %w", err)
 	}
-	hostname, err := cfg.GitHubHostname()
-	if err != nil {
-		return nil, err
-	}
-	return &Client{executable: executable, hostname: hostname, wait: waitForRetry}, nil
+	return &Client{executable: executable, hostname: effectiveHostname(), wait: waitForRetry}, nil
 }
 
 func (c *Client) Get(ctx context.Context, apiPath string, out any) error {
+	return c.get(ctx, apiPath, out, false)
+}
+
+func (c *Client) GetAll(ctx context.Context, apiPath string, out any) error {
+	return c.get(ctx, apiPath, out, true)
+}
+
+func (c *Client) Hostname() string {
+	return c.hostname
+}
+
+func effectiveHostname() string {
+	hostname := strings.TrimSpace(os.Getenv("GH_HOST"))
+	if hostname == "" {
+		return "github.com"
+	}
+	return strings.ToLower(hostname)
+}
+
+func (c *Client) get(ctx context.Context, apiPath string, out any, paginate bool) error {
 	if !strings.HasPrefix(apiPath, "/") || strings.HasPrefix(apiPath, "//") {
 		return fmt.Errorf("API path must be absolute and host-relative")
 	}
 	for attempt := 1; ; attempt++ {
-		err := c.runOnce(ctx, apiPath, out)
+		err := c.runOnce(ctx, apiPath, out, paginate)
 		if err == nil || !retryableAPIError(err) || attempt == maxAPIAttempts {
 			return err
 		}
@@ -82,14 +98,17 @@ func (c *Client) Get(ctx context.Context, apiPath string, out any) error {
 	}
 }
 
-func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
+func (c *Client) runOnce(ctx context.Context, apiPath string, out any, paginate bool) error {
 	args := []string{
 		"api",
 		"--hostname", c.hostname,
 		"--method", http.MethodGet,
 		"--header", "X-GitHub-Api-Version: " + githubAPIVersion,
-		apiPath,
 	}
+	if paginate {
+		args = append(args, "--paginate", "--slurp")
+	}
+	args = append(args, apiPath)
 	cmd := exec.CommandContext(ctx, c.executable, args...) // #nosec G204 -- executable is resolved with LookPath and arguments never pass through a shell.
 	cmd.Env = os.Environ()
 	if c.hostname != "github.com" && !strings.HasSuffix(c.hostname, ".ghe.com") {
@@ -119,7 +138,22 @@ func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
 	if out == nil || len(stdout.Bytes()) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
+	data := stdout.Bytes()
+	if paginate {
+		var pages [][]json.RawMessage
+		if err := json.Unmarshal(data, &pages); err != nil {
+			return fmt.Errorf("decode paginated GitHub CLI response: %w", err)
+		}
+		items := make([]json.RawMessage, 0)
+		for _, page := range pages {
+			items = append(items, page...)
+		}
+		data, err = json.Marshal(items)
+		if err != nil {
+			return fmt.Errorf("flatten paginated GitHub CLI response: %w", err)
+		}
+	}
+	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("decode GitHub CLI response: %w", err)
 	}
 	return nil

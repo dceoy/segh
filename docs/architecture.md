@@ -49,13 +49,22 @@ request.
 
 Inventory normalization remains in Go because it combines several
 capability-sensitive GitHub endpoints into stable observations. Requests are
-delegated to `gh api`; every request uses `--hostname` derived from
-`github.web_url`. Repository enumeration decodes one page at a time, each
-independently bounded, rather than accumulating every page behind a single
-response cap. The GitHub CLI owns token discovery and REST transport; `segh`
-drives pagination itself and retries transient transport failures, HTTP
-429/5xx responses, and explicit rate-limit responses with bounded exponential
-backoff.
+delegated to `gh api`; every request uses `--hostname` derived from `GH_HOST`,
+defaulting to `github.com`. Repository enumeration decodes one page at a time.
+Organization custom-property values and Code Security Configuration
+associations use GitHub CLI pagination and are joined to enumeration by
+repository ID with the full name independently validated. The GitHub CLI owns
+token discovery and REST transport; `segh` retries transient transport
+failures, HTTP 429/5xx responses, and explicit rate-limit responses with
+bounded exponential backoff.
+
+Custom properties are collected once from
+`GET /orgs/{org}/properties/values`; no per-repository fallback exists. The
+configured Code Security Configuration is resolved once, and
+`GET /orgs/{org}/code-security/configurations/{id}/repositories` is the sole
+code-security governance observation. Missing, duplicate, malformed, or
+inconsistent organization data stays unknown or incomplete rather than
+silently changing repository selection or policy.
 
 `GH_TOKEN` and its matching `SEGH_GITHUB_INSTALLATION_ID` are required for
 inventory. GitHub Actions generates both from a read-only App using
@@ -66,9 +75,10 @@ private key or long-lived installation token is parsed or cached by `segh`.
 
 ## Determinism and capability states
 
-Repository and policy arrays are sorted by stable identifiers. JSON is the
-canonical automation format, and the consolidated Markdown report is the
-operator summary. Incompatible schema versions are rejected.
+Repository, error, and policy arrays are sorted by stable identifiers.
+`audit.json` is the canonical automation result, while `inventory.json` is raw
+observation evidence and `report.md` is the operator rendering. Incompatible
+schema versions are rejected.
 
 Unavailable endpoints never silently pass policy:
 
@@ -77,23 +87,20 @@ Unavailable endpoints never silently pass policy:
 - `unknown` means permission, ambiguity, or another failure prevented a
   reliable observation.
 
-## End-to-end command evaluation
+## End-to-end command
 
-An isolated `run` command prototype invoked the existing inventory, audit, and
-report stages so their strict artifact validation and exit behavior remained
-unchanged. Measured after the governance simplifications in issues 13–16, it
-changed production Go from 2,175 to 2,204 lines and the organization-audit
-workflow from 149 to 123 lines: a net increase from 2,324 to 2,327 lines.
-
-Although shell branching moved into the CLI, total code did not decrease.
-Adding the command was therefore rejected under the issue 17 implementation
-gate. The three stage commands remain explicit compatibility and evidence
-boundaries without adding a second orchestration layer.
+`segh audit` is the only operational command. It strictly loads configuration
+before authentication or API access, then collects inventory, evaluates policy,
+validates the in-memory relationship between both results, and writes exactly
+`inventory.json`, `audit.json`, and `report.md`. `--validate-only` stops after
+offline configuration validation. The removed staged commands and artifact
+read-back paths have no compatibility wrappers.
 
 ## GitHub Enterprise Server
 
-Inventory supports GHES through the configured web hostname and records missing
-features as `unsupported` or `unknown`. The direct scanner workflow remains
+Inventory supports GHES through `GH_HOST` and records the normalized effective
+hostname in evidence. Missing features remain `unsupported` or `unknown`. The
+direct scanner workflow remains
 usable where its pinned Actions and Code Scanning are supported. On GHES
 versions without Code Scanning or compatible action support, raw SARIF remains
 an Actions artifact, but GitHub-native publication and merge enforcement are
@@ -104,4 +111,4 @@ GitHub.com-hosted control repository because its trusted source is the public
 `dceoy/segh` repository. It fails explicitly on GHES instead of reusing a GHES
 token across hosts. GHES Actions deployments must adapt the workflow to a
 protected same-host source mirror or an equivalently verified release artifact;
-this does not change the CLI's GHES inventory support.
+this does not change the CLI's GHES audit support.

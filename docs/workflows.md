@@ -19,10 +19,11 @@ non-SHA values and uses Git ancestry to require that the commit is reachable
 from `dceoy/segh`'s protected `main`. Update the pin only through a reviewed
 control-repository change. The App-token action creates a short-lived token for
 the organization. `GH_TOKEN` and the action's non-secret installation ID reach
-`segh`; the App private key stays scoped to the token step. The job inventories
-native-control coverage, evaluates policy from
-`_control/config/organization.yaml`, writes a deterministic report, and retains
-the evidence. It does not clone or scan organization repositories.
+`segh`; the App private key stays scoped to the token step. One `segh audit`
+invocation loads `_control/config/organization.yaml`, inventories native
+controls, evaluates policy, and writes `inventory.json`, `audit.json`, and
+`report.md`. The workflow retains those three artifacts and does not clone or
+scan organization repositories.
 
 The workflow deliberately refuses to run from a public control repository
 because organization inventory and exceptions can be sensitive. Add a schedule
@@ -32,7 +33,7 @@ The supplied cross-repository workflow supports private GitHub.com-hosted
 control repositories only. It fails before acquiring the external source on
 GHES rather than sending a GHES token to GitHub.com or silently resolving
 `dceoy/segh` against the wrong host. GHES operators can still run the `segh` CLI
-against their configured server; for Actions automation, maintain a reviewed
+with `GH_HOST`; for Actions automation, maintain a reviewed
 same-host source mirror (or equivalently verified release artifact) and adapt
 both source acquisition and reachability validation to that protected source.
 

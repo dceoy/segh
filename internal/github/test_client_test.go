@@ -10,10 +10,15 @@ import (
 	"testing"
 
 	"github.com/dceoy/segh/internal/config"
+	"github.com/dceoy/segh/internal/model"
 )
 
 type testAPIClient struct {
 	baseURL string
+}
+
+func (c testAPIClient) Hostname() string {
+	return "github.com"
 }
 
 func (c testAPIClient) Get(ctx context.Context, apiPath string, out any) error {
@@ -40,6 +45,10 @@ func (c testAPIClient) Get(ctx context.Context, apiPath string, out any) error {
 	return nil
 }
 
+func (c testAPIClient) GetAll(ctx context.Context, apiPath string, out any) error {
+	return c.Get(ctx, apiPath, out)
+}
+
 func newInventoryTestService(t *testing.T, handler http.HandlerFunc) *InventoryService {
 	t.Helper()
 	server := httptest.NewServer(handler)
@@ -47,4 +56,15 @@ func newInventoryTestService(t *testing.T, handler http.HandlerFunc) *InventoryS
 	cfg := config.Default()
 	cfg.Organization = "org"
 	return NewInventoryService(cfg, testAPIClient{baseURL: server.URL}, 1)
+}
+
+func enrichForTest(service *InventoryService, repo apiRepository) model.Repository {
+	return service.enrich(
+		context.Background(),
+		repo,
+		model.Observed[map[string]any]{
+			State: model.Available, Value: map[string]any{}, Source: "organization_properties/values",
+		},
+		nil,
+	)
 }

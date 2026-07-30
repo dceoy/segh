@@ -1,24 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/dceoy/segh/schema/segh-config-v2.schema.json",
-  "title": "segh governance configuration v2",
+  "$id": "https://github.com/dceoy/segh/schema/segh-config-v3.schema.json",
+  "title": "segh governance configuration v3",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "organization", "policies"],
   "properties": {
-    "version": {"const": 2},
+    "version": {"const": 3},
     "organization": {"type": "string", "minLength": 1},
-    "github": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "web_url": {
-          "type": "string",
-          "format": "uri",
-          "pattern": "^(https://[^/@?#]+/?|http://(localhost|127\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){2}|\\[::1\\])(:[0-9]+)?/?)$"
-        }
-      }
-    },
     "inventory": {
       "type": "object",
       "additionalProperties": false,
@@ -48,21 +37,15 @@
       "anyOf": [
         {
           "required": ["actions"],
-          "properties": {
-            "actions": {"$ref": "#/$defs/configuredActionsPolicy"}
-          }
+          "properties": {"actions": {"$ref": "#/$defs/configuredActionsPolicy"}}
         },
         {
           "required": ["code_security"],
-          "properties": {
-            "code_security": {"$ref": "#/$defs/configuredCodeSecurityPolicy"}
-          }
+          "properties": {"code_security": {"$ref": "#/$defs/configuredCodeSecurityPolicy"}}
         },
         {
           "required": ["repository"],
-          "properties": {
-            "repository": {"$ref": "#/$defs/configuredRepositoryPolicy"}
-          }
+          "properties": {"repository": {"$ref": "#/$defs/configuredRepositoryPolicy"}}
         }
       ],
       "properties": {
@@ -80,14 +63,9 @@
         "code_security": {
           "type": "object",
           "additionalProperties": false,
+          "required": ["configuration"],
           "properties": {
-            "configuration": {"type": "string"},
-            "codeql": {"$ref": "#/$defs/requirement"},
-            "secret_scanning": {"$ref": "#/$defs/requirement"},
-            "push_protection": {"$ref": "#/$defs/requirement"},
-            "dependency_graph": {"$ref": "#/$defs/requirement"},
-            "dependabot_alerts": {"$ref": "#/$defs/requirement"},
-            "dependabot_security_updates": {"$ref": "#/$defs/requirement"}
+            "configuration": {"type": "string", "minLength": 1}
           }
         },
         "repository": {
@@ -126,13 +104,6 @@
           "expires": {"type": "string", "format": "date-time"}
         }
       }
-    },
-    "output": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "directory": {"type": "string", "minLength": 1}
-      }
     }
   },
   "$defs": {
@@ -142,142 +113,73 @@
         {"required": ["require_fork_pr_approval"]},
         {
           "required": ["allowed_actions"],
-          "properties": {
-            "allowed_actions": {"enum": ["all", "local_only", "selected"]}
-          }
+          "properties": {"allowed_actions": {"enum": ["all", "local_only", "selected"]}}
         },
         {
           "required": ["default_workflow_permissions"],
-          "properties": {
-            "default_workflow_permissions": {"enum": ["read", "write"]}
-          }
+          "properties": {"default_workflow_permissions": {"enum": ["read", "write"]}}
         },
         {
           "required": ["require_sha_pinning_enforcement"],
-          "properties": {
-            "require_sha_pinning_enforcement": {"const": true}
-          }
+          "properties": {"require_sha_pinning_enforcement": {"const": true}}
         }
       ]
     },
     "configuredCodeSecurityPolicy": {
-      "anyOf": [
-        {
-          "required": ["configuration"],
-          "properties": {
-            "configuration": {"type": "string", "minLength": 1}
-          }
-        },
-        {
-          "required": ["codeql"],
-          "properties": {
-            "codeql": {"enum": ["required", "disabled"]}
-          }
-        },
-        {
-          "required": ["secret_scanning"],
-          "properties": {
-            "secret_scanning": {"enum": ["required", "disabled"]}
-          }
-        },
-        {
-          "required": ["push_protection"],
-          "properties": {
-            "push_protection": {"enum": ["required", "disabled"]}
-          }
-        },
-        {
-          "required": ["dependency_graph"],
-          "properties": {
-            "dependency_graph": {"enum": ["required", "disabled"]}
-          }
-        },
-        {
-          "required": ["dependabot_alerts"],
-          "properties": {
-            "dependabot_alerts": {"enum": ["required", "disabled"]}
-          }
-        },
-        {
-          "required": ["dependabot_security_updates"],
-          "properties": {
-            "dependabot_security_updates": {"enum": ["required", "disabled"]}
-          }
-        }
-      ]
+      "required": ["configuration"],
+      "properties": {
+        "configuration": {"type": "string", "minLength": 1}
+      }
     },
     "configuredRepositoryPolicy": {
       "anyOf": [
         {
           "required": ["require_ruleset"],
-          "properties": {
-            "require_ruleset": {"const": true}
-          }
+          "properties": {"require_ruleset": {"const": true}}
         },
         {
           "required": ["require_branch_protection"],
-          "properties": {
-            "require_branch_protection": {"const": true}
-          }
+          "properties": {"require_branch_protection": {"const": true}}
         },
         {
           "required": ["require_pull_request"],
-          "properties": {
-            "require_pull_request": {"const": true}
-          }
+          "properties": {"require_pull_request": {"const": true}}
         },
         {
           "required": ["require_required_checks"],
-          "properties": {
-            "require_required_checks": {"const": true}
-          }
+          "properties": {"require_required_checks": {"const": true}}
         },
         {
           "required": ["restrict_force_pushes"],
-          "properties": {
-            "restrict_force_pushes": {"const": true}
-          }
+          "properties": {"restrict_force_pushes": {"const": true}}
         },
         {
           "required": ["restrict_deletions"],
-          "properties": {
-            "restrict_deletions": {"const": true}
-          }
+          "properties": {"restrict_deletions": {"const": true}}
         },
         {
           "required": ["require_security_md"],
-          "properties": {
-            "require_security_md": {"const": true}
-          }
+          "properties": {"require_security_md": {"const": true}}
         },
         {
           "required": ["allowed_visibilities"],
-          "properties": {
-            "allowed_visibilities": {"minItems": 1}
-          }
+          "properties": {"allowed_visibilities": {"minItems": 1}}
         },
         {
           "required": ["prohibit_archived"],
-          "properties": {
-            "prohibit_archived": {"const": true}
-          }
+          "properties": {"prohibit_archived": {"const": true}}
         },
         {
           "required": ["prohibit_forks"],
-          "properties": {
-            "prohibit_forks": {"const": true}
-          }
+          "properties": {"prohibit_forks": {"const": true}}
         },
         {
           "required": ["prohibit_templates"],
-          "properties": {
-            "prohibit_templates": {"const": true}
-          }
+          "properties": {"prohibit_templates": {"const": true}}
         }
       ]
     },
     "stringArray": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-    "requirement": {"enum": ["", "required", "disabled"]},
     "duration": {
       "type": "string",
       "pattern": "^\\+?(([0-9]{1,5}(\\.[0-9]{0,9})?|\\.[0-9]{1,9})(ns|us|µs|μs|ms|s|m|h)){1,16}$",

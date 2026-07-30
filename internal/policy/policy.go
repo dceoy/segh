@@ -22,10 +22,14 @@ func New(cfg config.Config, now time.Time) *Evaluator {
 
 func (e *Evaluator) Evaluate(inventory model.Inventory) model.Audit {
 	audit := model.Audit{
-		SchemaVersion: model.PolicySchemaVersion,
+		SchemaVersion: model.SchemaVersion,
 		Organization:  inventory.Organization,
 		GeneratedAt:   e.now,
-		Counts:        map[string]int{},
+		RepositoryCounts: model.RepositoryCounts{
+			Total: inventory.Total, Selected: inventory.Selected, Excluded: inventory.Excluded,
+		},
+		PolicyCounts: map[string]int{},
+		Coverage:     "complete",
 	}
 	for _, repo := range inventory.Repositories {
 		results := e.repository(repo)
@@ -42,7 +46,10 @@ func (e *Evaluator) Evaluate(inventory model.Inventory) model.Audit {
 		return audit.Results[i].PolicyID < audit.Results[j].PolicyID
 	})
 	for _, result := range audit.Results {
-		audit.Counts[string(result.Status)]++
+		audit.PolicyCounts[string(result.Status)]++
+	}
+	if !inventory.Complete || Partial(audit) {
+		audit.Coverage = "partial"
 	}
 	return audit
 }
@@ -73,25 +80,13 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 
 	code := e.cfg.Policies.CodeSecurity
 	if code.Configuration != "" {
-		results = append(results, observed(repo.FullName, "code_security.configuration", "high", repo.CodeSecurityConfiguration, code.Configuration,
-			"Assign the expected GitHub Code Security Configuration at organization scope."))
-	}
-	for _, check := range []struct {
-		id          string
-		expected    string
-		observed    model.Observed[bool]
-		remediation string
-	}{
-		{"code_security.codeql", code.CodeQL, repo.CodeQL, "Enable CodeQL default setup through the assigned Code Security Configuration."},
-		{"code_security.secret_scanning", code.SecretScanning, repo.SecretScanning, "Enable secret scanning through GitHub Code Security Configuration."},
-		{"code_security.push_protection", code.PushProtection, repo.PushProtection, "Enable push protection through GitHub Code Security Configuration."},
-		{"code_security.dependency_graph", code.DependencyGraph, repo.DependencyGraph, "Enable the dependency graph in GitHub repository security settings."},
-		{"code_security.dependabot_alerts", code.DependabotAlerts, repo.DependabotAlerts, "Enable Dependabot alerts through GitHub repository or organization security settings."},
-		{"code_security.dependabot_security_updates", code.DependabotUpdates, repo.DependabotSecurityUpdates, "Enable Dependabot security updates through GitHub-native settings."},
-	} {
-		if check.expected != "" {
-			results = append(results, observed(repo.FullName, check.id, "high", check.observed, check.expected == "required", check.remediation))
+		observation := model.Observed[model.CodeSecurityAttachment]{
+			State: model.Unknown, Reason: "approved configuration association is missing",
 		}
+		if repo.CodeSecurityConfiguration != nil {
+			observation = *repo.CodeSecurityConfiguration
+		}
+		results = append(results, codeSecurity(repo.FullName, code.Configuration, observation))
 	}
 
 	repository := e.cfg.Policies.Repository
@@ -142,6 +137,33 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 		}
 	}
 	return results
+}
+
+func codeSecurity(
+	repository, expected string,
+	observation model.Observed[model.CodeSecurityAttachment],
+) model.PolicyResult {
+	result := model.PolicyResult{
+		Repository: repository, PolicyID: "code_security.configuration", Severity: "high",
+		Expected: expected, Evidence: observation.Source,
+		Remediation: "Attach the approved GitHub Code Security Configuration at organization scope.",
+	}
+	switch observation.State {
+	case model.Available:
+		result.Observed = observation.Value.Status
+		if observation.Value.Status == "attached" || observation.Value.Status == "enforced" {
+			result.Status = model.PolicyPass
+		} else {
+			result.Status = model.PolicyFail
+		}
+	case model.Unsupported:
+		result.Status = model.PolicyUnsupported
+		result.Observed = observation.Reason
+	default:
+		result.Status = model.PolicyUnknown
+		result.Observed = observation.Reason
+	}
+	return result
 }
 
 func observed[T comparable](repository, id, severity string, value model.Observed[T], expected T, remediation string) model.PolicyResult {
@@ -226,9 +248,10 @@ func repositoryMatches(pattern, repository string) bool {
 }
 
 func Violations(audit model.Audit) bool {
-	return audit.Counts[string(model.PolicyFail)] > 0
+	return audit.PolicyCounts[string(model.PolicyFail)] > 0
 }
 
 func Partial(audit model.Audit) bool {
-	return audit.Counts[string(model.PolicyUnknown)] > 0 || audit.Counts[string(model.PolicyUnsupported)] > 0
+	return audit.PolicyCounts[string(model.PolicyUnknown)] > 0 ||
+		audit.PolicyCounts[string(model.PolicyUnsupported)] > 0
 }

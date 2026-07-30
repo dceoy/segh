@@ -1,7 +1,6 @@
 package github
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"testing"
@@ -27,7 +26,7 @@ func TestEnrichTreatsRulesetOnlyRepositoryAsProtected(t *testing.T) {
 			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
 		}
 	})
-	repo := service.enrich(context.Background(), apiRepository{FullName: "org/repo", DefaultBranch: "main"})
+	repo := enrichForTest(service, apiRepository{FullName: "org/repo", DefaultBranch: "main"})
 	for name, observed := range map[string]model.Observed[bool]{
 		"ruleset":                repo.Ruleset,
 		"branch_protection":      repo.BranchProtection,
@@ -56,7 +55,7 @@ func TestEnrichDoesNotTreatUnrelatedRulesetAsProtection(t *testing.T) {
 			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
 		}
 	})
-	repo := service.enrich(context.Background(), apiRepository{FullName: "org/repo", DefaultBranch: "main"})
+	repo := enrichForTest(service, apiRepository{FullName: "org/repo", DefaultBranch: "main"})
 	if repo.Ruleset.State != model.Available || repo.Ruleset.Value {
 		t.Fatalf("ruleset = %#v, want Available/false", repo.Ruleset)
 	}

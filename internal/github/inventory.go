@@ -21,20 +21,17 @@ type InventoryService struct {
 }
 
 type apiRepository struct {
-	ID                  int64    `json:"id"`
-	FullName            string   `json:"full_name"`
-	HTMLURL             string   `json:"html_url"`
-	Visibility          string   `json:"visibility"`
-	Private             bool     `json:"private"`
-	Archived            bool     `json:"archived"`
-	Disabled            bool     `json:"disabled"`
-	Fork                bool     `json:"fork"`
-	IsTemplate          bool     `json:"is_template"`
-	DefaultBranch       string   `json:"default_branch"`
-	Topics              []string `json:"topics"`
-	SecurityAndAnalysis map[string]struct {
-		Status string `json:"status"`
-	} `json:"security_and_analysis"`
+	ID            int64    `json:"id"`
+	FullName      string   `json:"full_name"`
+	HTMLURL       string   `json:"html_url"`
+	Visibility    string   `json:"visibility"`
+	Private       bool     `json:"private"`
+	Archived      bool     `json:"archived"`
+	Disabled      bool     `json:"disabled"`
+	Fork          bool     `json:"fork"`
+	IsTemplate    bool     `json:"is_template"`
+	DefaultBranch string   `json:"default_branch"`
+	Topics        []string `json:"topics"`
 }
 
 type apiInstallation struct {
@@ -51,9 +48,9 @@ func NewInventoryService(cfg config.Config, client API, installationID int64) *I
 
 func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 	inventory := model.Inventory{
-		SchemaVersion: model.InventorySchemaVersion,
+		SchemaVersion: model.SchemaVersion,
 		Organization:  s.cfg.Organization,
-		GitHubHost:    s.cfg.GitHub.WebURL,
+		GitHubHost:    s.client.Hostname(),
 		GeneratedAt:   time.Now().UTC(),
 		Complete:      true,
 	}
@@ -93,6 +90,23 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		})
 	}
 
+	customProperties, customPropertiesErr := s.customProperties(ctx, repos)
+	if customPropertiesErr != nil && len(s.cfg.Selectors.CustomProperties) > 0 {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{
+			Component: "selectors", Kind: "custom_properties",
+			Message: "organization custom-property coverage is incomplete: " + customPropertiesErr.Error(),
+		})
+	}
+	codeSecurity, codeSecurityErr := s.codeSecurityAttachments(ctx, repos)
+	if codeSecurityErr != nil {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{
+			Component: "code_security", Kind: "configuration_associations",
+			Message: "code security configuration coverage is incomplete: " + codeSecurityErr.Error(),
+		})
+	}
+
 	concurrency := s.cfg.Inventory.Concurrency
 	jobs := make(chan apiRepository)
 	results := make(chan model.Repository, len(repos))
@@ -102,7 +116,7 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		go func() {
 			defer workers.Done()
 			for repo := range jobs {
-				results <- s.enrich(ctx, repo)
+				results <- s.enrich(ctx, repo, customProperties[repo.ID], codeSecurity[repo.ID])
 			}
 		}()
 	}
@@ -125,10 +139,6 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		reason, propertiesUnknown := s.exclusionReason(repo)
 		if propertiesUnknown {
 			inventory.Complete = false
-			inventory.Errors = append(inventory.Errors, model.RunError{
-				Repository: repo.FullName, Component: "selectors", Kind: "custom_properties_unknown",
-				Message: "custom properties unavailable; selection based on selectors.custom_properties could not be verified",
-			})
 		}
 		if reason == "" {
 			inventory.Repositories = append(inventory.Repositories, repo)
@@ -147,6 +157,19 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 	})
 	sort.Slice(inventory.Exclusions, func(i, j int) bool {
 		return inventory.Exclusions[i].Repository < inventory.Exclusions[j].Repository
+	})
+	sort.Slice(inventory.Errors, func(i, j int) bool {
+		left, right := inventory.Errors[i], inventory.Errors[j]
+		if left.Repository != right.Repository {
+			return left.Repository < right.Repository
+		}
+		if left.Component != right.Component {
+			return left.Component < right.Component
+		}
+		if left.Kind != right.Kind {
+			return left.Kind < right.Kind
+		}
+		return left.Message < right.Message
 	})
 	if !inventory.Complete {
 		if installationErr != nil {
@@ -263,6 +286,225 @@ func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepositor
 	}
 }
 
+type customPropertyRepository struct {
+	RepositoryID       int64  `json:"repository_id"`
+	RepositoryFullName string `json:"repository_full_name"`
+	Properties         []struct {
+		Name  string `json:"property_name"`
+		Value any    `json:"value"`
+	} `json:"properties"`
+}
+
+func (s *InventoryService) customProperties(
+	ctx context.Context, repos []apiRepository,
+) (map[int64]model.Observed[map[string]any], error) {
+	var response []customPropertyRepository
+	apiPath := fmt.Sprintf("/orgs/%s/properties/values?per_page=100", pathEscape(s.cfg.Organization))
+	if err := s.client.GetAll(ctx, apiPath, &response); err != nil {
+		return unavailableCustomProperties(repos, err), err
+	}
+	byID, err := repositoryIndex(repos)
+	if err != nil {
+		return unavailableCustomProperties(repos, err), err
+	}
+	observations := make(map[int64]model.Observed[map[string]any], len(repos))
+	for _, item := range response {
+		repo, ok := byID[item.RepositoryID]
+		if !ok || repo.FullName != item.RepositoryFullName {
+			err := fmt.Errorf("custom-property entry does not match an enumerated repository")
+			return unavailableCustomProperties(repos, err), err
+		}
+		if _, duplicate := observations[item.RepositoryID]; duplicate {
+			err := fmt.Errorf("duplicate custom-property repository entry")
+			return unavailableCustomProperties(repos, err), err
+		}
+		values := make(map[string]any, len(item.Properties))
+		for _, property := range item.Properties {
+			if property.Name == "" {
+				err := fmt.Errorf("custom-property entry has an empty property name")
+				return unavailableCustomProperties(repos, err), err
+			}
+			if _, duplicate := values[property.Name]; duplicate {
+				err := fmt.Errorf("duplicate custom property %q", property.Name)
+				return unavailableCustomProperties(repos, err), err
+			}
+			value, valid := normalizeCustomPropertyValue(property.Value)
+			if !valid {
+				err := fmt.Errorf("unsupported value for custom property %q", property.Name)
+				return unavailableCustomProperties(repos, err), err
+			}
+			values[property.Name] = value
+		}
+		observations[item.RepositoryID] = model.Observed[map[string]any]{
+			State: model.Available, Value: values, Source: "organization_properties/values",
+		}
+	}
+	if len(observations) != len(repos) {
+		err := fmt.Errorf("custom-property response omitted an enumerated repository")
+		return unavailableCustomProperties(repos, err), err
+	}
+	return observations, nil
+}
+
+func unavailableCustomProperties(
+	repos []apiRepository, err error,
+) map[int64]model.Observed[map[string]any] {
+	state, reason := ErrorState(err)
+	observations := make(map[int64]model.Observed[map[string]any], len(repos))
+	for _, repo := range repos {
+		observations[repo.ID] = model.Observed[map[string]any]{
+			State: model.Availability(state), Source: "organization_properties/values", Reason: reason,
+		}
+	}
+	return observations
+}
+
+type apiCodeSecurityConfiguration struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+type codeSecurityAssociation struct {
+	Status     string `json:"status"`
+	Repository struct {
+		Value struct {
+			ID       int64  `json:"id"`
+			FullName string `json:"full_name"`
+		} `json:"value"`
+	} `json:"repository"`
+}
+
+func (s *InventoryService) codeSecurityAttachments(
+	ctx context.Context, repos []apiRepository,
+) (map[int64]*model.Observed[model.CodeSecurityAttachment], error) {
+	if s.cfg.Policies.CodeSecurity.Configuration == "" {
+		return nil, nil
+	}
+	configuration, err := s.resolveCodeSecurityConfiguration(ctx)
+	if err != nil {
+		return unavailableCodeSecurity(repos, err), err
+	}
+	var response []codeSecurityAssociation
+	apiPath := fmt.Sprintf(
+		"/orgs/%s/code-security/configurations/%d/repositories?per_page=100&status=all",
+		pathEscape(s.cfg.Organization), configuration.ID,
+	)
+	if err := s.client.GetAll(ctx, apiPath, &response); err != nil {
+		return unavailableCodeSecurity(repos, err), err
+	}
+	byID, err := repositoryIndex(repos)
+	if err != nil {
+		return unavailableCodeSecurity(repos, err), err
+	}
+	observations := make(map[int64]*model.Observed[model.CodeSecurityAttachment], len(repos))
+	for _, item := range response {
+		value := item.Repository.Value
+		repo, ok := byID[value.ID]
+		if !ok || repo.FullName != value.FullName {
+			err := fmt.Errorf("code security association does not match an enumerated repository")
+			return unavailableCodeSecurity(repos, err), err
+		}
+		if _, duplicate := observations[value.ID]; duplicate {
+			err := fmt.Errorf("duplicate code security repository association")
+			return unavailableCodeSecurity(repos, err), err
+		}
+		attachment := model.CodeSecurityAttachment{
+			ConfigurationID: configuration.ID, ConfigurationName: configuration.Name, Status: item.Status,
+		}
+		switch item.Status {
+		case "attached", "enforced", "failed", "detached", "removed", "removed_by_enterprise":
+			observations[value.ID] = &model.Observed[model.CodeSecurityAttachment]{
+				State: model.Available, Value: attachment, Source: "code_security_configuration_associations",
+			}
+		case "attaching", "updating":
+			observations[value.ID] = &model.Observed[model.CodeSecurityAttachment]{
+				State: model.Unknown, Value: attachment, Source: "code_security_configuration_associations",
+				Reason: "transitional attachment status " + item.Status,
+			}
+		default:
+			err := fmt.Errorf("unknown code security attachment status %q", item.Status)
+			return unavailableCodeSecurity(repos, err), err
+		}
+	}
+	for _, repo := range repos {
+		if _, ok := observations[repo.ID]; ok {
+			continue
+		}
+		observations[repo.ID] = &model.Observed[model.CodeSecurityAttachment]{
+			State: model.Available,
+			Value: model.CodeSecurityAttachment{
+				ConfigurationID: configuration.ID, ConfigurationName: configuration.Name, Status: "detached",
+			},
+			Source: "code_security_configuration_associations",
+			Reason: "repository is not associated with the approved configuration",
+		}
+	}
+	return observations, nil
+}
+
+func (s *InventoryService) resolveCodeSecurityConfiguration(
+	ctx context.Context,
+) (apiCodeSecurityConfiguration, error) {
+	var configurations []apiCodeSecurityConfiguration
+	apiPath := fmt.Sprintf(
+		"/orgs/%s/code-security/configurations?per_page=100&target_type=all",
+		pathEscape(s.cfg.Organization),
+	)
+	if err := s.client.GetAll(ctx, apiPath, &configurations); err != nil {
+		return apiCodeSecurityConfiguration{}, err
+	}
+	requirement := s.cfg.Policies.CodeSecurity.Configuration
+	seen := make(map[int64]bool, len(configurations))
+	var matches []apiCodeSecurityConfiguration
+	for _, configuration := range configurations {
+		if configuration.ID <= 0 || configuration.Name == "" || seen[configuration.ID] {
+			return apiCodeSecurityConfiguration{}, fmt.Errorf("malformed or duplicate code security configuration")
+		}
+		seen[configuration.ID] = true
+		if configuration.Name == requirement || fmt.Sprint(configuration.ID) == requirement {
+			matches = append(matches, configuration)
+		}
+	}
+	if len(matches) != 1 {
+		return apiCodeSecurityConfiguration{}, fmt.Errorf(
+			"code security configuration %q resolved to %d configurations", requirement, len(matches),
+		)
+	}
+	return matches[0], nil
+}
+
+func unavailableCodeSecurity(
+	repos []apiRepository, err error,
+) map[int64]*model.Observed[model.CodeSecurityAttachment] {
+	state, reason := ErrorState(err)
+	observations := make(map[int64]*model.Observed[model.CodeSecurityAttachment], len(repos))
+	for _, repo := range repos {
+		observations[repo.ID] = &model.Observed[model.CodeSecurityAttachment]{
+			State: model.Availability(state), Source: "code_security_configuration_associations", Reason: reason,
+		}
+	}
+	return observations
+}
+
+func repositoryIndex(repos []apiRepository) (map[int64]apiRepository, error) {
+	byID := make(map[int64]apiRepository, len(repos))
+	names := make(map[string]bool, len(repos))
+	for _, repo := range repos {
+		if repo.ID <= 0 || repo.FullName == "" {
+			return nil, fmt.Errorf("enumerated repository is missing a stable identifier")
+		}
+		if _, duplicate := byID[repo.ID]; duplicate {
+			return nil, fmt.Errorf("duplicate enumerated repository ID")
+		}
+		if names[repo.FullName] {
+			return nil, fmt.Errorf("duplicate enumerated repository full name")
+		}
+		byID[repo.ID] = repo
+		names[repo.FullName] = true
+	}
+	return byID, nil
+}
+
 // missingExplicitRepositories reports entries of selectors.repositories that were not
 // found among the organization's enumerated repositories. A typo, rename, or a
 // repository the token cannot see would otherwise be silently dropped: exclusionReason
@@ -285,13 +527,18 @@ func missingExplicitRepositories(allowlist []string, repos []apiRepository) []st
 	return missing
 }
 
-func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.Repository {
+func (s *InventoryService) enrich(
+	ctx context.Context,
+	raw apiRepository,
+	customProperties model.Observed[map[string]any],
+	codeSecurity *model.Observed[model.CodeSecurityAttachment],
+) model.Repository {
 	repo := repositoryFromAPI(raw)
+	repo.CustomProperties = customProperties
+	repo.CodeSecurityConfiguration = codeSecurity
 	base := "/repos/" + escapeFullName(raw.FullName)
-	s.collectCustomProperties(ctx, base, &repo)
 	s.collectActionsControls(ctx, base, &repo)
 	s.collectBranchGovernance(ctx, base, raw.DefaultBranch, &repo)
-	s.collectCodeSecurity(ctx, base, raw, &repo)
 	repo.SecurityMD = s.securityPolicyExists(ctx, base, raw.DefaultBranch)
 	return repo
 }
@@ -316,27 +563,6 @@ func repositoryFromAPI(raw apiRepository) model.Repository {
 		DefaultBranch: raw.DefaultBranch,
 		Topics:        sortedStrings(raw.Topics),
 	}
-}
-
-func (s *InventoryService) collectCustomProperties(ctx context.Context, base string, repo *model.Repository) {
-	repo.CustomProperties = getObserved("properties/values", func() (map[string]any, error) {
-		var properties []struct {
-			PropertyName string `json:"property_name"`
-			Value        any    `json:"value"`
-		}
-		if err := s.client.Get(ctx, base+"/properties/values", &properties); err != nil {
-			return nil, err
-		}
-		values := make(map[string]any, len(properties))
-		for _, property := range properties {
-			value, valid := normalizeCustomPropertyValue(property.Value)
-			if !valid {
-				return nil, fmt.Errorf("unsupported custom property value")
-			}
-			values[property.PropertyName] = value
-		}
-		return values, nil
-	})
 }
 
 func (s *InventoryService) collectActionsControls(ctx context.Context, base string, repo *model.Repository) {
@@ -442,38 +668,6 @@ func (s *InventoryService) collectBranchGovernance(ctx context.Context, base, br
 	repo.DeletionRestricted = mergeControl(rulesErr, ruleTypes["deletion"], classicDeletion)
 }
 
-func (s *InventoryService) collectCodeSecurity(ctx context.Context, base string, raw apiRepository, repo *model.Repository) {
-	repo.SecretScanning = observedSecurity(raw, "secret_scanning")
-	repo.PushProtection = observedSecurity(raw, "secret_scanning_push_protection")
-	repo.DependencyGraph = s.probeEndpoint(ctx, base+"/dependency-graph/sbom", "dependency_graph/sbom", nil)
-	repo.DependabotSecurityUpdates = s.probeEndpoint(ctx, base+"/automated-security-fixes", "automated_security_fixes", nil)
-	var securityConfig struct {
-		Configuration struct {
-			Name string `json:"name"`
-		} `json:"configuration"`
-	}
-	repo.CodeSecurityConfiguration = getObserved("code_security_configuration", func() (string, error) {
-		if err := s.client.Get(ctx, base+"/code-security-configuration", &securityConfig); err != nil {
-			return "", err
-		}
-		return securityConfig.Configuration.Name, nil
-	})
-	var defaultSetup struct {
-		State string `json:"state"`
-	}
-	repo.CodeQL = getObserved("codeql_default_setup", func() (bool, error) {
-		if err := s.client.Get(ctx, base+"/code-scanning/default-setup", &defaultSetup); err != nil {
-			return false, err
-		}
-		return defaultSetup.State == "configured", nil
-	})
-	var alert []jsonObject
-	repo.DependabotAlerts = getObserved("dependabot_alerts", func() (bool, error) {
-		err := s.client.Get(ctx, base+"/dependabot/alerts?per_page=1", &alert)
-		return err == nil, err
-	})
-}
-
 type jsonObject map[string]any
 
 // mergeControl combines a boolean policy control derived from GitHub's effective
@@ -493,14 +687,6 @@ func mergeControl(rulesErr error, ruleTypePresent bool, classic model.Observed[b
 	}
 	state, reason := ErrorState(rulesErr)
 	return model.Observed[bool]{State: model.Availability(state), Source: "rules_branches", Reason: "ruleset evaluation unavailable: " + reason}
-}
-
-func observedSecurity(raw apiRepository, key string) model.Observed[bool] {
-	item, ok := raw.SecurityAndAnalysis[key]
-	if !ok {
-		return model.Observed[bool]{State: model.Unknown, Source: "GET repository", Reason: "field unavailable"}
-	}
-	return model.Observed[bool]{State: model.Available, Value: item.Status == "enabled", Source: "GET repository"}
 }
 
 func getObserved[T any](source string, getter func() (T, error)) model.Observed[T] {

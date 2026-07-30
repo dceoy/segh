@@ -20,28 +20,26 @@ cp segh.example.yaml segh.yaml
 export GH_TOKEN=...
 export SEGH_GITHUB_INSTALLATION_ID=...
 go build -o bin/segh ./cmd/segh
-bin/segh validate
-bin/segh inventory
-bin/segh audit
-bin/segh report
+bin/segh audit --config segh.yaml
 ```
 
-The governance-only configuration is version 2. Version 1 scanner, execution,
-publication, and pull-request sections are intentionally rejected; remove them
-when migrating.
+`audit` is the only operational command. It validates the schema version 3
+configuration before making any API request, collects inventory, evaluates
+policy, and writes `segh-results/inventory.json`, `audit.json`, and `report.md`.
+Use `bin/segh audit --config segh.yaml --validate-only` for offline validation.
+Versions 1 and 2 and removed keys are rejected rather than migrated.
 
-The token must be authorized for the configured organization and host. In
-GitHub Actions, generate it with `actions/create-github-app-token`; do not store
-an installation token or App private key in `segh` configuration.
+The token must be authorized for the configured organization. `GH_HOST` selects
+GitHub Enterprise Server and defaults to `github.com`; the normalized effective
+host is recorded in inventory evidence. In GitHub Actions, generate the token
+with `actions/create-github-app-token`; do not store an installation token or
+App private key in `segh` configuration.
 
 ## Commands and stable exit codes
 
 | Command | Purpose |
 |---|---|
-| `validate` | Strict configuration validation |
-| `inventory` | Capability-aware coverage assessment of native controls |
-| `audit` | Deterministic policy and suppression evaluation |
-| `report` | Consolidated JSON and Markdown compliance report |
+| `audit` | End-to-end validation, inventory, policy evaluation, and evidence generation |
 
 Exit codes are `0` success, `1` policy violations, `2` invalid configuration or
 arguments, `3` authentication/permission failure, `4` partial or unsupported
@@ -65,7 +63,7 @@ required-tool enforcement.
 
 Organization audits are read-only. The supplied audit workflow uses
 `actions/create-github-app-token` and exposes its short-lived token and
-non-secret installation ID to the inventory step. GitHub CLI owns
+non-secret installation ID to the audit step. GitHub CLI owns
 authentication, pagination, transport, and GHES hostname handling; `segh` adds
 bounded exponential retries for transient transport, server, and rate-limit
 failures.

@@ -74,9 +74,7 @@ jobs:
           permission-contents: read
           permission-metadata: read
           permission-organization-administration: read
-          permission-repository-custom-properties: read
-          permission-security-events: read
-          permission-vulnerability-alerts: read
+          permission-organization-custom-properties: read
       - name: Require a private control repository
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -94,50 +92,16 @@ jobs:
       - name: Build
         working-directory: _segh
         run: go build -trimpath -o "$GITHUB_WORKSPACE/bin/segh" ./cmd/segh
-      - name: Inventory GitHub-native controls
-        id: inventory
+      - name: Audit GitHub-native governance
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SEGH_GITHUB_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
+        run: bin/segh audit --config _control/config/organization.yaml
+      - name: Publish operator summary
+        if: always()
         run: |
-          set +e
-          bin/segh --config _control/config/organization.yaml inventory \
-            --output segh-results/inventory.json
-          status=$?
-          if (( status != 0 && status != 4 )); then
-            exit "$status"
-          fi
-          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
-      - name: Evaluate policy
-        id: audit
-        if: always() && steps.inventory.outcome == 'success'
-        run: |
-          set +e
-          bin/segh --config _control/config/organization.yaml audit \
-            --inventory segh-results/inventory.json \
-            --output segh-results/audit.json
-          status=$?
-          if (( status != 0 && status != 1 && status != 4 )); then
-            exit "$status"
-          fi
-          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
-      - name: Build deterministic report
-        if: always() && steps.audit.outcome == 'success'
-        run: |
-          set +e
-          bin/segh --config _control/config/organization.yaml report \
-            --inventory segh-results/inventory.json \
-            --audit segh-results/audit.json \
-            --output segh-results/report.json \
-            --markdown segh-results/report.md
-          status=$?
-          cat segh-results/report.md >> "$GITHUB_STEP_SUMMARY"
-          if (( status != 0 && status != 1 && status != 4 )); then
-            exit "$status"
-          fi
-          if (( status != 0 )); then
-            echo "::error::Governance audit completed with policy violations or incomplete coverage (exit $status)."
-            exit "$status"
+          if [[ -f segh-results/report.md ]]; then
+            cat segh-results/report.md >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Retain governance evidence
         if: always()

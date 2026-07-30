@@ -93,58 +93,32 @@ func TestProbeEndpoint(t *testing.T) {
 	}
 }
 
-func TestEnrichUsesFeatureSpecificSecurityEndpoints(t *testing.T) {
+func TestCustomPropertiesJoinOrganizationResponseByRepositoryID(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/repos/org/repo/dependency-graph/sbom", "/repos/org/repo/automated-security-fixes":
-			_, _ = io.WriteString(writer, `{}`)
-		default:
-			writer.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
-		}
-	})
-	repo := service.enrich(context.Background(), apiRepository{
-		FullName:      "org/repo",
-		DefaultBranch: "main",
-		SecurityAndAnalysis: map[string]struct {
-			Status string `json:"status"`
-		}{
-			"dependency_graph":            {Status: "disabled"},
-			"dependabot_security_updates": {Status: "disabled"},
-		},
-	})
-	for name, observed := range map[string]model.Observed[bool]{
-		"dependency_graph":            repo.DependencyGraph,
-		"dependabot_security_updates": repo.DependabotSecurityUpdates,
-	} {
-		if observed.State != model.Available || !observed.Value {
-			t.Fatalf("%s = %#v, want endpoint-derived Available/true", name, observed)
-		}
-	}
-}
-
-func TestEnrichPreservesAndMatchesMultiSelectCustomProperties(t *testing.T) {
-	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/repos/org/repo/properties/values" {
+		if request.URL.Path == "/orgs/org/properties/values" {
 			_, _ = io.WriteString(writer, `[
-				{"property_name":"teams","value":["security","platform"]},
-				{"property_name":"tier","value":"critical"},
-				{"property_name":"unset","value":null}
+				{"repository_id":2,"repository_full_name":"org/two","properties":[]},
+				{"repository_id":1,"repository_full_name":"org/one","properties":[
+					{"property_name":"teams","value":["security","platform"]},
+					{"property_name":"tier","value":"critical"},
+					{"property_name":"unset","value":null}
+				]}
 			]`)
 			return
 		}
-		writer.WriteHeader(http.StatusNotFound)
-		_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+		t.Errorf("unexpected path = %s", request.URL.Path)
 	})
 	service.cfg.Selectors.CustomProperties = map[string]string{
 		"teams": "security",
 		"tier":  "critical",
 	}
-
-	repo := service.enrich(context.Background(), apiRepository{
-		FullName:      "org/repo",
-		DefaultBranch: "main",
+	observations, err := service.customProperties(context.Background(), []apiRepository{
+		{ID: 1, FullName: "org/one"}, {ID: 2, FullName: "org/two"},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := model.Repository{FullName: "org/one", CustomProperties: observations[1]}
 	if !reflect.DeepEqual(repo.CustomProperties.Value["teams"], []string{"platform", "security"}) {
 		t.Fatalf("teams custom property = %#v, want a preserved, sorted string slice", repo.CustomProperties.Value["teams"])
 	}
@@ -161,64 +135,124 @@ func TestEnrichPreservesAndMatchesMultiSelectCustomProperties(t *testing.T) {
 	}
 }
 
-func TestEnrichFailsClosedOnUnsupportedCustomPropertyValue(t *testing.T) {
-	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/repos/org/repo/properties/values" {
-			_, _ = io.WriteString(writer, `[{"property_name":"tier","value":true}]`)
-			return
-		}
-		writer.WriteHeader(http.StatusNotFound)
-		_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
-	})
-	service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
-
-	repo := service.enrich(context.Background(), apiRepository{
-		FullName:      "org/repo",
-		DefaultBranch: "main",
-	})
-	if repo.CustomProperties.State != model.Unknown {
-		t.Fatalf("custom properties = %#v, want unknown state", repo.CustomProperties)
-	}
-	if reason, unknown := service.exclusionReason(repo); reason != "" || !unknown {
-		t.Fatalf("exclusionReason() = %q, %v; want unsupported value type to fail closed", reason, unknown)
-	}
-}
-
-func TestEnrichFailsClosedWhenCustomPropertiesAreUnavailable(t *testing.T) {
-	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/repos/org/repo/properties/values" {
-			writer.WriteHeader(http.StatusForbidden)
-			_, _ = io.WriteString(writer, `{"message":"forbidden"}`)
-			return
-		}
-		writer.WriteHeader(http.StatusNotFound)
-	})
-	service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
-	repo := service.enrich(context.Background(), apiRepository{
-		FullName: "org/repo", DefaultBranch: "main",
-	})
-	if repo.CustomProperties.State != model.Unknown {
-		t.Fatalf("custom properties = %#v, want unknown state", repo.CustomProperties)
-	}
-	if reason, unknown := service.exclusionReason(repo); reason != "" || !unknown {
-		t.Fatalf("exclusionReason() = %q, %v; want API failure to fail closed", reason, unknown)
+func TestCustomPropertiesFailClosedOnIncompleteOrInconsistentOrganizationResponse(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response string
+	}{
+		{"missing repository", `[]`},
+		{"unknown repository", `[{"repository_id":2,"repository_full_name":"org/two","properties":[]}]`},
+		{"mismatched full name", `[{"repository_id":1,"repository_full_name":"org/two","properties":[]}]`},
+		{"duplicate repository", `[
+			{"repository_id":1,"repository_full_name":"org/one","properties":[]},
+			{"repository_id":1,"repository_full_name":"org/one","properties":[]}
+		]`},
+		{"duplicate property", `[{"repository_id":1,"repository_full_name":"org/one","properties":[
+			{"property_name":"tier","value":"critical"},{"property_name":"tier","value":"other"}
+		]}]`},
+		{"unsupported value", `[{"repository_id":1,"repository_full_name":"org/one","properties":[
+			{"property_name":"tier","value":true}
+		]}]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := newInventoryTestService(t, func(writer http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(writer, test.response)
+			})
+			observations, err := service.customProperties(
+				context.Background(), []apiRepository{{ID: 1, FullName: "org/one"}},
+			)
+			if err == nil || observations[1].State != model.Unknown {
+				t.Fatalf("err = %v, observations = %#v", err, observations)
+			}
+			service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
+			repo := model.Repository{FullName: "org/one", CustomProperties: observations[1]}
+			if reason, unknown := service.exclusionReason(repo); reason != "" || !unknown {
+				t.Fatalf("exclusionReason() = %q, %v; want fail-closed selection", reason, unknown)
+			}
+		})
 	}
 }
 
-func TestMissingCustomPropertyIsVerifiedMismatch(t *testing.T) {
+func TestCodeSecurityConfigurationResolutionAndAttachmentStates(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		requirement string
+		association string
+		wantState   model.Availability
+		wantStatus  string
+	}{
+		{"name", "approved", `[{"status":"attached","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Available, "attached"},
+		{"ID", "42", `[{"status":"enforced","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Available, "enforced"},
+		{"failed", "approved", `[{"status":"failed","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Available, "failed"},
+		{"transitional", "approved", `[{"status":"attaching","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Unknown, "attaching"},
+		{"missing association", "approved", `[]`, model.Available, "detached"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+				switch {
+				case strings.HasSuffix(request.URL.Path, "/code-security/configurations"):
+					_, _ = io.WriteString(writer, `[{"id":42,"name":"approved"}]`)
+				case strings.HasSuffix(request.URL.Path, "/code-security/configurations/42/repositories"):
+					_, _ = io.WriteString(writer, test.association)
+				default:
+					t.Errorf("unexpected path = %s", request.URL.Path)
+				}
+			})
+			service.cfg.Policies.CodeSecurity.Configuration = test.requirement
+			observations, err := service.codeSecurityAttachments(
+				context.Background(), []apiRepository{{ID: 1, FullName: "org/one"}},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := observations[1]; got.State != test.wantState || got.Value.Status != test.wantStatus {
+				t.Fatalf("observation = %#v", got)
+			}
+		})
+	}
+}
+
+func TestCodeSecurityConfigurationResolutionRejectsAmbiguity(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/repos/org/repo/properties/values" {
+		if strings.HasSuffix(request.URL.Path, "/code-security/configurations") {
+			_, _ = io.WriteString(writer, `[{"id":1,"name":"approved"},{"id":2,"name":"approved"}]`)
+			return
+		}
+		t.Errorf("unexpected path = %s", request.URL.Path)
+	})
+	service.cfg.Policies.CodeSecurity.Configuration = "approved"
+	observations, err := service.codeSecurityAttachments(
+		context.Background(), []apiRepository{{ID: 1, FullName: "org/one"}},
+	)
+	if err == nil || observations[1].State != model.Unknown {
+		t.Fatalf("err = %v, observations = %#v", err, observations)
+	}
+}
+
+func TestEnrichmentUsesOnlySixPerRepositoryRequests(t *testing.T) {
+	var paths []string
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.URL.Path)
+		switch request.URL.Path {
+		case "/repos/org/repo/actions/permissions":
+			_, _ = io.WriteString(writer, `{"enabled":true,"allowed_actions":"all","sha_pinning_required":true}`)
+		case "/repos/org/repo/actions/permissions/workflow":
+			_, _ = io.WriteString(writer, `{"default_workflow_permissions":"read"}`)
+		case "/repos/org/repo/actions/permissions/fork-pr-contributor-approval":
+			_, _ = io.WriteString(writer, `{"approval_policy":"all_external_contributors"}`)
+		case "/repos/org/repo/rules/branches/main":
 			_, _ = io.WriteString(writer, `[]`)
-			return
+		case "/repos/org/repo/branches/main/protection":
+			writer.WriteHeader(http.StatusNotFound)
+		case "/repos/org/repo/community/profile":
+			_, _ = io.WriteString(writer, `{"files":{"security":{}}}`)
+		default:
+			t.Errorf("unexpected per-repository endpoint %s", request.URL.Path)
 		}
-		writer.WriteHeader(http.StatusNotFound)
 	})
-	service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
-	repo := service.enrich(context.Background(), apiRepository{
-		FullName: "org/repo", DefaultBranch: "main",
-	})
-	if reason, unknown := service.exclusionReason(repo); reason != "custom property tier" || unknown {
-		t.Fatalf("exclusionReason() = %q, %v; want verified missing-property mismatch", reason, unknown)
+	_ = enrichForTest(service, apiRepository{ID: 1, FullName: "org/repo", DefaultBranch: "main"})
+	if len(paths) != 6 {
+		t.Fatalf("per-repository requests = %d (%v), want 6", len(paths), paths)
 	}
 }
 
@@ -315,6 +349,8 @@ func TestRunFailsClosedWhenInstallationIsScopedToSelectedRepositories(t *testing
 			t.Error("accessible repositories must not be queried after selected installation metadata")
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
+		case "/orgs/org/properties/values":
+			_, _ = io.WriteString(writer, `[]`)
 		default:
 			t.Errorf("unexpected path = %s", request.URL.Path)
 		}
@@ -408,6 +444,8 @@ func TestRunFailsClosedWhenInstallationAccountDoesNotMatchConfiguredOrganization
 			t.Error("accessible repositories must not be queried after account mismatch")
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
+		case "/orgs/org/properties/values":
+			_, _ = io.WriteString(writer, `[]`)
 		default:
 			t.Errorf("unexpected path = %s", request.URL.Path)
 		}
@@ -439,6 +477,8 @@ func TestRunSucceedsForAllRepositoriesInstallationOnEmptyOrganization(t *testing
 			_, _ = io.WriteString(writer, `{"total_count":0,"repositories":[]}`)
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
+		case "/orgs/org/properties/values":
+			_, _ = io.WriteString(writer, `[]`)
 		default:
 			t.Errorf("unexpected path = %s", request.URL.Path)
 		}
@@ -463,6 +503,8 @@ func TestRunFailsClosedWhenInstallationCountIsPositiveButReturnsNoRepositories(t
 		case "/installation/repositories":
 			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[]}`)
 		case "/orgs/org/repos":
+			_, _ = io.WriteString(writer, `[]`)
+		case "/orgs/org/properties/values":
 			_, _ = io.WriteString(writer, `[]`)
 		default:
 			t.Errorf("unexpected path = %s", request.URL.Path)
@@ -562,20 +604,31 @@ func TestRunFailsClosedWhenExplicitlyIncludedRepositoryIsNotEnumerated(t *testin
 	}
 }
 
-func TestEnrichDecodesAttachedCodeSecurityConfiguration(t *testing.T) {
+func TestRunFailsClosedWhenOrganizationCustomPropertiesAreUnavailableForSelection(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/repos/org/repo/code-security-configuration" {
-			_, _ = io.WriteString(writer, `{"status":"attached","configuration":{"name":"organization default"}}`)
-			return
+		switch request.URL.Path {
+		case "/orgs/org/installations":
+			_, _ = io.WriteString(writer, `{"installations":[{"id":1,"account":{"login":"org"},"repository_selection":"all"}]}`)
+		case "/installation/repositories":
+			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[{"full_name":"org/repo"}]}`)
+		case "/orgs/org/repos":
+			_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo","default_branch":"main"}]`)
+		case "/orgs/org/properties/values":
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(writer, `{"message":"forbidden"}`)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
 		}
-		writer.WriteHeader(http.StatusNotFound)
-		_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
 	})
-	repo := service.enrich(context.Background(), apiRepository{
-		FullName:      "org/repo",
-		DefaultBranch: "main",
-	})
-	if observed := repo.CodeSecurityConfiguration; observed.State != model.Available || observed.Value != "organization default" {
-		t.Fatalf("code security configuration = %#v", observed)
+	service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
+	inventory, err := service.Run(context.Background())
+	if err == nil || inventory.Complete || inventory.Selected != 1 {
+		t.Fatalf("err = %v, inventory = %#v", err, inventory)
+	}
+	if len(inventory.Errors) != 1 || inventory.Errors[0].Kind != "custom_properties" {
+		t.Fatalf("errors = %#v", inventory.Errors)
+	}
+	if observation := inventory.Repositories[0].CustomProperties; observation.State != model.Unknown {
+		t.Fatalf("custom properties = %#v", observation)
 	}
 }

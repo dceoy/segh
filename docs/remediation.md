@@ -1,7 +1,7 @@
 # Remediation and settings ownership
 
-Policy results and the consolidated Markdown report include remediation
-guidance. `segh` never writes GitHub settings. Code Security Configurations,
+Policy results and the Markdown report include remediation guidance. `segh`
+never writes GitHub settings. Code Security Configurations,
 Actions policy, and branch governance belong to GitHub-native organization or
 enterprise controls.
 

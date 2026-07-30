@@ -29,14 +29,17 @@ func TestEvaluateStatusesAndSuppressionExpiry(t *testing.T) {
 		}},
 	}
 	audit := New(cfg, now).Evaluate(inventory)
-	if audit.Counts[string(model.PolicyExempt)] != 1 {
-		t.Fatalf("expected exempt result: %#v", audit.Counts)
+	if audit.PolicyCounts[string(model.PolicyExempt)] != 1 {
+		t.Fatalf("expected exempt result: %#v", audit.PolicyCounts)
 	}
-	if audit.Counts[string(model.PolicyUnknown)] != 1 {
-		t.Fatalf("expected unknown result: %#v", audit.Counts)
+	if audit.PolicyCounts[string(model.PolicyUnknown)] != 1 {
+		t.Fatalf("expected unknown result: %#v", audit.PolicyCounts)
 	}
-	if audit.Counts[string(model.PolicyFail)] != 1 {
-		t.Fatalf("expected expired-suppression failure: %#v", audit.Counts)
+	if audit.PolicyCounts[string(model.PolicyFail)] != 1 {
+		t.Fatalf("expected expired-suppression failure: %#v", audit.PolicyCounts)
+	}
+	if audit.Coverage != "partial" {
+		t.Fatalf("coverage = %q, want partial", audit.Coverage)
 	}
 }
 
@@ -78,9 +81,7 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 		RequireForkPRApproval:        &enabled,
 	}
 	cfg.Policies.CodeSecurity = config.CodeSecurityPolicy{
-		Configuration: "default", CodeQL: "required", SecretScanning: "required",
-		PushProtection: "required", DependencyGraph: "required", DependabotAlerts: "required",
-		DependabotUpdates: "required",
+		Configuration: "default",
 	}
 	cfg.Policies.Repository = config.RepositoryPolicy{
 		RequireRuleset: true, RequireBranchProtection: true, RequirePullRequest: true,
@@ -94,20 +95,50 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 		ActionsEnabled: availableTrue, DefaultWorkflowPermissions: model.Observed[string]{State: model.Available, Value: "read"},
 		AllowedActions:     model.Observed[string]{State: model.Available, Value: "selected"},
 		SHAPinningEnforced: availableTrue,
-		ForkPRApproval:     availableTrue, CodeSecurityConfiguration: model.Observed[string]{State: model.Available, Value: "default"},
-		CodeQL: availableTrue, SecretScanning: availableTrue, PushProtection: availableTrue,
-		DependencyGraph: availableTrue, DependabotAlerts: availableTrue, DependabotSecurityUpdates: availableTrue,
+		ForkPRApproval:     availableTrue,
+		CodeSecurityConfiguration: &model.Observed[model.CodeSecurityAttachment]{
+			State: model.Available,
+			Value: model.CodeSecurityAttachment{ConfigurationID: 1, ConfigurationName: "default", Status: "attached"},
+		},
 		Ruleset: availableTrue, BranchProtection: availableTrue, RequiredPullRequests: availableTrue,
 		RequiredChecks: availableTrue, ForcePushRestricted: availableTrue, DeletionRestricted: availableTrue,
 		SecurityMD: availableTrue,
 	}
 	audit := New(cfg, time.Now()).Evaluate(model.Inventory{Organization: "example", Repositories: []model.Repository{repository}})
-	if len(audit.Results) != 23 || audit.Counts[string(model.PolicyPass)] != 23 {
-		t.Fatalf("results=%d counts=%#v", len(audit.Results), audit.Counts)
+	if len(audit.Results) != 17 || audit.PolicyCounts[string(model.PolicyPass)] != 17 {
+		t.Fatalf("results=%d counts=%#v", len(audit.Results), audit.PolicyCounts)
 	}
 	for i := 1; i < len(audit.Results); i++ {
 		if audit.Results[i-1].PolicyID > audit.Results[i].PolicyID {
 			t.Fatal("policy output is not deterministic")
 		}
+	}
+}
+
+func TestCodeSecurityAttachmentStatesFailClosed(t *testing.T) {
+	for _, test := range []struct {
+		status string
+		state  model.Availability
+		want   model.PolicyStatus
+	}{
+		{status: "attached", state: model.Available, want: model.PolicyPass},
+		{status: "enforced", state: model.Available, want: model.PolicyPass},
+		{status: "failed", state: model.Available, want: model.PolicyFail},
+		{status: "detached", state: model.Available, want: model.PolicyFail},
+		{status: "attaching", state: model.Unknown, want: model.PolicyUnknown},
+		{status: "updating", state: model.Unknown, want: model.PolicyUnknown},
+	} {
+		t.Run(test.status, func(t *testing.T) {
+			observation := model.Observed[model.CodeSecurityAttachment]{
+				State: test.state,
+				Value: model.CodeSecurityAttachment{ConfigurationID: 1, ConfigurationName: "approved", Status: test.status},
+			}
+			if test.state == model.Unknown {
+				observation.Reason = "transitional attachment status " + test.status
+			}
+			if got := codeSecurity("example/repo", "approved", observation); got.Status != test.want {
+				t.Fatalf("status = %s, want %s", got.Status, test.want)
+			}
+		})
 	}
 }
