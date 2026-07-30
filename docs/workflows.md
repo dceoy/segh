@@ -34,6 +34,12 @@ Target repositories need no local security workflow, publication variable, or
 write permission. Fork and Dependabot pull requests use the same read-only job.
 Scanner output is retained only as ordinary workflow artifacts.
 
+`scan` also triggers on `merge_group`, scanning the merge queue's own head SHA
+(not an individual pull request's), so a target repository that requires
+`PR security / scan` via an organization ruleset can still complete a queued
+merge; GitHub creates no check for `merge_group` commits on workflows that
+only listen for `pull_request`, which would otherwise stall the queue.
+
 ### Source-repository enforcement
 
 `scan` excludes `dceoy/segh` itself: an organization ruleset pins target
@@ -42,6 +48,13 @@ repositories to a trusted `dceoy/segh` commit, but a pull request against
 `.github/workflows/pr-security-self.yml` runs the same gates for `dceoy/segh`
 instead, triggered only by `pull_request_target` so its job definition always
 comes from the base branch.
+
+`dceoy/segh` does not support a merge queue: `pr-security-self.yml` declares
+no `merge_group` trigger, and `publish-self-check` publishes only against
+`github.event.pull_request.head.sha`, which does not exist on a `merge_group`
+event. Enabling a merge queue on `dceoy/segh` without first adding that
+support would let a merge-group commit land with neither `scan-self` nor the
+published head-commit check ever running against it.
 
 `pull_request_target` runs with `GITHUB_SHA` set to the base branch's commit,
 not the pull request's head, so the check run GitHub Actions creates

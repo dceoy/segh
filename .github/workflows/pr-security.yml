@@ -2,6 +2,7 @@ name: PR security
 
 on:
   pull_request:
+  merge_group:
 
 permissions:
   contents: read
@@ -17,7 +18,12 @@ jobs:
     # not declared here, so a pull_request run on the source repository never
     # emits a skippable scan-self check on the pull request's head commit.
     # Keep this job's scanner and enforcement steps in sync with scan-self's.
-    if: github.repository != 'dceoy/segh' && github.event_name == 'pull_request'
+    # merge_group is required so this workflow, once installed as an
+    # organization ruleset required workflow, still produces the check a
+    # target repository's merge queue needs to complete a queued merge;
+    # without it, GitHub never creates "PR security / scan" for the
+    # merge-group commit and the queue entry can never pass.
+    if: github.repository != 'dceoy/segh' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -41,7 +47,11 @@ jobs:
       - name: Check out pull request
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          # merge_group has no github.event.pull_request; scan the merge
+          # group's own head SHA instead, the synthetic commit the queue is
+          # about to merge (which may combine more than one queued pull
+          # request), since that is the actual untrusted content in play.
+          ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.event.pull_request.head.sha }}
           path: _target
           persist-credentials: false
       - name: Install checksum-verified scanners

@@ -37,7 +37,11 @@ jobs:
       - name: Check out pull request
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          # merge_group never triggers this pull_request_target-only
+          # workflow; kept identical to scan's ref expression so the two
+          # jobs' checkout inputs stay in sync (see
+          # TestPRSecurityScanAndScanSelfStepsStayInSync).
+          ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.event.pull_request.head.sha }}
           path: _target
           persist-credentials: false
           # This pull_request_target job never exposes secrets or executes

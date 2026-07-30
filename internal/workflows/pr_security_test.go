@@ -358,6 +358,73 @@ func TestPRSecurityScanSelfAllowsForkPullRequestCheckout(t *testing.T) {
 	}
 }
 
+// TestPRSecurityScanTriggersOnMergeGroup pins that pr-security.yml's scan
+// job also runs for merge_group. Organization rulesets can install this
+// workflow as a required workflow; if a target repository enables a merge
+// queue, GitHub only creates the required "PR security / scan" check for a
+// merge-group commit when the workflow declares merge_group as a trigger
+// and the job's own if condition permits that event, otherwise the queued
+// merge can never complete.
+func TestPRSecurityScanTriggersOnMergeGroup(t *testing.T) {
+	workflow := loadPRSecurityWorkflow(t)
+	if _, ok := workflow.On["merge_group"]; !ok {
+		t.Error("on: is missing trigger \"merge_group\"")
+	}
+	job, ok := workflow.Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	if !strings.Contains(job.If, "github.event_name == 'merge_group'") {
+		t.Errorf("jobs.scan.if = %q, want it to also permit merge_group", job.If)
+	}
+}
+
+// TestPRSecurityScanSelectsMergeGroupHeadSHA pins that scan's "Check out
+// pull request" step scans the merge group's own head SHA under
+// merge_group, since github.event.pull_request does not exist on that
+// event and the merge-group commit (not any single queued pull request's
+// head) is the untrusted content actually about to be merged.
+func TestPRSecurityScanSelectsMergeGroupHeadSHA(t *testing.T) {
+	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	step, ok := findStep(job.Steps, "Check out pull request")
+	if !ok {
+		t.Fatal("jobs.scan is missing step \"Check out pull request\"")
+	}
+	ref, _ := step.With["ref"].(string)
+	if !strings.Contains(ref, "github.event.merge_group.head_sha") {
+		t.Errorf("jobs.scan step \"Check out pull request\" with.ref = %q, want it to reference github.event.merge_group.head_sha", ref)
+	}
+	if !strings.Contains(ref, "github.event.pull_request.head.sha") {
+		t.Errorf("jobs.scan step \"Check out pull request\" with.ref = %q, want it to still fall back to github.event.pull_request.head.sha", ref)
+	}
+}
+
+// TestPRSecuritySelfWorkflowDoesNotSupportMergeGroup pins that dceoy/segh's
+// own enforcement intentionally does not support a merge queue: neither
+// pr-security-self.yml's trigger nor publish-self-check's published ref
+// handle merge_group, so enabling a merge queue on dceoy/segh must not
+// happen without adding that support first (see docs/workflows.md).
+func TestPRSecuritySelfWorkflowDoesNotSupportMergeGroup(t *testing.T) {
+	workflow := loadPRSecuritySelfWorkflow(t)
+	if _, ok := workflow.On["merge_group"]; ok {
+		t.Error("on: declares \"merge_group\", but publish-self-check only publishes against github.event.pull_request.head.sha; add that support before declaring this trigger")
+	}
+	job, ok := workflow.Jobs["publish-self-check"]
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing")
+	}
+	step, ok := findStep(job.Steps, "Publish the gate result on the pull request's head commit")
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing step \"Publish the gate result on the pull request's head commit\"")
+	}
+	if !strings.Contains(step.Run, "github.event.pull_request.head.sha") {
+		t.Error("jobs.publish-self-check no longer references github.event.pull_request.head.sha; update this test if merge_group support was added")
+	}
+}
+
 // TestPRSecurityScorecardGatedToOrdinaryPullRequestEvent pins that scorecard
 // only runs for the pull_request-triggered event. pr-security.yml declared
 // both pull_request and pull_request_target as triggers until scan-self
