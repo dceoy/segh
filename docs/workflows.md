@@ -34,6 +34,26 @@ Target repositories need no local security workflow, publication variable, or
 write permission. Fork and Dependabot pull requests use the same read-only job.
 Scanner output is retained only as ordinary workflow artifacts.
 
+### Source-repository enforcement
+
+`scan` excludes `dceoy/segh` itself: an organization ruleset pins target
+repositories to a trusted `dceoy/segh` commit, but a pull request against
+`dceoy/segh` could otherwise supply its own "trusted" checkout of this file.
+`.github/workflows/pr-security-self.yml` runs the same gates for `dceoy/segh`
+instead, triggered only by `pull_request_target` so its job definition always
+comes from the base branch.
+
+`pull_request_target` runs with `GITHUB_SHA` set to the base branch's commit,
+not the pull request's head, so the check run GitHub Actions creates
+automatically for the `scan-self` job does not attach to the commit branch
+protection evaluates. A separate `publish-self-check` job, which holds no
+other privilege and never checks out pull-request content, therefore
+publishes an explicit check run named `segh source scan (head commit)`
+pinned to the pull request's head SHA once `scan-self` completes. Require
+that check (not the job-level `PR security / scan-self` context, which
+evaluates the wrong commit) on `dceoy/segh`'s own branch protection or
+ruleset.
+
 ## Scanner policy ownership
 
 The ruleset workflow supplies `/dev/null` for Trivy's target-repository

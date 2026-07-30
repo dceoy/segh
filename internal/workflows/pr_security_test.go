@@ -13,16 +13,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const prSecurityWorkflowPath = "../../.github/workflows/pr-security.yml"
+const (
+	prSecurityWorkflowPath     = "../../.github/workflows/pr-security.yml"
+	prSecuritySelfWorkflowPath = "../../.github/workflows/pr-security-self.yml"
+)
 
 type prSecurityStep struct {
 	Name string         `yaml:"name"`
 	With map[string]any `yaml:"with"`
+	Run  string         `yaml:"run"`
 }
 
 type prSecurityJob struct {
-	If    string           `yaml:"if"`
-	Steps []prSecurityStep `yaml:"steps"`
+	If          string            `yaml:"if"`
+	Permissions map[string]string `yaml:"permissions"`
+	Steps       []prSecurityStep  `yaml:"steps"`
 }
 
 type prSecurityWorkflow struct {
@@ -43,6 +48,19 @@ func loadPRSecurityWorkflow(t *testing.T) prSecurityWorkflow {
 	return workflow
 }
 
+func loadPRSecuritySelfWorkflow(t *testing.T) prSecurityWorkflow {
+	t.Helper()
+	data, err := os.ReadFile(prSecuritySelfWorkflowPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", prSecuritySelfWorkflowPath, err)
+	}
+	var workflow prSecurityWorkflow
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatalf("parse %s: %v", prSecuritySelfWorkflowPath, err)
+	}
+	return workflow
+}
+
 func stepNames(steps []prSecurityStep) []string {
 	names := make([]string, len(steps))
 	for i, step := range steps {
@@ -51,33 +69,93 @@ func stepNames(steps []prSecurityStep) []string {
 	return names
 }
 
-// TestPRSecurityWorkflowTriggersOnPullRequestTarget pins that scan-self can
-// keep running: its enforcement is only immune to a pull request editing
-// this file because pull_request_target sources the job definition from the
-// base branch. Losing that trigger would silently revert to a
-// pull_request-only workflow a pull request can weaken.
-func TestPRSecurityWorkflowTriggersOnPullRequestTarget(t *testing.T) {
+// TestPRSecurityWorkflowDoesNotTriggerOnPullRequestTarget pins that
+// pr-security.yml no longer declares pull_request_target. Declaring both
+// pull_request and pull_request_target in one workflow file made every
+// ordinary pull_request run on the source repository emit a skipped
+// scan-self job on the pull request's own head commit; a skipped job
+// satisfies a required check trivially, so requiring "scan-self" (or the
+// documented "scan") could be satisfied without the trusted scan ever
+// running against that commit. Splitting the trigger into
+// pr-security-self.yml removes that skippable job entirely.
+func TestPRSecurityWorkflowDoesNotTriggerOnPullRequestTarget(t *testing.T) {
 	workflow := loadPRSecurityWorkflow(t)
-	for _, trigger := range []string{"pull_request", "pull_request_target"} {
-		if _, ok := workflow.On[trigger]; !ok {
-			t.Errorf("on: is missing trigger %q", trigger)
-		}
+	if _, ok := workflow.On["pull_request"]; !ok {
+		t.Error("on: is missing trigger \"pull_request\"")
+	}
+	if _, ok := workflow.On["pull_request_target"]; ok {
+		t.Error("on: still declares \"pull_request_target\"; this would reintroduce a skipped scan-self job on pull_request runs")
+	}
+	if _, ok := workflow.Jobs["scan-self"]; ok {
+		t.Error("jobs.scan-self should live in pr-security-self.yml, not pr-security.yml")
 	}
 }
 
-// TestPRSecurityScanSelfGatedToSourceRepositoryPullRequestTarget pins that
-// scan-self only runs for the source repository under the secure trigger,
-// so it cannot double-run under the pull_request-triggered event too.
-func TestPRSecurityScanSelfGatedToSourceRepositoryPullRequestTarget(t *testing.T) {
-	workflow := loadPRSecurityWorkflow(t)
+// TestPRSecuritySelfWorkflowTriggersOnlyOnPullRequestTarget pins that
+// pr-security-self.yml's only trigger is pull_request_target, so it is
+// sourced from the base branch (a pull request cannot weaken it) and never
+// also runs under an ordinary pull_request event on the source repository.
+func TestPRSecuritySelfWorkflowTriggersOnlyOnPullRequestTarget(t *testing.T) {
+	workflow := loadPRSecuritySelfWorkflow(t)
+	if _, ok := workflow.On["pull_request_target"]; !ok {
+		t.Error("on: is missing trigger \"pull_request_target\"")
+	}
+	if _, ok := workflow.On["pull_request"]; ok {
+		t.Error("on: still declares \"pull_request\"; scan-self would then run twice and re-emit a skippable head-commit job")
+	}
+}
+
+// TestPRSecurityScanSelfGatedToSourceRepository pins that scan-self only
+// runs for the source repository.
+func TestPRSecurityScanSelfGatedToSourceRepository(t *testing.T) {
+	workflow := loadPRSecuritySelfWorkflow(t)
 	job, ok := workflow.Jobs["scan-self"]
 	if !ok {
 		t.Fatal("jobs.scan-self is missing")
 	}
-	for _, want := range []string{"github.repository == 'dceoy/segh'", "github.event_name == 'pull_request_target'"} {
-		if !strings.Contains(job.If, want) {
-			t.Errorf("jobs.scan-self.if = %q, want it to contain %q", job.If, want)
-		}
+	if !strings.Contains(job.If, "github.repository == 'dceoy/segh'") {
+		t.Errorf("jobs.scan-self.if = %q, want it to contain %q", job.If, "github.repository == 'dceoy/segh'")
+	}
+}
+
+// TestPRSecurityPublishSelfCheckReportsOnHeadSHA pins that a separate
+// publish-self-check job, not scan-self itself, explicitly publishes a
+// check run pinned to the pull request's head SHA. GITHUB_SHA (and the
+// check run GitHub Actions creates automatically for scan-self) resolves to
+// the base branch's commit under pull_request_target, not the pull
+// request's head, so a required check would evaluate against the wrong
+// commit unless this job explicitly reports against
+// github.event.pull_request.head.sha itself. Keeping this in its own job
+// means checks:write is never granted to the job that checks out and scans
+// untrusted pull-request content.
+func TestPRSecurityPublishSelfCheckReportsOnHeadSHA(t *testing.T) {
+	workflow := loadPRSecuritySelfWorkflow(t)
+	scanSelf, ok := workflow.Jobs["scan-self"]
+	if !ok {
+		t.Fatal("jobs.scan-self is missing")
+	}
+	if _, hasChecks := scanSelf.Permissions["checks"]; hasChecks {
+		t.Errorf("jobs.scan-self.permissions.checks = %q, want it unset: checks:write must not be granted to the job scanning untrusted pull-request content", scanSelf.Permissions["checks"])
+	}
+	job, ok := workflow.Jobs["publish-self-check"]
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing")
+	}
+	if job.Permissions["checks"] != "write" {
+		t.Errorf("jobs.publish-self-check.permissions.checks = %q, want \"write\"", job.Permissions["checks"])
+	}
+	if !strings.Contains(job.If, "needs.scan-self.result") {
+		t.Errorf("jobs.publish-self-check.if = %q, want it to depend on needs.scan-self.result", job.If)
+	}
+	step, ok := findStep(job.Steps, "Publish the gate result on the pull request's head commit")
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing step \"Publish the gate result on the pull request's head commit\"")
+	}
+	if step.Run == "" {
+		t.Fatal("jobs.publish-self-check step is missing a run script")
+	}
+	if !strings.Contains(step.Run, "github.event.pull_request.head.sha") {
+		t.Error("jobs.publish-self-check does not reference github.event.pull_request.head.sha")
 	}
 }
 
@@ -87,12 +165,11 @@ func TestPRSecurityScanSelfGatedToSourceRepositoryPullRequestTarget(t *testing.T
 // updating scan's gate logic while forgetting scan-self's, silently
 // reopening the enforcement gap scan-self exists to close.
 func TestPRSecurityScanAndScanSelfStepsStayInSync(t *testing.T) {
-	workflow := loadPRSecurityWorkflow(t)
-	scan, ok := workflow.Jobs["scan"]
+	scan, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
 	if !ok {
 		t.Fatal("jobs.scan is missing")
 	}
-	scanSelf, ok := workflow.Jobs["scan-self"]
+	scanSelf, ok := loadPRSecuritySelfWorkflow(t).Jobs["scan-self"]
 	if !ok {
 		t.Fatal("jobs.scan-self is missing")
 	}
@@ -132,7 +209,7 @@ func findStep(steps []prSecurityStep, name string) (prSecurityStep, bool) {
 // excludes the source repository), losing this input would silently stop
 // scan-self from running on any fork contribution.
 func TestPRSecurityScanSelfAllowsForkPullRequestCheckout(t *testing.T) {
-	workflow := loadPRSecurityWorkflow(t)
+	workflow := loadPRSecuritySelfWorkflow(t)
 	job, ok := workflow.Jobs["scan-self"]
 	if !ok {
 		t.Fatal("jobs.scan-self is missing")
@@ -147,10 +224,11 @@ func TestPRSecurityScanSelfAllowsForkPullRequestCheckout(t *testing.T) {
 }
 
 // TestPRSecurityScorecardGatedToOrdinaryPullRequestEvent pins that scorecard
-// only runs for the pull_request-triggered event. This workflow declares
-// both pull_request and pull_request_target as triggers; without this guard
-// a target repository would run the informational Scorecard job twice per
-// pull request.
+// only runs for the pull_request-triggered event. pr-security.yml declared
+// both pull_request and pull_request_target as triggers until scan-self
+// moved to its own pull_request_target-only workflow; this guard is now
+// redundant but kept so a future re-addition of pull_request_target here
+// does not silently double-run the informational Scorecard job again.
 func TestPRSecurityScorecardGatedToOrdinaryPullRequestEvent(t *testing.T) {
 	workflow := loadPRSecurityWorkflow(t)
 	job, ok := workflow.Jobs["scorecard"]
