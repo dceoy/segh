@@ -32,9 +32,11 @@ type GitHub struct {
 	WebURL string `yaml:"web_url"`
 }
 
+type Duration time.Duration
+
 type Inventory struct {
-	Concurrency int           `yaml:"concurrency"`
-	Timeout     time.Duration `yaml:"timeout"`
+	Concurrency int      `yaml:"concurrency"`
+	Timeout     Duration `yaml:"timeout"`
 }
 
 type Selectors struct {
@@ -99,7 +101,7 @@ func Default() Config {
 		},
 		Inventory: Inventory{
 			Concurrency: 4,
-			Timeout:     30 * time.Minute,
+			Timeout:     Duration(30 * time.Minute),
 		},
 		Selectors: Selectors{ExcludeArchived: true, ExcludeForks: true},
 		Output:    Output{Directory: "segh-results"},
@@ -153,7 +155,7 @@ func (c Config) Validate() error {
 	if c.Inventory.Concurrency < 1 || c.Inventory.Concurrency > 64 {
 		errs = append(errs, fmt.Errorf("inventory.concurrency must be between 1 and 64"))
 	}
-	if c.Inventory.Timeout <= 0 {
+	if time.Duration(c.Inventory.Timeout) <= 0 {
 		errs = append(errs, fmt.Errorf("inventory.timeout must be positive"))
 	}
 	if c.Output.Directory == "" {
@@ -203,6 +205,29 @@ func (c Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+const (
+	durationPatternText = `^\+?(([0-9]{1,5}(\.[0-9]{0,9})?|\.[0-9]{1,9})(ns|us|µs|μs|ms|s|m|h)){1,16}$`
+	zeroDurationPattern = `^\+?((0{1,5}(\.0{0,9})?|\.0{1,9})(ns|us|µs|μs|ms|s|m|h)){1,16}$`
+)
+
+var durationPattern = regexp.MustCompile(durationPatternText)
+var zeroDuration = regexp.MustCompile(zeroDurationPattern)
+
+func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.Tag != "!!str" {
+		return fmt.Errorf("duration must be a string")
+	}
+	if !durationPattern.MatchString(node.Value) || zeroDuration.MatchString(node.Value) {
+		return fmt.Errorf("duration must be positive and use at most 16 components with 5 integer and 9 fractional digits each")
+	}
+	parsed, err := time.ParseDuration(node.Value)
+	if err != nil {
+		return fmt.Errorf("parse duration: %w", err)
+	}
+	*d = Duration(parsed)
+	return nil
 }
 
 func firstDuplicate(values []string) (string, bool) {

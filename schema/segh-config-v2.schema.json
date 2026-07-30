@@ -280,8 +280,8 @@
     "requirement": {"enum": ["", "required", "disabled"]},
     "duration": {
       "type": "string",
-      "pattern": "^\\+?(([0-9]+\\.?[0-9]*|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$",
-      "not": {"pattern": "^\\+?((0+\\.?0*|\\.0+)(ns|us|µs|μs|ms|s|m|h))+$"}
+      "pattern": "^\\+?(([0-9]{1,5}(\\.[0-9]{0,9})?|\\.[0-9]{1,9})(ns|us|µs|μs|ms|s|m|h)){1,16}$",
+      "not": {"pattern": "^\\+?((0{1,5}(\\.0{0,9})?|\\.0{1,9})(ns|us|µs|μs|ms|s|m|h)){1,16}$"}
     }
   }
 }

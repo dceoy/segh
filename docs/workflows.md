@@ -2,17 +2,22 @@
 
 ## Organization governance audit
 
-Copy `.github/workflows/organization-audit.yml` into a private control
-repository and configure:
+Copy `.github/workflows/organization-audit.yml` and
+`config/organization.yaml` into a private control repository, edit the
+organization configuration there, and configure:
 
 - `SEGH_READ_APP_ID`
 - `SEGH_READ_APP_PRIVATE_KEY`
 
-The App-token action creates a short-lived token for the organization.
-`GH_TOKEN` and the action's non-secret installation ID reach `segh`; the App
-private key stays scoped to the token step. The job inventories native-control
-coverage, evaluates policy, writes a deterministic report, and retains the
-evidence. It does not clone or scan organization repositories.
+The workflow checks out the operator-owned control repository under
+`_control`, then checks out the public segh source under `_segh` at the
+immutable commit pinned in the workflow. Update that pin only through a
+reviewed control-repository change. The App-token action creates a short-lived
+token for the organization. `GH_TOKEN` and the action's non-secret
+installation ID reach `segh`; the App private key stays scoped to the token
+step. The job inventories native-control coverage, evaluates policy from
+`_control/config/organization.yaml`, writes a deterministic report, and
+retains the evidence. It does not clone or scan organization repositories.
 
 The workflow deliberately refuses to run from a public control repository
 because organization inventory and exceptions can be sensitive. Add a schedule

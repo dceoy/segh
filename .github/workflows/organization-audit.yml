@@ -15,9 +15,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Check out trusted source
+      - name: Check out control repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: _control
+          persist-credentials: false
+      - name: Check out trusted segh source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dceoy/segh
+          ref: f9eb4b2b16cc584410a62174ed2f462703c7f81e
+          path: _segh
           persist-credentials: false
       - name: Create read-only GitHub App token
         id: app-token
@@ -50,8 +58,10 @@ jobs:
         with:
           go-version: "1.26.5"
           cache: true
+          cache-dependency-path: _segh/go.sum
       - name: Build
-        run: go build -trimpath -o bin/segh ./cmd/segh
+        working-directory: _segh
+        run: go build -trimpath -o "$GITHUB_WORKSPACE/bin/segh" ./cmd/segh
       - name: Inventory GitHub-native controls
         id: inventory
         env:
@@ -59,7 +69,7 @@ jobs:
           SEGH_GITHUB_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
         run: |
           set +e
-          bin/segh --config config/organization.yaml inventory \
+          bin/segh --config _control/config/organization.yaml inventory \
             --output segh-results/inventory.json
           status=$?
           if (( status != 0 && status != 4 )); then
@@ -71,7 +81,7 @@ jobs:
         if: always() && steps.inventory.outcome == 'success'
         run: |
           set +e
-          bin/segh --config config/organization.yaml audit \
+          bin/segh --config _control/config/organization.yaml audit \
             --inventory segh-results/inventory.json \
             --output segh-results/audit.json
           status=$?
@@ -83,7 +93,7 @@ jobs:
         if: always() && steps.audit.outcome == 'success'
         run: |
           set +e
-          bin/segh --config config/organization.yaml report \
+          bin/segh --config _control/config/organization.yaml report \
             --inventory segh-results/inventory.json \
             --audit segh-results/audit.json \
             --output segh-results/report.json \

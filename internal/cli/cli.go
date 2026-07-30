@@ -127,7 +127,7 @@ func runInventory(ctx context.Context, cfg config.Config, args []string, stdout 
 	if err != nil {
 		return authError(err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, cfg.Inventory.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Inventory.Timeout))
 	defer cancel()
 	inventory, runErr := gh.NewInventoryService(cfg, client, installationID).Run(ctx)
 	if err := output.JSON(*outputPath, inventory); err != nil {

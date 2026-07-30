@@ -8,7 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadExample(t *testing.T) {
@@ -40,6 +41,17 @@ func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
 	}
 	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "multiple YAML documents are not allowed") {
 		t.Fatalf("expected multiple-document error, got %v", err)
+	}
+}
+
+func TestLoadRejectsUnboundedDuration(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "segh.yaml")
+	data := "version: 2\norganization: test\ninventory:\n  timeout: 999999999999999999999999999h\npolicies:\n  repository:\n    require_ruleset: true\n"
+	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "duration must be positive") {
+		t.Fatalf("expected bounded-duration error, got %v", err)
 	}
 }
 
@@ -358,6 +370,9 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 	if pattern == "" || notPattern == "" {
 		t.Fatal("$defs/duration is missing a pattern or not-pattern constraint")
 	}
+	if pattern != durationPatternText || notPattern != zeroDurationPattern {
+		t.Fatal("$defs/duration patterns must exactly match runtime duration syntax")
+	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		t.Fatalf("invalid duration pattern: %v", err)
@@ -370,8 +385,8 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 		return re.MatchString(raw) && !notRe.MatchString(raw)
 	}
 
-	// Config.Validate rejects inventory.timeout <= 0, so every duration
-	// string here must agree between the schema and time.ParseDuration.
+	// The custom YAML duration parser deliberately accepts a bounded subset of
+	// time.ParseDuration syntax, so every value must agree with the schema.
 	cases := []struct {
 		raw   string
 		valid bool
@@ -411,18 +426,25 @@ func TestSchemaDurationPatternMatchesRuntimeValidation(t *testing.T) {
 		{"1.5μs", true},
 		{".5s", true},
 		{"5.s", true},
+		{"99999h", true},
+		{strings.Repeat("99999h", 16), true},
 
 		{"0.0s", false},
 		{".0s", false},
 		{"0.00h0m", false},
+		{"100000h", false},
+		{"1.0000000000s", false},
+		{strings.Repeat("1h", 17), false},
+		{"999999999999999999999999999h", false},
 	}
 	for _, tc := range cases {
 		if got := schemaAccepts(tc.raw); got != tc.valid {
 			t.Errorf("%s: schema acceptance = %v, want %v", tc.raw, got, tc.valid)
 		}
-		dur, err := time.ParseDuration(tc.raw)
-		if got := err == nil && dur > 0; got != tc.valid {
-			t.Errorf("%s: time.ParseDuration-derived validity = %v, want %v", tc.raw, got, tc.valid)
+		node := yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: tc.raw}
+		var dur Duration
+		if got := dur.UnmarshalYAML(&node) == nil; got != tc.valid {
+			t.Errorf("%s: runtime duration acceptance = %v, want %v", tc.raw, got, tc.valid)
 		}
 	}
 }
