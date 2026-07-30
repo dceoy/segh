@@ -1,11 +1,9 @@
+---
 name: PR security
-
 on:
-  pull_request_target:
-
+  pull_request_target:  # zizmor: ignore[dangerous-triggers]
 permissions:
   contents: read
-
 jobs:
   scan-self:
     # pull_request_target sources this job's definition from the base branch
@@ -29,13 +27,13 @@ jobs:
       contents: read
     steps:
       - name: Check out trusted scanner configuration
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: _segh
           persist-credentials: false
       - name: Check out pull request
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           # merge_group never triggers this pull_request_target-only
           # workflow; kept identical to scan's ref expression so the two
@@ -52,7 +50,7 @@ jobs:
           # scanners below.
           allow-unsafe-pr-checkout: true
       - name: Install checksum-verified scanners
-        uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49 # v4.0.5
+        uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49  # v4.0.5
         with:
           aqua_version: v2.62.1
           working_directory: _segh
@@ -193,7 +191,7 @@ jobs:
           done
       - name: Retain scanner reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: pr-security-reports
           path: security-results
@@ -217,7 +215,6 @@ jobs:
             fi
           done
           exit "$failed"
-
   publish-self-check:
     # GITHUB_SHA for pull_request_target is the base branch's commit, not the
     # pull request's head, so the check run GitHub creates automatically for
@@ -258,7 +255,7 @@ jobs:
     steps:
       - name: Create dedicated publisher App token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.SEGH_SCAN_PUBLISHER_APP_ID }}
           private-key: ${{ secrets.SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY }}

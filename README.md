@@ -42,8 +42,8 @@ rejected without aliases or migration logic.
 
 ## Commands and exit codes
 
-| Command | Purpose |
-|---|---|
+| Command | Purpose                                                  |
+| ------- | -------------------------------------------------------- |
 | `audit` | Validate, inventory, evaluate policy, and write evidence |
 
 Exit codes are `0` success, `1` policy violations, `2` invalid configuration or

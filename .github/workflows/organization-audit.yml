@@ -1,22 +1,19 @@
+---
 name: Organization security governance audit
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: segh-organization-audit
   cancel-in-progress: false
-
 jobs:
   audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Check out control repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           path: _control
           persist-credentials: false
@@ -41,7 +38,7 @@ jobs:
           fi
           printf 'commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
       - name: Check out trusted segh source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           repository: dceoy/segh
           ref: ${{ steps.source.outputs.commit }}
@@ -61,14 +58,14 @@ jobs:
           fi
       - name: Create read-only GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.SEGH_READ_APP_ID }}
           private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
           # Organization-wide inventory requires every repository in the App
           # installation; the permissions below still constrain the token to
           # the exact read-only API surface used by segh.
-          owner: ${{ github.repository_owner }} # zizmor: ignore[github-app]
+          owner: ${{ github.repository_owner }}   # zizmor: ignore[github-app]
           permission-actions: read
           permission-administration: read
           permission-contents: read
@@ -84,7 +81,7 @@ jobs:
             exit 1
           fi
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   # v7.0.0
         with:
           go-version: "1.26.5"
           cache: true
@@ -105,7 +102,7 @@ jobs:
           fi
       - name: Retain governance evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: organization-governance-report
           path: segh-results

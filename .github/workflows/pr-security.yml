@@ -1,12 +1,10 @@
+---
 name: PR security
-
 on:
   pull_request:
   merge_group:
-
 permissions:
   contents: read
-
 jobs:
   scan:
     # Organization rulesets run this workflow in target repositories, pinned
@@ -30,7 +28,7 @@ jobs:
       contents: read
     steps:
       - name: Check out trusted scanner configuration
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           repository: dceoy/segh
           # pull_request (unlike pull_request_target) runs the workflow
@@ -45,7 +43,7 @@ jobs:
           path: _segh
           persist-credentials: false
       - name: Check out pull request
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           # merge_group has no github.event.pull_request; scan the merge
           # group's own head SHA instead, the synthetic commit the queue is
@@ -55,7 +53,7 @@ jobs:
           path: _target
           persist-credentials: false
       - name: Install checksum-verified scanners
-        uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49 # v4.0.5
+        uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49  # v4.0.5
         with:
           aqua_version: v2.62.1
           working_directory: _segh
@@ -196,7 +194,7 @@ jobs:
           done
       - name: Retain scanner reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: pr-security-reports
           path: security-results
@@ -220,7 +218,6 @@ jobs:
             fi
           done
           exit "$failed"
-
   scorecard:
     # Scorecard is evidence only. Its action has platform limitations for some
     # private repositories, so rulesets must not require this job. Gated to
@@ -237,14 +234,14 @@ jobs:
       pull-requests: read
     steps:
       - name: Check out pull request
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Prepare Scorecard output
         run: mkdir -p security-results
       - name: Run OpenSSF Scorecard
-        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc  # v2.4.4
         with:
           results_file: security-results/scorecard.json
           results_format: json
@@ -252,7 +249,7 @@ jobs:
           publish_results: false
       - name: Retain Scorecard report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: pr-security-scorecard
           path: security-results/scorecard.json

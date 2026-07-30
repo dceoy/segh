@@ -14,12 +14,12 @@ The job checks out:
 
 It then runs these blocking gates:
 
-| Gate | Threshold | Machine output | Human output |
-|---|---|---|---|
-| zizmor | medium+ severity, high confidence, strict collection | JSON | plain text |
-| Trivy misconfiguration | high, critical | JSON | table |
-| Trivy vulnerability | high, critical | JSON | table |
-| Trivy secret | every severity | JSON | table |
+| Gate                   | Threshold                                            | Machine output | Human output |
+| ---------------------- | ---------------------------------------------------- | -------------- | ------------ |
+| zizmor                 | medium+ severity, high confidence, strict collection | JSON           | plain text   |
+| Trivy misconfiguration | high, critical                                       | JSON           | table        |
+| Trivy vulnerability    | high, critical                                       | JSON           | table        |
+| Trivy secret           | every severity                                       | JSON           | table        |
 
 Each scanner status is captured without stopping later scans. The workflow
 uploads `pr-security-reports`, writes bounded human-readable summaries, and only

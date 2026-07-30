@@ -1,29 +1,34 @@
-name: CI
-
+---
+name: CI/CD
 on:
-  pull_request:
   push:
-    branches: [main]
-
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 permissions:
   contents: read
-
 jobs:
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   # v7.0.0
         with:
           go-version: "1.26.5"
           cache: true
       - name: Install checksum-verified tools
-        uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49 # v4.0.5
+        uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49  # v4.0.5
         with:
           aqua_version: v2.62.1
       - name: Validate configuration

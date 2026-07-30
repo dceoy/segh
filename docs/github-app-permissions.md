@@ -3,14 +3,14 @@
 The organization audit uses a read-only GitHub App installed on every
 repository in the organization.
 
-| Permission | Access | Use |
-|---|---|---|
-| Actions | Read | Actions enablement and policy |
-| Administration | Read | Rulesets, branch protection, Dependabot enablement |
-| Contents | Read | Repository metadata, dependency graph export, `SECURITY.md` |
-| Metadata | Read | Repository enumeration and classification |
-| Organization administration | Read | Authoritative App installation scope |
-| Organization custom properties | Read | Organization repository selection metadata |
+| Permission                     | Access | Use                                                         |
+| ------------------------------ | ------ | ----------------------------------------------------------- |
+| Actions                        | Read   | Actions enablement and policy                               |
+| Administration                 | Read   | Rulesets, branch protection, Dependabot enablement          |
+| Contents                       | Read   | Repository metadata, dependency graph export, `SECURITY.md` |
+| Metadata                       | Read   | Repository enumeration and classification                   |
+| Organization administration    | Read   | Authoritative App installation scope                        |
+| Organization custom properties | Read   | Organization repository selection metadata                  |
 
 The workflow requests these permissions explicitly when minting its short-lived
 installation token. It does not request Security events or any permission used

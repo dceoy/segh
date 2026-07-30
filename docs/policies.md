@@ -3,27 +3,27 @@
 Version 4 policy sections are independent. A field is evaluated only when it is
 present in configuration.
 
-| Policy ID | Observation |
-|---|---|
-| `actions.enabled` | GitHub Actions enabled state |
-| `actions.allowed_actions` | Organization or repository action allow policy |
-| `actions.default_workflow_permissions` | Default `GITHUB_TOKEN` permission |
-| `actions.sha_pinning_enforced` | Native full-SHA policy |
-| `actions.fork_pr_approval` | Fork workflow approval policy |
-| `dependencies.dependency_graph` | Dependency graph availability |
-| `dependencies.dependabot_alerts` | Dependabot alerts enablement |
-| `dependencies.dependabot_security_updates` | Dependabot security updates enablement |
-| `repository.ruleset` | Effective default-branch ruleset |
-| `repository.branch_protection` | Ruleset or classic protection |
-| `repository.required_pull_request` | Pull request requirement |
-| `repository.required_checks` | Ordinary status-check requirement |
-| `repository.force_push_restricted` | Force pushes prohibited |
-| `repository.deletion_restricted` | Branch deletion prohibited |
-| `repository.security_md` | Security policy present or inherited |
-| `repository.visibility` | Allowed visibility |
-| `repository.archived` | Archived classification prohibited |
-| `repository.fork` | Fork classification prohibited |
-| `repository.template` | Template classification prohibited |
+| Policy ID                                  | Observation                                    |
+| ------------------------------------------ | ---------------------------------------------- |
+| `actions.enabled`                          | GitHub Actions enabled state                   |
+| `actions.allowed_actions`                  | Organization or repository action allow policy |
+| `actions.default_workflow_permissions`     | Default `GITHUB_TOKEN` permission              |
+| `actions.sha_pinning_enforced`             | Native full-SHA policy                         |
+| `actions.fork_pr_approval`                 | Fork workflow approval policy                  |
+| `dependencies.dependency_graph`            | Dependency graph availability                  |
+| `dependencies.dependabot_alerts`           | Dependabot alerts enablement                   |
+| `dependencies.dependabot_security_updates` | Dependabot security updates enablement         |
+| `repository.ruleset`                       | Effective default-branch ruleset               |
+| `repository.branch_protection`             | Ruleset or classic protection                  |
+| `repository.required_pull_request`         | Pull request requirement                       |
+| `repository.required_checks`               | Ordinary status-check requirement              |
+| `repository.force_push_restricted`         | Force pushes prohibited                        |
+| `repository.deletion_restricted`           | Branch deletion prohibited                     |
+| `repository.security_md`                   | Security policy present or inherited           |
+| `repository.visibility`                    | Allowed visibility                             |
+| `repository.archived`                      | Archived classification prohibited             |
+| `repository.fork`                          | Fork classification prohibited                 |
+| `repository.template`                      | Template classification prohibited             |
 
 The dependency controls accept boolean expectations, so they can be configured
 and audited independently:
