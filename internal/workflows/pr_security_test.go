@@ -5,6 +5,7 @@
 package workflows
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -532,7 +533,7 @@ func TestPRSecurityScorecardGatedToOrdinaryPullRequestEvent(t *testing.T) {
 // runGit runs git against dir, failing the test on error.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...) // #nosec G204 -- args are fixed test-internal git subcommands, not external input.
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -630,7 +631,7 @@ func TestPRSecurityStandaloneShellCheckGateDiscoversAllTrackedShellScripts(t *te
 
 	t.Setenv("GITHUB_WORKSPACE", workspace)
 	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cmd := exec.Command("bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
 	cmd.Dir = target
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("run standalone ShellCheck gate script: %v\n%s", err, out)
@@ -688,7 +689,7 @@ func TestPRSecurityRejectSymlinksStepRemovesTrackedSymlinks(t *testing.T) {
 	}
 
 	t.Setenv("GITHUB_WORKSPACE", workspace)
-	cmd := exec.Command("bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
 	cmd.Dir = target
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("run symlink-rejection step: %v\n%s", err, out)
