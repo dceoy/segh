@@ -67,7 +67,7 @@ func TestSecurityPolicyExistsFallsBackTo404Profile(t *testing.T) {
 	}
 }
 
-func TestEndpointFeatureEnabled(t *testing.T) {
+func TestProbeEndpoint(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		status    int
@@ -81,8 +81,11 @@ func TestEndpointFeatureEnabled(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			service := newInventoryTestService(t, func(writer http.ResponseWriter, _ *http.Request) {
 				writer.WriteHeader(test.status)
+				if test.status == http.StatusOK {
+					_, _ = io.WriteString(writer, `{}`)
+				}
 			})
-			observed := service.endpointFeatureEnabled(context.Background(), "/feature", "feature")
+			observed := service.probeEndpoint(context.Background(), "/feature", "feature", &jsonObject{})
 			if observed.State != test.wantState || observed.Value != test.wantValue {
 				t.Fatalf("observed = %#v", observed)
 			}
@@ -142,10 +145,10 @@ func TestEnrichPreservesAndMatchesMultiSelectCustomProperties(t *testing.T) {
 		FullName:      "org/repo",
 		DefaultBranch: "main",
 	})
-	if !reflect.DeepEqual(repo.CustomProperties["teams"], []string{"platform", "security"}) {
-		t.Fatalf("teams custom property = %#v, want a preserved, sorted string slice", repo.CustomProperties["teams"])
+	if !reflect.DeepEqual(repo.CustomProperties.Value["teams"], []string{"platform", "security"}) {
+		t.Fatalf("teams custom property = %#v, want a preserved, sorted string slice", repo.CustomProperties.Value["teams"])
 	}
-	if value, present := repo.CustomProperties["unset"]; !present || value != nil {
+	if value, present := repo.CustomProperties.Value["unset"]; !present || value != nil {
 		t.Fatalf("unset custom property = %#v, present = %v; want a preserved null", value, present)
 	}
 	if reason, unknown := service.exclusionReason(repo); reason != "" || unknown {
@@ -173,8 +176,62 @@ func TestEnrichFailsClosedOnUnsupportedCustomPropertyValue(t *testing.T) {
 		FullName:      "org/repo",
 		DefaultBranch: "main",
 	})
+	if repo.CustomProperties.State != model.Unknown {
+		t.Fatalf("custom properties = %#v, want unknown state", repo.CustomProperties)
+	}
 	if reason, unknown := service.exclusionReason(repo); reason != "" || !unknown {
 		t.Fatalf("exclusionReason() = %q, %v; want unsupported value type to fail closed", reason, unknown)
+	}
+}
+
+func TestEnrichFailsClosedWhenCustomPropertiesAreUnavailable(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/repos/org/repo/properties/values" {
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(writer, `{"message":"forbidden"}`)
+			return
+		}
+		writer.WriteHeader(http.StatusNotFound)
+	})
+	service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
+	repo := service.enrich(context.Background(), apiRepository{
+		FullName: "org/repo", DefaultBranch: "main",
+	})
+	if repo.CustomProperties.State != model.Unknown {
+		t.Fatalf("custom properties = %#v, want unknown state", repo.CustomProperties)
+	}
+	if reason, unknown := service.exclusionReason(repo); reason != "" || !unknown {
+		t.Fatalf("exclusionReason() = %q, %v; want API failure to fail closed", reason, unknown)
+	}
+}
+
+func TestMissingCustomPropertyIsVerifiedMismatch(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/repos/org/repo/properties/values" {
+			_, _ = io.WriteString(writer, `[]`)
+			return
+		}
+		writer.WriteHeader(http.StatusNotFound)
+	})
+	service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
+	repo := service.enrich(context.Background(), apiRepository{
+		FullName: "org/repo", DefaultBranch: "main",
+	})
+	if reason, unknown := service.exclusionReason(repo); reason != "custom property tier" || unknown {
+		t.Fatalf("exclusionReason() = %q, %v; want verified missing-property mismatch", reason, unknown)
+	}
+}
+
+func TestGetObserved(t *testing.T) {
+	boolValue := getObserved("bool", func() (bool, error) { return true, nil })
+	if boolValue.State != model.Available || !boolValue.Value {
+		t.Fatalf("bool observation = %#v", boolValue)
+	}
+	stringValue := getObserved("string", func() (string, error) {
+		return "", &APIError{StatusCode: http.StatusNotImplemented, Message: "unsupported"}
+	})
+	if stringValue.State != model.Unsupported || stringValue.Reason != "unsupported" {
+		t.Fatalf("string observation = %#v", stringValue)
 	}
 }
 

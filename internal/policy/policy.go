@@ -51,29 +51,29 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 	var results []model.PolicyResult
 	actions := e.cfg.Policies.Actions
 	if actions.Enabled != nil {
-		results = append(results, observedBool(repo.FullName, "actions.enabled", "high", repo.ActionsEnabled, *actions.Enabled,
+		results = append(results, observed(repo.FullName, "actions.enabled", "high", repo.ActionsEnabled, *actions.Enabled,
 			"Configure the repository or organization Actions policy with GitHub-native controls."))
 	}
 	if actions.DefaultWorkflowPermissions != "" {
-		results = append(results, observedString(repo.FullName, "actions.default_workflow_permissions", "high", repo.DefaultWorkflowPermissions, actions.DefaultWorkflowPermissions,
+		results = append(results, observed(repo.FullName, "actions.default_workflow_permissions", "high", repo.DefaultWorkflowPermissions, actions.DefaultWorkflowPermissions,
 			"Set the organization default GITHUB_TOKEN workflow permission to read."))
 	}
 	if actions.AllowedActions != "" {
-		results = append(results, observedString(repo.FullName, "actions.allowed_actions", "high", repo.AllowedActions, actions.AllowedActions,
+		results = append(results, observed(repo.FullName, "actions.allowed_actions", "high", repo.AllowedActions, actions.AllowedActions,
 			"Configure the repository or organization allowed Actions policy with GitHub-native controls."))
 	}
 	if actions.RequireSHAPinningEnforcement {
-		results = append(results, observedBool(repo.FullName, "actions.sha_pinning_enforced", "high", repo.SHAPinningEnforced, true,
+		results = append(results, observed(repo.FullName, "actions.sha_pinning_enforced", "high", repo.SHAPinningEnforced, true,
 			"After mutable references are remediated, require full-length SHA pinning in the organization or enterprise Actions policy."))
 	}
 	if actions.RequireForkPRApproval != nil {
-		results = append(results, observedBool(repo.FullName, "actions.fork_pr_approval", "medium", repo.ForkPRApproval, *actions.RequireForkPRApproval,
+		results = append(results, observed(repo.FullName, "actions.fork_pr_approval", "medium", repo.ForkPRApproval, *actions.RequireForkPRApproval,
 			"Configure fork pull-request workflow approval in the repository or organization Actions settings."))
 	}
 
 	code := e.cfg.Policies.CodeSecurity
 	if code.Configuration != "" {
-		results = append(results, observedString(repo.FullName, "code_security.configuration", "high", repo.CodeSecurityConfiguration, code.Configuration,
+		results = append(results, observed(repo.FullName, "code_security.configuration", "high", repo.CodeSecurityConfiguration, code.Configuration,
 			"Assign the expected GitHub Code Security Configuration at organization scope."))
 	}
 	for _, check := range []struct {
@@ -90,17 +90,17 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 		{"code_security.dependabot_security_updates", code.DependabotUpdates, repo.DependabotSecurityUpdates, "Enable Dependabot security updates through GitHub-native settings."},
 	} {
 		if check.expected != "" {
-			results = append(results, observedBool(repo.FullName, check.id, "high", check.observed, check.expected == "required", check.remediation))
+			results = append(results, observed(repo.FullName, check.id, "high", check.observed, check.expected == "required", check.remediation))
 		}
 	}
 
 	repository := e.cfg.Policies.Repository
 	if repository.RequireRuleset {
-		results = append(results, observedBool(repo.FullName, "repository.ruleset", "high", repo.Ruleset, true,
+		results = append(results, observed(repo.FullName, "repository.ruleset", "high", repo.Ruleset, true,
 			"Create an organization ruleset covering the repository's default branch."))
 	}
 	if repository.RequireBranchProtection {
-		results = append(results, observedBool(repo.FullName, "repository.branch_protection", "high", repo.BranchProtection, true,
+		results = append(results, observed(repo.FullName, "repository.branch_protection", "high", repo.BranchProtection, true,
 			"Prefer an organization ruleset; otherwise protect the default branch with pull-request and required-check rules."))
 	}
 	for _, check := range []struct {
@@ -115,11 +115,11 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 		{repository.RestrictDeletions, "repository.deletion_restricted", repo.DeletionRestricted, "Disable branch deletion through an organization ruleset or default-branch protection."},
 	} {
 		if check.enabled {
-			results = append(results, observedBool(repo.FullName, check.id, "high", check.observed, true, check.remediation))
+			results = append(results, observed(repo.FullName, check.id, "high", check.observed, true, check.remediation))
 		}
 	}
 	if repository.RequireSecurityMD {
-		results = append(results, observedBool(repo.FullName, "repository.security_md", "medium", repo.SecurityMD, true,
+		results = append(results, observed(repo.FullName, "repository.security_md", "medium", repo.SecurityMD, true,
 			"Add SECURITY.md on the default branch or provide an organization-wide default community health file."))
 	}
 	if len(repository.AllowedVisibilities) > 0 {
@@ -144,48 +144,25 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 	return results
 }
 
-func observedBool(repository, id, severity string, observed model.Observed[bool], expected bool, remediation string) model.PolicyResult {
+func observed[T comparable](repository, id, severity string, value model.Observed[T], expected T, remediation string) model.PolicyResult {
 	result := model.PolicyResult{
 		Repository: repository, PolicyID: id, Severity: severity, Expected: expected,
-		Evidence: observed.Source, Remediation: remediation,
+		Evidence: value.Source, Remediation: remediation,
 	}
-	switch observed.State {
+	switch value.State {
 	case model.Available:
-		result.Observed = observed.Value
-		if observed.Value == expected {
+		result.Observed = value.Value
+		if value.Value == expected {
 			result.Status = model.PolicyPass
 		} else {
 			result.Status = model.PolicyFail
 		}
 	case model.Unsupported:
 		result.Status = model.PolicyUnsupported
-		result.Observed = observed.Reason
+		result.Observed = value.Reason
 	default:
 		result.Status = model.PolicyUnknown
-		result.Observed = observed.Reason
-	}
-	return result
-}
-
-func observedString(repository, id, severity string, observed model.Observed[string], expected, remediation string) model.PolicyResult {
-	result := model.PolicyResult{
-		Repository: repository, PolicyID: id, Severity: severity, Expected: expected,
-		Evidence: observed.Source, Remediation: remediation,
-	}
-	switch observed.State {
-	case model.Available:
-		result.Observed = observed.Value
-		if observed.Value == expected {
-			result.Status = model.PolicyPass
-		} else {
-			result.Status = model.PolicyFail
-		}
-	case model.Unsupported:
-		result.Status = model.PolicyUnsupported
-		result.Observed = observed.Reason
-	default:
-		result.Status = model.PolicyUnknown
-		result.Observed = observed.Reason
+		result.Observed = value.Reason
 	}
 	return result
 }

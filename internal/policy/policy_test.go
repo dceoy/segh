@@ -41,10 +41,21 @@ func TestEvaluateStatusesAndSuppressionExpiry(t *testing.T) {
 }
 
 func TestUnsupportedDoesNotPass(t *testing.T) {
-	result := observedBool("example/repo", "test", "high",
+	result := observed("example/repo", "test", "high",
 		model.Observed[bool]{State: model.Unsupported, Reason: "GHES"}, true, "upgrade")
 	if result.Status != model.PolicyUnsupported {
 		t.Fatalf("status = %s", result.Status)
+	}
+}
+
+func TestObservedSupportsComparableTypes(t *testing.T) {
+	if result := observed("example/repo", "bool", "high",
+		model.Observed[bool]{State: model.Available, Value: true}, true, "fix"); result.Status != model.PolicyPass {
+		t.Fatalf("bool status = %s", result.Status)
+	}
+	if result := observed("example/repo", "string", "high",
+		model.Observed[string]{State: model.Available, Value: "write"}, "read", "fix"); result.Status != model.PolicyFail {
+		t.Fatalf("string status = %s", result.Status)
 	}
 }
 

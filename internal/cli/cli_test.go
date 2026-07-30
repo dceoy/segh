@@ -89,6 +89,24 @@ func TestReportUsesConfiguredOutputDirectory(t *testing.T) {
 	}
 }
 
+func TestReportIncompleteCoveragePrecedesFindings(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	inventory := validInventory(cfg)
+	inventory.Complete = false
+	inventory.Errors = []model.RunError{{Component: "inventory", Kind: "timeout", Message: "deadline exceeded"}}
+	inventory.Repositories[0].Ruleset.Value = false
+	audit := policy.New(cfg, time.Now().UTC()).Evaluate(inventory)
+	writeJSON(t, filepath.Join(dir, "inventory.json"), inventory)
+	writeJSON(t, filepath.Join(dir, "audit.json"), audit)
+
+	var stdout bytes.Buffer
+	err := runReport(cfg, nil, &stdout)
+	if err == nil || ExitCode(err) != exitIncomplete {
+		t.Fatalf("err = %v, code = %d; want incomplete coverage to precede findings", err, ExitCode(err))
+	}
+}
+
 func TestValidateReportArtifactsAcceptsSliceTypedExpectedValueAfterJSONRoundTrip(t *testing.T) {
 	// repository.visibility's Expected value is a []string, decoded from JSON
 	// into []any on the audit side but left as []string on the freshly
@@ -111,6 +129,26 @@ func TestValidateReportArtifactsAcceptsSliceTypedExpectedValueAfterJSONRoundTrip
 	}
 }
 
+func TestCanonicalJSONEqualNormalizesDecodedShapes(t *testing.T) {
+	left := []model.PolicyResult{{
+		PolicyID: "repository.visibility",
+		Observed: "private",
+		Expected: []string{"private", "internal"},
+	}}
+	right := []model.PolicyResult{{
+		PolicyID: "repository.visibility",
+		Observed: "private",
+		Expected: []any{"private", "internal"},
+	}}
+	equal, err := canonicalJSONEqual(left, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equal {
+		t.Fatal("equivalent typed and JSON-decoded values did not compare equally")
+	}
+}
+
 func TestValidateReportArtifactsRejectsAuditPredatingInventoryAfterSuppressionExpiry(t *testing.T) {
 	cfg := testConfig(t.TempDir())
 	expires := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
@@ -129,6 +167,42 @@ func TestValidateReportArtifactsRejectsAuditPredatingInventoryAfterSuppressionEx
 	err := validateReportArtifacts(inventory, audit, cfg)
 	if err == nil || !strings.Contains(err.Error(), "predates inventory") {
 		t.Fatalf("validateReportArtifacts() = %v, want audit-before-inventory error", err)
+	}
+}
+
+func TestValidateReportArtifactsRejectsEveryTamperedPolicyResultField(t *testing.T) {
+	cfg := testConfig(t.TempDir())
+	tests := []struct {
+		name   string
+		change func(*model.Audit)
+	}{
+		{"repository", func(audit *model.Audit) { audit.Results[0].Repository = "example/other" }},
+		{"policy ID", func(audit *model.Audit) { audit.Results[0].PolicyID = "repository.other" }},
+		{"status", func(audit *model.Audit) {
+			audit.Results[0].Status = model.PolicyFail
+			audit.Counts = map[string]int{string(model.PolicyFail): 1}
+		}},
+		{"severity", func(audit *model.Audit) { audit.Results[0].Severity = "low" }},
+		{"observed", func(audit *model.Audit) { audit.Results[0].Observed = false }},
+		{"expected", func(audit *model.Audit) { audit.Results[0].Expected = false }},
+		{"evidence", func(audit *model.Audit) { audit.Results[0].Evidence = "fabricated" }},
+		{"remediation", func(audit *model.Audit) { audit.Results[0].Remediation = "fabricated" }},
+		{"suppression", func(audit *model.Audit) {
+			audit.Results[0].Suppression = &model.Suppression{
+				Policy: "repository.ruleset", Owner: "attacker", Rationale: "fabricated",
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inventory := validInventory(cfg)
+			audit := policy.New(cfg, time.Now().UTC()).Evaluate(inventory)
+			test.change(&audit)
+			err := validateReportArtifacts(inventory, audit, cfg)
+			if err == nil || !strings.Contains(err.Error(), "results do not match") {
+				t.Fatalf("validateReportArtifacts() = %v, want tamper rejection", err)
+			}
+		})
 	}
 }
 
@@ -225,6 +299,31 @@ func TestValidateReportArtifactsRejectsInconsistentInputs(t *testing.T) {
 			err := validateReportArtifacts(inventory, audit, cfg)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("expected %q error, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestReadJSONRejectsUnknownFieldsAndTrailingData(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data string
+		want string
+	}{
+		{"unknown field", `{"known":1,"unknown":2}`, "unknown field"},
+		{"trailing data", `{"known":1} {}`, "trailing data"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "value.json")
+			if err := os.WriteFile(path, []byte(test.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var value struct {
+				Known int `json:"known"`
+			}
+			err := readJSON(path, &value)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("readJSON() = %v, want %q", err, test.want)
 			}
 		})
 	}

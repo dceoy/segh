@@ -286,52 +286,60 @@ func missingExplicitRepositories(allowlist []string, repos []apiRepository) []st
 }
 
 func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.Repository {
-	visibility := raw.Visibility
-	if visibility == "" {
-		if raw.Private {
-			visibility = "private"
-		} else {
-			visibility = "public"
-		}
-	}
-	repo := model.Repository{
-		ID:               raw.ID,
-		FullName:         raw.FullName,
-		HTMLURL:          raw.HTMLURL,
-		Visibility:       visibility,
-		Archived:         raw.Archived,
-		Disabled:         raw.Disabled,
-		Fork:             raw.Fork,
-		Template:         raw.IsTemplate,
-		DefaultBranch:    raw.DefaultBranch,
-		Topics:           sortedStrings(raw.Topics),
-		Capabilities:     map[string]model.Availability{},
-		CustomProperties: map[string]any{},
-	}
-	repo.SecretScanning = observedSecurity(raw, "secret_scanning")
-	repo.PushProtection = observedSecurity(raw, "secret_scanning_push_protection")
+	repo := repositoryFromAPI(raw)
 	base := "/repos/" + escapeFullName(raw.FullName)
-	repo.DependencyGraph = s.endpointFeatureEnabled(ctx, base+"/dependency-graph/sbom", "dependency_graph/sbom")
-	repo.DependabotSecurityUpdates = s.endpointFeatureEnabled(ctx, base+"/automated-security-fixes", "automated_security_fixes")
+	s.collectCustomProperties(ctx, base, &repo)
+	s.collectActionsControls(ctx, base, &repo)
+	s.collectBranchGovernance(ctx, base, raw.DefaultBranch, &repo)
+	s.collectCodeSecurity(ctx, base, raw, &repo)
+	repo.SecurityMD = s.securityPolicyExists(ctx, base, raw.DefaultBranch)
+	return repo
+}
 
-	var properties []struct {
-		PropertyName string `json:"property_name"`
-		Value        any    `json:"value"`
+func repositoryFromAPI(raw apiRepository) model.Repository {
+	visibility := raw.Visibility
+	if visibility == "" && raw.Private {
+		visibility = "private"
 	}
-	if err := s.client.Get(ctx, base+"/properties/values", &properties); err == nil {
+	if visibility == "" {
+		visibility = "public"
+	}
+	return model.Repository{
+		ID:            raw.ID,
+		FullName:      raw.FullName,
+		HTMLURL:       raw.HTMLURL,
+		Visibility:    visibility,
+		Archived:      raw.Archived,
+		Disabled:      raw.Disabled,
+		Fork:          raw.Fork,
+		Template:      raw.IsTemplate,
+		DefaultBranch: raw.DefaultBranch,
+		Topics:        sortedStrings(raw.Topics),
+	}
+}
+
+func (s *InventoryService) collectCustomProperties(ctx context.Context, base string, repo *model.Repository) {
+	repo.CustomProperties = getObserved("properties/values", func() (map[string]any, error) {
+		var properties []struct {
+			PropertyName string `json:"property_name"`
+			Value        any    `json:"value"`
+		}
+		if err := s.client.Get(ctx, base+"/properties/values", &properties); err != nil {
+			return nil, err
+		}
+		values := make(map[string]any, len(properties))
 		for _, property := range properties {
 			value, valid := normalizeCustomPropertyValue(property.Value)
 			if !valid {
-				repo.CustomProperties = map[string]any{}
-				repo.Capabilities["custom_properties"] = model.Unknown
-				break
+				return nil, fmt.Errorf("unsupported custom property value")
 			}
-			repo.CustomProperties[property.PropertyName] = value
+			values[property.PropertyName] = value
 		}
-	} else {
-		repo.Capabilities["custom_properties"] = stateFor(err)
-	}
+		return values, nil
+	})
+}
 
+func (s *InventoryService) collectActionsControls(ctx context.Context, base string, repo *model.Repository) {
 	var actions struct {
 		Enabled            bool   `json:"enabled"`
 		AllowedActions     string `json:"allowed_actions"`
@@ -352,10 +360,9 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 		}
 	}
 	var workflowPermissions struct {
-		DefaultWorkflowPermissions   string `json:"default_workflow_permissions"`
-		CanApprovePullRequestReviews bool   `json:"can_approve_pull_request_reviews"`
+		DefaultWorkflowPermissions string `json:"default_workflow_permissions"`
 	}
-	repo.DefaultWorkflowPermissions = s.getObservedString(ctx, base+"/actions/permissions/workflow", "workflow_permissions", func() (string, error) {
+	repo.DefaultWorkflowPermissions = getObserved("workflow_permissions", func() (string, error) {
 		if err := s.client.Get(ctx, base+"/actions/permissions/workflow", &workflowPermissions); err != nil {
 			return "", err
 		}
@@ -364,17 +371,20 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 	var forkApproval struct {
 		ApprovalPolicy string `json:"approval_policy"`
 	}
-	repo.ForkPRApproval = s.getObservedBool(ctx, base+"/actions/permissions/fork-pr-contributor-approval", "fork_pr_approval", func() (bool, error) {
+	repo.ForkPRApproval = getObserved("fork_pr_approval", func() (bool, error) {
 		if err := s.client.Get(ctx, base+"/actions/permissions/fork-pr-contributor-approval", &forkApproval); err != nil {
 			return false, err
 		}
 		return forkApproval.ApprovalPolicy != "first_time_contributors_new_to_github", nil
 	})
+}
+
+func (s *InventoryService) collectBranchGovernance(ctx context.Context, base, branch string, repo *model.Repository) {
 	rulesSource := "rules_branches"
 	var effectiveRules []struct {
 		Type string `json:"type"`
 	}
-	rulesErr := s.client.Get(ctx, base+"/rules/branches/"+pathEscape(raw.DefaultBranch), &effectiveRules)
+	rulesErr := s.client.Get(ctx, base+"/rules/branches/"+pathEscape(branch), &effectiveRules)
 	ruleTypes := map[string]bool{}
 	if rulesErr == nil {
 		for _, rule := range effectiveRules {
@@ -397,14 +407,12 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 	}
 	protectionSource := "branch_protection"
 	var classicProtection, classicPullRequests, classicChecks, classicForcePush, classicDeletion model.Observed[bool]
-	protectionErr := s.client.Get(ctx, base+"/branches/"+pathEscape(raw.DefaultBranch)+"/protection", &protection)
+	protectionErr := s.client.Get(ctx, base+"/branches/"+pathEscape(branch)+"/protection", &protection)
 	var protectionAPIErr *APIError
 	if errors.As(protectionErr, &protectionAPIErr) && protectionAPIErr.StatusCode == 404 {
-		classicProtection = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
-		classicPullRequests = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
-		classicChecks = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
-		classicForcePush = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
-		classicDeletion = model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		absent := model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
+		classicProtection, classicPullRequests, classicChecks = absent, absent, absent
+		classicForcePush, classicDeletion = absent, absent
 	} else if protectionErr != nil {
 		state, reason := ErrorState(protectionErr)
 		unknown := model.Observed[bool]{State: model.Availability(state), Source: protectionSource, Reason: reason}
@@ -425,24 +433,26 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 			classicDeletion = model.Observed[bool]{State: model.Available, Value: !protection.AllowDeletions.Enabled, Source: protectionSource}
 		}
 	}
-	// A repository can be governed by an organization ruleset, its own repository
-	// ruleset, classic branch protection, or a combination; GitHub enforces the union
-	// of whichever apply. Merge both sources instead of trusting either alone, so a
-	// ruleset-only repository is not misreported as unprotected (previously the classic
-	// branch-protection 404 branch forced all four booleans to false) and a repository
-	// with an inactive/wrong-branch/other-branch ruleset is not misreported as protected
-	// (previously any nonempty rulesets response short-circuited repository.ruleset).
+	// GitHub enforces the union of effective rulesets and classic branch
+	// protection. Merge both sources so either can prove a control is active.
 	repo.BranchProtection = mergeControl(rulesErr, len(ruleTypes) > 0, classicProtection)
 	repo.RequiredPullRequests = mergeControl(rulesErr, ruleTypes["pull_request"], classicPullRequests)
 	repo.RequiredChecks = mergeControl(rulesErr, ruleTypes["required_status_checks"], classicChecks)
 	repo.ForcePushRestricted = mergeControl(rulesErr, ruleTypes["non_fast_forward"], classicForcePush)
 	repo.DeletionRestricted = mergeControl(rulesErr, ruleTypes["deletion"], classicDeletion)
+}
+
+func (s *InventoryService) collectCodeSecurity(ctx context.Context, base string, raw apiRepository, repo *model.Repository) {
+	repo.SecretScanning = observedSecurity(raw, "secret_scanning")
+	repo.PushProtection = observedSecurity(raw, "secret_scanning_push_protection")
+	repo.DependencyGraph = s.probeEndpoint(ctx, base+"/dependency-graph/sbom", "dependency_graph/sbom", nil)
+	repo.DependabotSecurityUpdates = s.probeEndpoint(ctx, base+"/automated-security-fixes", "automated_security_fixes", nil)
 	var securityConfig struct {
 		Configuration struct {
 			Name string `json:"name"`
 		} `json:"configuration"`
 	}
-	repo.CodeSecurityConfiguration = s.getObservedString(ctx, base+"/code-security-configuration", "code_security_configuration", func() (string, error) {
+	repo.CodeSecurityConfiguration = getObserved("code_security_configuration", func() (string, error) {
 		if err := s.client.Get(ctx, base+"/code-security-configuration", &securityConfig); err != nil {
 			return "", err
 		}
@@ -451,19 +461,17 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 	var defaultSetup struct {
 		State string `json:"state"`
 	}
-	repo.CodeQL = s.getObservedBool(ctx, base+"/code-scanning/default-setup", "codeql_default_setup", func() (bool, error) {
+	repo.CodeQL = getObserved("codeql_default_setup", func() (bool, error) {
 		if err := s.client.Get(ctx, base+"/code-scanning/default-setup", &defaultSetup); err != nil {
 			return false, err
 		}
 		return defaultSetup.State == "configured", nil
 	})
 	var alert []jsonObject
-	repo.DependabotAlerts = s.getObservedBool(ctx, base+"/dependabot/alerts?per_page=1", "dependabot_alerts", func() (bool, error) {
+	repo.DependabotAlerts = getObserved("dependabot_alerts", func() (bool, error) {
 		err := s.client.Get(ctx, base+"/dependabot/alerts?per_page=1", &alert)
 		return err == nil, err
 	})
-	repo.SecurityMD = s.securityPolicyExists(ctx, base, raw.DefaultBranch)
-	return repo
 }
 
 type jsonObject map[string]any
@@ -495,44 +503,20 @@ func observedSecurity(raw apiRepository, key string) model.Observed[bool] {
 	return model.Observed[bool]{State: model.Available, Value: item.Status == "enabled", Source: "GET repository"}
 }
 
-func (s *InventoryService) getObservedBool(_ context.Context, _ string, source string, getter func() (bool, error)) model.Observed[bool] {
+func getObserved[T any](source string, getter func() (T, error)) model.Observed[T] {
 	value, err := getter()
 	if err == nil {
-		return model.Observed[bool]{State: model.Available, Value: value, Source: source}
+		return model.Observed[T]{State: model.Available, Value: value, Source: source}
 	}
 	state, reason := ErrorState(err)
-	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason}
+	return model.Observed[T]{State: model.Availability(state), Source: source, Reason: reason}
 }
 
-func (s *InventoryService) getObservedString(_ context.Context, _ string, source string, getter func() (string, error)) model.Observed[string] {
-	value, err := getter()
-	if err == nil {
-		return model.Observed[string]{State: model.Available, Value: value, Source: source}
-	}
-	state, reason := ErrorState(err)
-	return model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
-}
-
-// endpointFeatureEnabled probes a feature-specific read endpoint. A successful
-// response proves that the feature is enabled. These endpoints return 404 for a
-// known repository when the corresponding feature is disabled; other failures
-// remain unknown or unsupported instead of being mistaken for a disabled control.
-func (s *InventoryService) endpointFeatureEnabled(ctx context.Context, path, source string) model.Observed[bool] {
-	err := s.client.Get(ctx, path, nil)
-	if err == nil {
-		return model.Observed[bool]{State: model.Available, Value: true, Source: source}
-	}
-	var apiErr *APIError
-	if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
-		return model.Observed[bool]{State: model.Available, Value: false, Source: source}
-	}
-	state, reason := ErrorState(err)
-	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason}
-}
-
-func (s *InventoryService) contentExists(ctx context.Context, path, source string) model.Observed[bool] {
-	var content jsonObject
-	err := s.client.Get(ctx, path, &content)
+// probeEndpoint treats success as present/enabled and 404 as absent/disabled.
+// Other failures remain unknown or unsupported instead of being mistaken for a
+// disabled control. response may be nil when the body is not needed.
+func (s *InventoryService) probeEndpoint(ctx context.Context, path, source string, response any) model.Observed[bool] {
+	err := s.client.Get(ctx, path, response)
 	if err == nil {
 		return model.Observed[bool]{State: model.Available, Value: true, Source: source}
 	}
@@ -549,14 +533,8 @@ func (s *InventoryService) contentExists(ctx context.Context, path, source strin
 // reports no policy.
 var securityMDPaths = []string{"SECURITY.md", ".github/SECURITY.md", "docs/SECURITY.md"}
 
-// securityPolicyExists prefers the community profile API over probing a fixed
-// SECURITY.md path: GitHub itself resolves a repository's security policy from the
-// root, .github/, or docs/ directory, and falls back to the organization's default
-// .github community-health repository when the repository has none of its own, so a
-// profile hit is treated as authoritative. A miss or an unavailable profile (some
-// repository visibility/permission combinations don't expose it) falls back to
-// checking the supported locations directly rather than assuming absence, since
-// checking only "SECURITY.md" at the repository root missed all of those cases.
+// securityPolicyExists uses GitHub's authoritative community profile when it
+// finds a policy, then checks every supported repository path on a miss or 404.
 func (s *InventoryService) securityPolicyExists(ctx context.Context, base, branch string) model.Observed[bool] {
 	var profile struct {
 		Files struct {
@@ -581,7 +559,8 @@ func (s *InventoryService) securityPolicyExists(ctx context.Context, base, branc
 
 func (s *InventoryService) anyContentExists(ctx context.Context, base, branch string, paths []string, source string) model.Observed[bool] {
 	for _, candidate := range paths {
-		result := s.contentExists(ctx, base+"/contents/"+candidate+"?ref="+pathEscape(branch), source)
+		var content jsonObject
+		result := s.probeEndpoint(ctx, base+"/contents/"+candidate+"?ref="+pathEscape(branch), source, &content)
 		if result.State != model.Available {
 			return result
 		}
@@ -619,14 +598,14 @@ func (s *InventoryService) exclusionReason(repo model.Repository) (reason string
 		return "excluded topic", false
 	}
 	if len(selectors.CustomProperties) > 0 {
-		if _, unavailable := repo.Capabilities["custom_properties"]; unavailable {
+		if repo.CustomProperties.State != model.Available {
 			// The custom-properties API call failed, so repo.CustomProperties holds no
 			// reliable data. Treating missing keys as mismatches here would silently
 			// exclude the repository from the audit instead of surfacing the gap.
 			return "", true
 		}
 		for key, expected := range selectors.CustomProperties {
-			matches, valid := customPropertyMatches(repo.CustomProperties[key], expected)
+			matches, valid := customPropertyMatches(repo.CustomProperties.Value[key], expected)
 			if !valid {
 				return "", true
 			}
@@ -644,11 +623,6 @@ func escapeFullName(fullName string) string {
 		return pathEscape(fullName)
 	}
 	return pathEscape(parts[0]) + "/" + pathEscape(parts[1])
-}
-
-func stateFor(err error) model.Availability {
-	state, _ := ErrorState(err)
-	return model.Availability(state)
 }
 
 func sortedStrings(values []string) []string {
