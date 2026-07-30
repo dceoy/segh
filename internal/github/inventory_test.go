@@ -443,6 +443,35 @@ func TestRunPreservesInstallationPermissionErrorAfterSuccessfulEnumeration(t *te
 	}
 }
 
+func TestRunPreservesInstallationPermissionErrorWhenEnumerationAlsoFails(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/orgs/org/installations":
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(writer, `{"message":"Resource not accessible by integration"}`)
+		case "/orgs/org/repos":
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(writer, `{"message":"Service Unavailable"}`)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+		}
+	})
+	inventory, err := service.Run(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("err = %v, want wrapped 403 APIError before the enumeration failure", err)
+	}
+	if inventory.Complete {
+		t.Fatalf("inventory = %#v, want incomplete inventory", inventory)
+	}
+	if len(inventory.Errors) != 2 ||
+		inventory.Errors[0].Kind != "installation_scope" ||
+		inventory.Errors[1].Kind != "enumeration" {
+		t.Fatalf("errors = %#v, want installation_scope and enumeration errors", inventory.Errors)
+	}
+}
+
 func TestRunFailsClosedWhenExplicitlyIncludedRepositoryIsNotEnumerated(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {

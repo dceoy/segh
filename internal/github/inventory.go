@@ -66,6 +66,12 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 	if err != nil {
 		inventory.Complete = false
 		inventory.Errors = append(inventory.Errors, model.RunError{Component: "inventory", Kind: "enumeration", Message: err.Error()})
+		if installationErr != nil {
+			return inventory, errors.Join(
+				fmt.Errorf("verify installation coverage: %w", installationErr),
+				err,
+			)
+		}
 		return inventory, err
 	}
 	inventory.Total = len(repos)
