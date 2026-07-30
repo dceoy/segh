@@ -52,7 +52,7 @@ func TestRemovedCommandsAndFlagsAreRejected(t *testing.T) {
 func TestAuditValidateOnlyDoesNotRequireCredentials(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "")
-	configPath := writeConfig(t, false)
+	configPath := writeConfig(t, false, false)
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
 		"audit", "--config", configPath, "--validate-only",
@@ -69,7 +69,7 @@ func TestAuditRequiresInstallationIDAfterConfigurationValidation(t *testing.T) {
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "")
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
-		"audit", "--config", writeConfig(t, false),
+		"audit", "--config", writeConfig(t, false, false),
 	}, "test", &stdout, &stderr)
 	if err == nil || ExitCode(err) != exitAuth ||
 		!strings.Contains(err.Error(), "SEGH_GITHUB_INSTALLATION_ID must be a positive integer") {
@@ -91,14 +91,14 @@ func TestAuditWritesOnlyThreeVersionThreeArtifacts(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	installFakeGitHubCLI(t, "attached")
+	installFakeGitHubCLI(t, "attached", "")
 	t.Setenv("GH_TOKEN", "test-token")
 	t.Setenv("GH_HOST", "GHES.EXAMPLE")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
 	var stdout, stderr bytes.Buffer
 	err = Run(context.Background(), []string{
 		"audit",
-		"--config", writeConfig(t, false),
+		"--config", writeConfig(t, false, false),
 	}, "test", &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
@@ -129,13 +129,13 @@ func TestAuditWritesOnlyThreeVersionThreeArtifacts(t *testing.T) {
 
 func TestIncompleteCoveragePrecedesPolicyViolations(t *testing.T) {
 	dir := t.TempDir()
-	installFakeGitHubCLI(t, "attaching")
+	installFakeGitHubCLI(t, "attaching", "")
 	t.Setenv("GH_TOKEN", "test-token")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
 		"audit",
-		"--config", writeConfig(t, true),
+		"--config", writeConfig(t, true, false),
 		"--inventory-output", filepath.Join(dir, "inventory.json"),
 		"--audit-output", filepath.Join(dir, "audit.json"),
 		"--markdown-output", filepath.Join(dir, "report.md"),
@@ -149,6 +149,36 @@ func TestIncompleteCoveragePrecedesPolicyViolations(t *testing.T) {
 		audit.PolicyCounts[string(model.PolicyFail)] != 1 ||
 		audit.Coverage != "partial" {
 		t.Fatalf("audit = %#v", audit)
+	}
+}
+
+func TestOrganizationCollectionPermissionFailuresUseAuthenticationExitCode(t *testing.T) {
+	for _, test := range []struct {
+		name                 string
+		forbiddenEndpoint    string
+		customPropertyFilter bool
+	}{
+		{"custom properties", "custom_properties", true},
+		{"code security configurations", "code_security_configurations", false},
+		{"code security associations", "code_security_associations", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			installFakeGitHubCLI(t, "attached", test.forbiddenEndpoint)
+			t.Setenv("GH_TOKEN", "test-token")
+			t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
+			var stdout, stderr bytes.Buffer
+			err := Run(context.Background(), []string{
+				"audit",
+				"--config", writeConfig(t, false, test.customPropertyFilter),
+				"--inventory-output", filepath.Join(dir, "inventory.json"),
+				"--audit-output", filepath.Join(dir, "audit.json"),
+				"--markdown-output", filepath.Join(dir, "report.md"),
+			}, "test", &stdout, &stderr)
+			if err == nil || ExitCode(err) != exitAuth {
+				t.Fatalf("err=%v code=%d", err, ExitCode(err))
+			}
+		})
 	}
 }
 
@@ -172,14 +202,18 @@ func TestValidateArtifactsRejectsTamperingAndHostMismatch(t *testing.T) {
 	}
 }
 
-func writeConfig(t *testing.T, requireRuleset bool) string {
+func writeConfig(t *testing.T, requireRuleset, customPropertyFilter bool) string {
 	t.Helper()
 	repositoryPolicy := ""
 	if requireRuleset {
 		repositoryPolicy = "\n  repository:\n    require_ruleset: true"
 	}
+	selectors := ""
+	if customPropertyFilter {
+		selectors = "selectors:\n  custom_properties:\n    tier: critical\n"
+	}
 	data := "version: 3\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
-		"policies:\n  code_security:\n    configuration: approved" + repositoryPolicy + "\n"
+		selectors + "policies:\n  code_security:\n    configuration: approved" + repositoryPolicy + "\n"
 	path := filepath.Join(t.TempDir(), "segh.yaml")
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
@@ -187,10 +221,22 @@ func writeConfig(t *testing.T, requireRuleset bool) string {
 	return path
 }
 
-func installFakeGitHubCLI(t *testing.T, attachmentStatus string) {
+func installFakeGitHubCLI(t *testing.T, attachmentStatus, forbiddenEndpoint string) {
 	t.Helper()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "gh")
+	customPropertiesResult := `printf '%s' '[[{"repository_id":1,"repository_full_name":"example/repo","properties":[]}]]'`
+	if forbiddenEndpoint == "custom_properties" {
+		customPropertiesResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
+	}
+	codeSecurityConfigurationsResult := `printf '%s' '[[{"id":42,"name":"approved"}]]'`
+	if forbiddenEndpoint == "code_security_configurations" {
+		codeSecurityConfigurationsResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
+	}
+	codeSecurityAssociationsResult := `printf '%s' '[[{"status":"` + attachmentStatus + `","repository":{"id":1,"full_name":"example/repo"}}]]'`
+	if forbiddenEndpoint == "code_security_associations" {
+		codeSecurityAssociationsResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
+	}
 	body := `#!/bin/sh
 case "$*" in
   *"/orgs/example/installations?"*)
@@ -203,13 +249,13 @@ case "$*" in
     printf '%s' '[{"id":1,"full_name":"example/repo","default_branch":"main"}]'
     ;;
   *"/orgs/example/properties/values?"*)
-    printf '%s' '[[{"repository_id":1,"repository_full_name":"example/repo","properties":[]}]]'
+    ` + customPropertiesResult + `
     ;;
   *"/orgs/example/code-security/configurations/42/repositories?"*)
-    printf '%s' '[[{"status":"` + attachmentStatus + `","repository":{"value":{"id":1,"full_name":"example/repo"}}}]]'
+    ` + codeSecurityAssociationsResult + `
     ;;
   *"/orgs/example/code-security/configurations?"*)
-    printf '%s' '[[{"id":42,"name":"approved"}]]'
+    ` + codeSecurityConfigurationsResult + `
     ;;
   *"/repos/example/repo/actions/permissions/workflow")
     printf '%s' '{"default_workflow_permissions":"read"}'

@@ -172,10 +172,22 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		return left.Message < right.Message
 	})
 	if !inventory.Complete {
+		runErr := fmt.Errorf("repository enumeration incomplete")
 		if installationErr != nil {
-			return inventory, fmt.Errorf("verify installation coverage: %w", installationErr)
+			runErr = fmt.Errorf("verify installation coverage: %w", installationErr)
 		}
-		return inventory, fmt.Errorf("repository enumeration incomplete")
+		runErrs := []error{runErr}
+		if customPropertiesErr != nil && len(s.cfg.Selectors.CustomProperties) > 0 {
+			runErrs = append(runErrs, fmt.Errorf(
+				"collect organization custom properties: %w", customPropertiesErr,
+			))
+		}
+		if codeSecurityErr != nil {
+			runErrs = append(runErrs, fmt.Errorf(
+				"collect code security configuration associations: %w", codeSecurityErr,
+			))
+		}
+		return inventory, errors.Join(runErrs...)
 	}
 	return inventory, nil
 }
@@ -367,10 +379,8 @@ type apiCodeSecurityConfiguration struct {
 type codeSecurityAssociation struct {
 	Status     string `json:"status"`
 	Repository struct {
-		Value struct {
-			ID       int64  `json:"id"`
-			FullName string `json:"full_name"`
-		} `json:"value"`
+		ID       int64  `json:"id"`
+		FullName string `json:"full_name"`
 	} `json:"repository"`
 }
 
@@ -398,13 +408,12 @@ func (s *InventoryService) codeSecurityAttachments(
 	}
 	observations := make(map[int64]*model.Observed[model.CodeSecurityAttachment], len(repos))
 	for _, item := range response {
-		value := item.Repository.Value
-		repo, ok := byID[value.ID]
-		if !ok || repo.FullName != value.FullName {
+		repo, ok := byID[item.Repository.ID]
+		if !ok || repo.FullName != item.Repository.FullName {
 			err := fmt.Errorf("code security association does not match an enumerated repository")
 			return unavailableCodeSecurity(repos, err), err
 		}
-		if _, duplicate := observations[value.ID]; duplicate {
+		if _, duplicate := observations[item.Repository.ID]; duplicate {
 			err := fmt.Errorf("duplicate code security repository association")
 			return unavailableCodeSecurity(repos, err), err
 		}
@@ -413,11 +422,11 @@ func (s *InventoryService) codeSecurityAttachments(
 		}
 		switch item.Status {
 		case "attached", "enforced", "failed", "detached", "removed", "removed_by_enterprise":
-			observations[value.ID] = &model.Observed[model.CodeSecurityAttachment]{
+			observations[item.Repository.ID] = &model.Observed[model.CodeSecurityAttachment]{
 				State: model.Available, Value: attachment, Source: "code_security_configuration_associations",
 			}
 		case "attaching", "updating":
-			observations[value.ID] = &model.Observed[model.CodeSecurityAttachment]{
+			observations[item.Repository.ID] = &model.Observed[model.CodeSecurityAttachment]{
 				State: model.Unknown, Value: attachment, Source: "code_security_configuration_associations",
 				Reason: "transitional attachment status " + item.Status,
 			}

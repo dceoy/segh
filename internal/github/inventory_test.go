@@ -181,10 +181,10 @@ func TestCodeSecurityConfigurationResolutionAndAttachmentStates(t *testing.T) {
 		wantState   model.Availability
 		wantStatus  string
 	}{
-		{"name", "approved", `[{"status":"attached","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Available, "attached"},
-		{"ID", "42", `[{"status":"enforced","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Available, "enforced"},
-		{"failed", "approved", `[{"status":"failed","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Available, "failed"},
-		{"transitional", "approved", `[{"status":"attaching","repository":{"value":{"id":1,"full_name":"org/one"}}}]`, model.Unknown, "attaching"},
+		{"name", "approved", `[{"status":"attached","repository":{"id":1,"full_name":"org/one"}}]`, model.Available, "attached"},
+		{"ID", "42", `[{"status":"enforced","repository":{"id":1,"full_name":"org/one"}}]`, model.Available, "enforced"},
+		{"failed", "approved", `[{"status":"failed","repository":{"id":1,"full_name":"org/one"}}]`, model.Available, "failed"},
+		{"transitional", "approved", `[{"status":"attaching","repository":{"id":1,"full_name":"org/one"}}]`, model.Unknown, "attaching"},
 		{"missing association", "approved", `[]`, model.Available, "detached"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
