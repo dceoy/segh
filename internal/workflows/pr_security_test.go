@@ -19,9 +19,10 @@ const (
 )
 
 type prSecurityStep struct {
-	Name string         `yaml:"name"`
-	With map[string]any `yaml:"with"`
-	Run  string         `yaml:"run"`
+	Name string            `yaml:"name"`
+	With map[string]any    `yaml:"with"`
+	Env  map[string]string `yaml:"env"`
+	Run  string            `yaml:"run"`
 }
 
 type prSecurityJob struct {
@@ -125,9 +126,11 @@ func TestPRSecurityScanSelfGatedToSourceRepository(t *testing.T) {
 // the base branch's commit under pull_request_target, not the pull
 // request's head, so a required check would evaluate against the wrong
 // commit unless this job explicitly reports against
-// github.event.pull_request.head.sha itself. Keeping this in its own job
-// means checks:write is never granted to the job that checks out and scans
-// untrusted pull-request content.
+// github.event.pull_request.head.sha itself. checks:write is granted to
+// neither job's ambient token: publish-self-check mints a dedicated GitHub
+// App token for that instead (see
+// TestPRSecurityPublishSelfCheckUsesDedicatedAppToken), so scan-self, which
+// checks out and scans untrusted pull-request content, never has it either.
 func TestPRSecurityPublishSelfCheckReportsOnHeadSHA(t *testing.T) {
 	workflow := loadPRSecuritySelfWorkflow(t)
 	scanSelf, ok := workflow.Jobs["scan-self"]
@@ -141,8 +144,8 @@ func TestPRSecurityPublishSelfCheckReportsOnHeadSHA(t *testing.T) {
 	if !ok {
 		t.Fatal("jobs.publish-self-check is missing")
 	}
-	if job.Permissions["checks"] != "write" {
-		t.Errorf("jobs.publish-self-check.permissions.checks = %q, want \"write\"", job.Permissions["checks"])
+	if _, hasChecks := job.Permissions["checks"]; hasChecks {
+		t.Errorf("jobs.publish-self-check.permissions.checks = %q, want it unset: the ambient token no longer publishes the check, a dedicated GitHub App token does", job.Permissions["checks"])
 	}
 	if !strings.Contains(job.If, "needs.scan-self.result") {
 		t.Errorf("jobs.publish-self-check.if = %q, want it to depend on needs.scan-self.result", job.If)
@@ -156,6 +159,34 @@ func TestPRSecurityPublishSelfCheckReportsOnHeadSHA(t *testing.T) {
 	}
 	if !strings.Contains(step.Run, "github.event.pull_request.head.sha") {
 		t.Error("jobs.publish-self-check does not reference github.event.pull_request.head.sha")
+	}
+}
+
+// TestPRSecurityPublishSelfCheckUsesDedicatedAppToken pins that
+// publish-self-check authenticates with a token minted from a dedicated
+// GitHub App, not github.token. github.token's identity is the shared
+// default "GitHub Actions" App available to every workflow in the
+// repository, including one an ordinary same-repository pull request could
+// add; publishing with it would let such a pull request forge this check's
+// result on its own head SHA.
+func TestPRSecurityPublishSelfCheckUsesDedicatedAppToken(t *testing.T) {
+	job, ok := loadPRSecuritySelfWorkflow(t).Jobs["publish-self-check"]
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing")
+	}
+	step, ok := findStep(job.Steps, "Publish the gate result on the pull request's head commit")
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing step \"Publish the gate result on the pull request's head commit\"")
+	}
+	token := step.Env["GH_TOKEN"]
+	if token == "" {
+		t.Fatal("jobs.publish-self-check publish step is missing env.GH_TOKEN")
+	}
+	if strings.Contains(token, "github.token") {
+		t.Errorf("jobs.publish-self-check publish step env.GH_TOKEN = %q, must not use github.token", token)
+	}
+	if !strings.Contains(token, "steps.app-token.outputs.token") {
+		t.Errorf("jobs.publish-self-check publish step env.GH_TOKEN = %q, want it to use the minted App token", token)
 	}
 }
 
