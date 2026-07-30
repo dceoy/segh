@@ -379,8 +379,10 @@ type apiCodeSecurityConfiguration struct {
 type codeSecurityAssociation struct {
 	Status     string `json:"status"`
 	Repository struct {
-		ID       int64  `json:"id"`
-		FullName string `json:"full_name"`
+		Value struct {
+			ID       int64  `json:"id"`
+			FullName string `json:"full_name"`
+		} `json:"value"`
 	} `json:"repository"`
 }
 
@@ -408,12 +410,12 @@ func (s *InventoryService) codeSecurityAttachments(
 	}
 	observations := make(map[int64]*model.Observed[model.CodeSecurityAttachment], len(repos))
 	for _, item := range response {
-		repo, ok := byID[item.Repository.ID]
-		if !ok || repo.FullName != item.Repository.FullName {
+		repo, ok := byID[item.Repository.Value.ID]
+		if !ok || repo.FullName != item.Repository.Value.FullName {
 			err := fmt.Errorf("code security association does not match an enumerated repository")
 			return unavailableCodeSecurity(repos, err), err
 		}
-		if _, duplicate := observations[item.Repository.ID]; duplicate {
+		if _, duplicate := observations[item.Repository.Value.ID]; duplicate {
 			err := fmt.Errorf("duplicate code security repository association")
 			return unavailableCodeSecurity(repos, err), err
 		}
@@ -422,11 +424,11 @@ func (s *InventoryService) codeSecurityAttachments(
 		}
 		switch item.Status {
 		case "attached", "enforced", "failed", "detached", "removed", "removed_by_enterprise":
-			observations[item.Repository.ID] = &model.Observed[model.CodeSecurityAttachment]{
+			observations[item.Repository.Value.ID] = &model.Observed[model.CodeSecurityAttachment]{
 				State: model.Available, Value: attachment, Source: "code_security_configuration_associations",
 			}
 		case "attaching", "updating":
-			observations[item.Repository.ID] = &model.Observed[model.CodeSecurityAttachment]{
+			observations[item.Repository.Value.ID] = &model.Observed[model.CodeSecurityAttachment]{
 				State: model.Unknown, Value: attachment, Source: "code_security_configuration_associations",
 				Reason: "transitional attachment status " + item.Status,
 			}

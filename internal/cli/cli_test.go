@@ -233,7 +233,7 @@ func installFakeGitHubCLI(t *testing.T, attachmentStatus, forbiddenEndpoint stri
 	if forbiddenEndpoint == "code_security_configurations" {
 		codeSecurityConfigurationsResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
 	}
-	codeSecurityAssociationsResult := `printf '%s' '[[{"status":"` + attachmentStatus + `","repository":{"id":1,"full_name":"example/repo"}}]]'`
+	codeSecurityAssociationsResult := `printf '%s' '[[{"status":"` + attachmentStatus + `","repository":{"value":{"id":1,"full_name":"example/repo"}}}]]'`
 	if forbiddenEndpoint == "code_security_associations" {
 		codeSecurityAssociationsResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
 	}

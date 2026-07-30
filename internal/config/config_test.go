@@ -68,6 +68,24 @@ func TestLoadRejectsMissingPolicies(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsEmptyCodeSecurityPolicy(t *testing.T) {
+	for _, codeSecurity := range []string{
+		"{}",
+		"{configuration: \"\"}",
+	} {
+		configPath := filepath.Join(t.TempDir(), "segh.yaml")
+		data := "version: 3\norganization: test\npolicies:\n  code_security: " + codeSecurity +
+			"\n  repository:\n    require_ruleset: true\n"
+		if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(configPath); err == nil ||
+			!strings.Contains(err.Error(), "policies.code_security.configuration is required") {
+			t.Fatalf("Load() = %v, want empty code-security policy error", err)
+		}
+	}
+}
+
 func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
 	data := "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n"

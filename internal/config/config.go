@@ -59,6 +59,7 @@ type ActionsPolicy struct {
 
 type CodeSecurityPolicy struct {
 	Configuration string `yaml:"configuration"`
+	present       bool
 }
 
 type RepositoryPolicy struct {
@@ -127,6 +128,9 @@ func (c Config) Validate() error {
 	if !c.Policies.configured() {
 		errs = append(errs, fmt.Errorf("at least one policy must be configured"))
 	}
+	if c.Policies.CodeSecurity.present && c.Policies.CodeSecurity.Configuration == "" {
+		errs = append(errs, fmt.Errorf("policies.code_security.configuration is required"))
+	}
 	if c.Inventory.Concurrency < 1 || c.Inventory.Concurrency > 64 {
 		errs = append(errs, fmt.Errorf("inventory.concurrency must be between 1 and 64"))
 	}
@@ -187,6 +191,25 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 		return fmt.Errorf("parse duration: %w", err)
 	}
 	*d = Duration(parsed)
+	return nil
+}
+
+func (p *CodeSecurityPolicy) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("code security policy must be an object")
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		if key := node.Content[i].Value; key != "configuration" {
+			return fmt.Errorf("field %s not found in type config.CodeSecurityPolicy", key)
+		}
+	}
+	type plain CodeSecurityPolicy
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*p = CodeSecurityPolicy(decoded)
+	p.present = true
 	return nil
 }
 
