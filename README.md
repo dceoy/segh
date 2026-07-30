@@ -9,8 +9,11 @@ The supported baseline is:
 
 - organization rulesets and ordinary required checks enforce merges;
 - zizmor audits GitHub Actions;
-- Trivy gates secrets, dependency vulnerabilities, and infrastructure
-  misconfigurations;
+- actionlint validates GitHub Actions semantics and invokes ShellCheck for
+  embedded shell;
+- ShellCheck validates standalone tracked shell scripts;
+- Checkov gates infrastructure-as-code misconfigurations;
+- Trivy gates secrets and dependency vulnerabilities;
 - scanner JSON, text, and logs are retained as Actions artifacts;
 - OpenSSF Scorecard is informational;
 - dependency graph, Dependabot alerts, and Dependabot security updates remain
@@ -60,7 +63,9 @@ The stable `PR security / scan` check fails when:
 
 - zizmor reports a medium-or-higher, high-confidence finding or cannot strictly
   collect the workflow files;
-- Trivy finds a high or critical misconfiguration;
+- actionlint reports an invalid workflow or an embedded ShellCheck diagnostic;
+- ShellCheck reports a diagnostic in a standalone tracked shell script;
+- Checkov reports a failed centrally enabled infrastructure-as-code check;
 - Trivy finds a high or critical dependency vulnerability; or
 - Trivy finds a secret at any severity.
 

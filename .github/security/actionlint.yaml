@@ -1,0 +1,9 @@
+---
+# Organization-owned runner labels and accepted diagnostic exclusions belong
+# here. Empty lists make the current baseline explicit and prevent target
+# repositories from supplying either setting.
+self-hosted-runner:
+  labels: []
+paths:
+  ".github/workflows/**/*.{yml,yaml}":
+    ignore: []

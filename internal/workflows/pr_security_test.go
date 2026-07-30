@@ -5,7 +5,10 @@
 package workflows
 
 import (
+	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,6 +19,9 @@ import (
 const (
 	prSecurityWorkflowPath     = "../../.github/workflows/pr-security.yml"
 	prSecuritySelfWorkflowPath = "../../.github/workflows/pr-security-self.yml"
+	shellcheckrcPath           = "../../.github/security/shellcheckrc"
+	aquaConfigPath             = "../../aqua.yaml"
+	aquaChecksumsPath          = "../../aqua-checksums.json"
 )
 
 type prSecurityStep struct {
@@ -28,6 +34,7 @@ type prSecurityStep struct {
 type prSecurityJob struct {
 	If          string            `yaml:"if"`
 	Permissions map[string]string `yaml:"permissions"`
+	Env         map[string]string `yaml:"env"`
 	Steps       []prSecurityStep  `yaml:"steps"`
 }
 
@@ -190,6 +197,36 @@ func TestPRSecurityPublishSelfCheckUsesDedicatedAppToken(t *testing.T) {
 	}
 }
 
+// TestPRSecurityPublishSelfCheckAppTokenUsesClientID pins that the "Create
+// dedicated publisher App token" step authenticates with client-id, not the
+// deprecated app-id input: actions/create-github-app-token marks app-id
+// deprecated in favor of client-id. The Client ID comes from the
+// self-scan-publisher environment's SEGH_SCAN_PUBLISHER_CLIENT_ID variable
+// (vars, not secrets: a Client ID is not sensitive), while the private key
+// still comes from that environment's SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY
+// secret.
+func TestPRSecurityPublishSelfCheckAppTokenUsesClientID(t *testing.T) {
+	job, ok := loadPRSecuritySelfWorkflow(t).Jobs["publish-self-check"]
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing")
+	}
+	step, ok := findStep(job.Steps, "Create dedicated publisher App token")
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing step \"Create dedicated publisher App token\"")
+	}
+	if _, hasAppID := step.With["app-id"]; hasAppID {
+		t.Errorf("jobs.publish-self-check step \"Create dedicated publisher App token\" with.app-id = %v, want the deprecated app-id input removed", step.With["app-id"])
+	}
+	clientID, _ := step.With["client-id"].(string)
+	if !strings.Contains(clientID, "vars.SEGH_SCAN_PUBLISHER_CLIENT_ID") {
+		t.Errorf("jobs.publish-self-check step \"Create dedicated publisher App token\" with.client-id = %q, want it to reference vars.SEGH_SCAN_PUBLISHER_CLIENT_ID", clientID)
+	}
+	privateKey, _ := step.With["private-key"].(string)
+	if !strings.Contains(privateKey, "secrets.SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY") {
+		t.Errorf("jobs.publish-self-check step \"Create dedicated publisher App token\" with.private-key = %q, want it to reference secrets.SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY", privateKey)
+	}
+}
+
 // ignoredCheckoutWithKeys lists, per step name, the "with" inputs that are
 // intentionally different between scan (which checks out another
 // repository's trusted config and pull request under pull_request) and
@@ -296,7 +333,15 @@ func TestPRSecurityScanAndScanSelfStepsStayInSync(t *testing.T) {
 	if !reflect.DeepEqual(scanSteps, scanSelfSteps) {
 		t.Fatalf("jobs.scan and jobs.scan-self steps diverged:\nscan:      %v\nscan-self: %v", scanSteps, scanSelfSteps)
 	}
-	for _, want := range []string{"Run zizmor gate", "Run Trivy secret gate", "Enforce scanner gates"} {
+	for _, want := range []string{
+		"Run zizmor gate",
+		"Run actionlint and embedded ShellCheck gate",
+		"Run standalone ShellCheck gate",
+		"Run Checkov infrastructure-as-code gate",
+		"Run Trivy vulnerability gate",
+		"Run Trivy secret gate",
+		"Enforce scanner gates",
+	} {
 		if !slicesContains(scanSelfSteps, want) {
 			t.Errorf("jobs.scan-self is missing step %q", want)
 		}
@@ -319,6 +364,115 @@ func TestPRSecurityScanAndScanSelfStepsStayInSync(t *testing.T) {
 	}
 }
 
+// TestPRSecurityScanJobsPinAquaConfigToTrustedCheckout pins that both scan
+// (pr-security.yml) and scan-self (pr-security-self.yml) set job-level
+// env.AQUA_CONFIG to the trusted checkout's aqua.yaml. Every scanner step in
+// both jobs runs with working-directory: _target, the untrusted pull request
+// checkout; aqua's shims otherwise resolve a pinned tool version by
+// searching upward from the invoking process's working directory for an
+// aqua.yaml, independent of PATH order, so without this a pull request that
+// carries its own aqua.yaml in "_target" (guaranteed for scan-self, whose
+// "_target" is always a checkout of this repository, which has one at its
+// root) chooses the very tool version that scans it, and a target repository
+// with no aqua.yaml of its own instead falls back silently to whatever
+// same-named binary happens to be preinstalled on the runner. Job-level env
+// is invisible to TestPRSecurityScanAndScanSelfStepsStayInSync, which
+// compares only steps, so this property needs its own pin.
+func TestPRSecurityScanJobsPinAquaConfigToTrustedCheckout(t *testing.T) {
+	scan, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	if config := scan.Env["AQUA_CONFIG"]; !strings.Contains(config, "_segh/aqua.yaml") {
+		t.Errorf("jobs.scan.env.AQUA_CONFIG = %q, want it to point at the trusted checkout's aqua.yaml", config)
+	}
+
+	scanSelf, ok := loadPRSecuritySelfWorkflow(t).Jobs["scan-self"]
+	if !ok {
+		t.Fatal("jobs.scan-self is missing")
+	}
+	if config := scanSelf.Env["AQUA_CONFIG"]; !strings.Contains(config, "_segh/aqua.yaml") {
+		t.Errorf("jobs.scan-self.env.AQUA_CONFIG = %q, want it to point at the trusted checkout's aqua.yaml", config)
+	}
+}
+
+// TestPRSecurityUsesDedicatedScannerOwnership pins the hard scanner cutovers:
+// Checkov owns infrastructure-as-code, actionlint owns workflow correctness
+// (including embedded ShellCheck), standalone ShellCheck owns tracked shell
+// files, and Trivy retains only vulnerability and secret scanning.
+func TestPRSecurityUsesDedicatedScannerOwnership(t *testing.T) {
+	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	names := stepNames(job.Steps)
+	if slicesContains(names, "Run Trivy misconfiguration gate") {
+		t.Error("jobs.scan still contains the superseded Trivy misconfiguration gate")
+	}
+
+	actionlintStep, ok := findStep(job.Steps, "Run actionlint and embedded ShellCheck gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing the actionlint gate")
+	}
+	for _, want := range []string{
+		"git ls-files",
+		"--config-file \"$GITHUB_WORKSPACE/_segh/.github/security/actionlint.yaml\"",
+		"--shellcheck shellcheck",
+		"security-results/actionlint.status",
+	} {
+		if !strings.Contains(actionlintStep.Run, want) {
+			t.Errorf("actionlint gate does not contain %q", want)
+		}
+	}
+	if opts := actionlintStep.Env["SHELLCHECK_OPTS"]; !strings.Contains(opts, "_segh/.github/security/shellcheckrc") {
+		t.Errorf("actionlint gate SHELLCHECK_OPTS = %q, want trusted ShellCheck configuration", opts)
+	}
+
+	shellcheckStep, ok := findStep(job.Steps, "Run standalone ShellCheck gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing the standalone ShellCheck gate")
+	}
+	for _, want := range []string{
+		"git ls-files",
+		"--rcfile \"$GITHUB_WORKSPACE/_segh/.github/security/shellcheckrc\"",
+		"security-results/shellcheck.status",
+	} {
+		if !strings.Contains(shellcheckStep.Run, want) {
+			t.Errorf("standalone ShellCheck gate does not contain %q", want)
+		}
+	}
+
+	checkovStep, ok := findStep(job.Steps, "Run Checkov infrastructure-as-code gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing the Checkov gate")
+	}
+	for _, want := range []string{
+		"--config-file \"$GITHUB_WORKSPACE/_segh/.github/security/checkov.yaml\"",
+		"--skip-download",
+		"security-results/checkov.json",
+		"security-results/checkov.txt",
+		"security-results/checkov.status",
+	} {
+		if !strings.Contains(checkovStep.Run, want) {
+			t.Errorf("Checkov gate does not contain %q", want)
+		}
+	}
+
+	allScripts := make([]string, 0, len(job.Steps))
+	for _, step := range job.Steps {
+		allScripts = append(allScripts, step.Run)
+	}
+	joined := strings.Join(allScripts, "\n")
+	if strings.Contains(joined, "--scanners misconfig") {
+		t.Error("jobs.scan still invokes Trivy misconfiguration scanning")
+	}
+	for _, want := range []string{"--scanners vuln", "--scanners secret"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("jobs.scan no longer contains %q", want)
+		}
+	}
+}
+
 func slicesContains(haystack []string, needle string) bool {
 	for _, item := range haystack {
 		if item == needle {
@@ -335,6 +489,18 @@ func findStep(steps []prSecurityStep, name string) (prSecurityStep, bool) {
 		}
 	}
 	return prSecurityStep{}, false
+}
+
+// setJobEnv exports a job's job-level env vars into the test process,
+// expanding the "${{ github.workspace }}" expression the same way the
+// Actions runner would before a step ever sees it (unlike "$GITHUB_WORKSPACE"
+// references inside a step's own run script, which bash expands from the
+// environment variable this function's caller sets separately).
+func setJobEnv(t *testing.T, job prSecurityJob, workspace string) {
+	t.Helper()
+	for key, value := range job.Env {
+		t.Setenv(key, strings.ReplaceAll(value, "${{ github.workspace }}", workspace))
+	}
 }
 
 // TestPRSecurityScanSelfAllowsForkPullRequestCheckout pins that scan-self's
@@ -439,5 +605,288 @@ func TestPRSecurityScorecardGatedToOrdinaryPullRequestEvent(t *testing.T) {
 	}
 	if !strings.Contains(job.If, "github.event_name == 'pull_request'") {
 		t.Errorf("jobs.scorecard.if = %q, want it to contain %q", job.If, "github.event_name == 'pull_request'")
+	}
+}
+
+// runGit runs git against dir, failing the test on error.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", args...) // #nosec G204 -- args are fixed test-internal git subcommands, not external input.
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// writeExecutable writes an executable file, failing the test on error.
+func writeExecutable(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G302 -- this temporary test fixture must be executable.
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeStubShellCheck installs an executable "shellcheck" on PATH (via a
+// dedicated directory returned for the caller to prepend) that records its
+// arguments to argvLog instead of analyzing anything. Tests use it to
+// observe which files the gate script decided to pass to ShellCheck without
+// depending on ShellCheck's own installed version or diagnostics.
+func writeStubShellCheck(t *testing.T, argvLog string) string {
+	t.Helper()
+	stubDir := t.TempDir()
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argvLog + "\"\nexit 0\n"
+	writeExecutable(t, filepath.Join(stubDir, "shellcheck"), stub)
+	return stubDir
+}
+
+// TestPRSecurityStandaloneShellCheckGateDiscoversAllTrackedShellScripts pins
+// that the standalone ShellCheck gate's file-discovery script in
+// pr-security.yml (executed here for real against a throwaway git
+// repository standing in for the pull request checkout) enumerates a
+// non-executable, extensionless shell script and an executable script with
+// a #!/bin/ash shebang: the two gaps issue #33's acceptance criterion called
+// out, since shebang inspection used to be limited to executable (mode
+// 100755) files and the recognized-interpreter pattern did not include
+// "ash". It also pins that a tracked symlink is never passed to ShellCheck,
+// even when its name matches a recognized extension, closing the same
+// candidate-list invariant the actionlint gate needs (see
+// TestPRSecurityUsesDedicatedScannerOwnership and the "Reject symlinks from
+// the pull request checkout" step). It also pins that a tracked, executable
+// #!/bin/zsh script is never passed to ShellCheck: ShellCheck 0.11 supports
+// only sh/bash/dash/ksh and reports SC1071 for zsh scripts, so admitting one
+// would fail the enforced gate on an otherwise-clean target repository. A
+// stub "shellcheck" on PATH records its arguments so the test exercises only
+// this enumeration logic, not ShellCheck's own installed behavior.
+func TestPRSecurityStandaloneShellCheckGateDiscoversAllTrackedShellScripts(t *testing.T) {
+	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	step, ok := findStep(job.Steps, "Run standalone ShellCheck gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing step \"Run standalone ShellCheck gate\"")
+	}
+
+	target := t.TempDir()
+	runGit(t, target, "init", "-q")
+	runGit(t, target, "config", "user.email", "test@example.invalid")
+	runGit(t, target, "config", "user.name", "test")
+
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.Mkdir(filepath.Join(target, "scripts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Non-executable, extensionless: only a first-line shebang identifies it.
+	if err := os.WriteFile(filepath.Join(target, "scripts", "tool"), []byte("#!/bin/bash\necho hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Executable, with a shebang the old pattern did not recognize.
+	writeExecutable(t, filepath.Join(target, "scripts", "legacy-ash"), "#!/bin/ash\necho hi\n")
+	// Executable, with a shebang naming an interpreter ShellCheck does not
+	// support: must never be admitted as a scan candidate.
+	writeExecutable(t, filepath.Join(target, "scripts", "legacy-zsh"), "#!/bin/zsh\necho hi\n")
+	// Tracked symlink whose name matches a recognized extension: must never
+	// be admitted as a scan candidate, wherever it points.
+	if err := os.Symlink("/etc/passwd", filepath.Join(target, "scripts", "evil.sh")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, target, "add", "-A")
+
+	workspace := t.TempDir()
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(filepath.Join(workspace, "security-results"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	shellcheckrcDir := filepath.Join(workspace, "_segh", ".github", "security")
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(shellcheckrcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shellcheckrcDir, "shellcheckrc"), []byte("# test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	argvLog := filepath.Join(t.TempDir(), "argv.log")
+	stubDir := writeStubShellCheck(t, argvLog)
+
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
+	cmd.Dir = target
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run standalone ShellCheck gate script: %v\n%s", err, out)
+	}
+
+	argv, err := os.ReadFile(argvLog) // #nosec G304 -- argvLog is created inside this test's unique temporary directory.
+	if err != nil {
+		t.Fatalf("stub shellcheck was not invoked: %v", err)
+	}
+	for _, want := range []string{"scripts/tool", "scripts/legacy-ash"} {
+		if !strings.Contains(string(argv), want) {
+			t.Errorf("standalone ShellCheck gate did not pass %q to ShellCheck; argv:\n%s", want, argv)
+		}
+	}
+	if strings.Contains(string(argv), "evil.sh") {
+		t.Errorf("standalone ShellCheck gate passed a tracked symlink to ShellCheck; argv:\n%s", argv)
+	}
+	if strings.Contains(string(argv), "legacy-zsh") {
+		t.Errorf("standalone ShellCheck gate passed an unsupported zsh script to ShellCheck; argv:\n%s", argv)
+	}
+}
+
+// TestPRSecurityStandaloneShellCheckGateSuppressesAshDialectNote pins that
+// the organization-owned .github/security/shellcheckrc disables SC2187, the
+// advisory ShellCheck emits on every #!/bin/ash script to note that it is
+// checked as dash. ShellCheck has no native ash mode, so this note fires
+// regardless of a script's content; left enabled it would fail the enforced
+// standalone ShellCheck gate for any otherwise-clean tracked ash script. This
+// test runs the real ShellCheck binary (skipping if one is not on PATH,
+// since a stub cannot exercise ShellCheck's own diagnostics) against the
+// gate script and the actual shellcheckrc file, rather than a synthetic
+// fixture, so a regression that re-enables SC2187 is caught here.
+func TestPRSecurityStandaloneShellCheckGateSuppressesAshDialectNote(t *testing.T) {
+	if _, err := exec.LookPath("shellcheck"); err != nil {
+		t.Skip("shellcheck is not installed; skipping a test that exercises its real diagnostics")
+	}
+
+	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	step, ok := findStep(job.Steps, "Run standalone ShellCheck gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing step \"Run standalone ShellCheck gate\"")
+	}
+
+	target := t.TempDir()
+	runGit(t, target, "init", "-q")
+	runGit(t, target, "config", "user.email", "test@example.invalid")
+	runGit(t, target, "config", "user.name", "test")
+
+	// A clean ash script: SC2187 is the only diagnostic ShellCheck would
+	// otherwise raise against it.
+	writeExecutable(t, filepath.Join(target, "legacy-ash"), "#!/bin/ash\necho \"hi\"\n")
+	runGit(t, target, "add", "-A")
+
+	workspace := t.TempDir()
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(filepath.Join(workspace, "security-results"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	shellcheckrcDir := filepath.Join(workspace, "_segh", ".github", "security")
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(shellcheckrcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := os.ReadFile(shellcheckrcPath) // #nosec G304 -- shellcheckrcPath is a fixed repository-relative constant.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shellcheckrcDir, "shellcheckrc"), rc, 0o600); err != nil { // #nosec G703 -- rc is this repository's own trusted shellcheckrc content read from the fixed shellcheckrcPath constant, and the destination sits under this test's own t.TempDir(), not any external input.
+		t.Fatal(err)
+	}
+	// aqua's shim resolves the pinned ShellCheck version by searching upward
+	// from its invoking process's working directory (cmd.Dir below, "target",
+	// which is unrelated to this repository) for an aqua.yaml; without one
+	// alongside AQUA_CONFIG (set from jobs.scan.env by setJobEnv below) it
+	// silently falls back to whatever "shellcheck" is next on PATH, such as
+	// an older distro-packaged version that predates the --rcfile flag.
+	// aqua.yaml requires checksums (checksum.require_checksum: true), so
+	// aqua-checksums.json must sit alongside it exactly as it does in a real
+	// checkout of this repository into "_segh".
+	aquaConfig, err := os.ReadFile(aquaConfigPath) // #nosec G304 -- aquaConfigPath is a fixed repository-relative constant.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "_segh", "aqua.yaml"), aquaConfig, 0o600); err != nil { // #nosec G703 -- aquaConfig is this repository's own trusted aqua.yaml read from the fixed aquaConfigPath constant, and the destination sits under this test's own t.TempDir(), not any external input.
+		t.Fatal(err)
+	}
+	aquaChecksums, err := os.ReadFile(aquaChecksumsPath) // #nosec G304 -- aquaChecksumsPath is a fixed repository-relative constant.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "_segh", "aqua-checksums.json"), aquaChecksums, 0o600); err != nil { // #nosec G703 -- aquaChecksums is this repository's own trusted aqua-checksums.json read from the fixed aquaChecksumsPath constant, and the destination sits under this test's own t.TempDir(), not any external input.
+		t.Fatal(err)
+	}
+
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	setJobEnv(t, job, workspace)
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
+	cmd.Dir = target
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run standalone ShellCheck gate script: %v\n%s", err, out)
+	}
+
+	statusBytes, err := os.ReadFile(filepath.Join(workspace, "security-results", "shellcheck.status")) // #nosec G304 -- the path is created inside this test's unique temporary directory.
+	if err != nil {
+		t.Fatalf("shellcheck.status was not written: %v", err)
+	}
+	if status := strings.TrimSpace(string(statusBytes)); status != "0" {
+		report, _ := os.ReadFile(filepath.Join(workspace, "security-results", "shellcheck.txt")) // #nosec G304 -- the path is created inside this test's unique temporary directory.
+		t.Errorf("standalone ShellCheck gate exited %q against a clean ash script; report:\n%s", status, report)
+	}
+}
+
+// TestPRSecurityRejectSymlinksStepRemovesTrackedSymlinks pins that the
+// "Reject symlinks from the pull request checkout" step deletes every
+// tracked symlink from the pull request checkout (protecting scanners like
+// Checkov that walk the directory tree directly rather than through a
+// git-ls-files candidate list, which a mode filter alone cannot cover) while
+// leaving ordinary tracked files untouched, and records what it removed.
+func TestPRSecurityRejectSymlinksStepRemovesTrackedSymlinks(t *testing.T) {
+	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	step, ok := findStep(job.Steps, "Reject symlinks from the pull request checkout")
+	if !ok {
+		t.Fatal("jobs.scan is missing step \"Reject symlinks from the pull request checkout\"")
+	}
+
+	target := t.TempDir()
+	runGit(t, target, "init", "-q")
+	runGit(t, target, "config", "user.email", "test@example.invalid")
+	runGit(t, target, "config", "user.name", "test")
+
+	regularPath := filepath.Join(target, "main.tf")
+	if err := os.WriteFile(regularPath, []byte("# regular file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(target, "escape.tf")
+	if err := os.Symlink("/etc/passwd", symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, target, "add", "-A")
+
+	workspace := t.TempDir()
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(filepath.Join(workspace, "security-results"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
+	cmd.Dir = target
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run symlink-rejection step: %v\n%s", err, out)
+	}
+
+	if _, err := os.Lstat(symlinkPath); !os.IsNotExist(err) {
+		t.Errorf("symlink %s still exists after the rejection step (err=%v)", symlinkPath, err)
+	}
+	if _, err := os.Lstat(regularPath); err != nil {
+		t.Errorf("regular file %s was unexpectedly removed: %v", regularPath, err)
+	}
+
+	report, err := os.ReadFile(filepath.Join(workspace, "security-results", "rejected-symlinks.txt")) // #nosec G304 -- the path is created inside this test's unique temporary directory.
+	if err != nil {
+		t.Fatalf("rejected-symlinks.txt was not written: %v", err)
+	}
+	if !strings.Contains(string(report), "escape.tf") {
+		t.Errorf("rejected-symlinks.txt does not mention the rejected symlink; report:\n%s", report)
 	}
 }
