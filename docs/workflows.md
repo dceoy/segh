@@ -14,17 +14,31 @@ The job checks out:
 
 It then runs these blocking gates:
 
-| Gate                   | Threshold                                            | Machine output | Human output |
-| ---------------------- | ---------------------------------------------------- | -------------- | ------------ |
-| zizmor                 | medium+ severity, high confidence, strict collection | JSON           | plain text   |
-| Trivy misconfiguration | high, critical                                       | JSON           | table        |
-| Trivy vulnerability    | high, critical                                       | JSON           | table        |
-| Trivy secret           | every severity                                       | JSON           | table        |
+| Gate                    | Threshold                                            | Machine output | Human output |
+| ----------------------- | ---------------------------------------------------- | -------------- | ------------ |
+| zizmor                  | medium+ severity, high confidence, strict collection | JSON           | plain text   |
+| actionlint + ShellCheck | every non-exempt workflow or embedded-shell finding  | —              | plain text   |
+| standalone ShellCheck   | every non-exempt tracked-shell finding               | —              | GCC text     |
+| Checkov                 | every centrally enabled IaC check                    | JSON           | CLI text     |
+| Trivy vulnerability     | high, critical                                       | JSON           | table        |
+| Trivy secret            | every severity                                       | JSON           | table        |
 
 Each scanner status is captured without stopping later scans. The workflow
 uploads `pr-security-reports`, writes bounded human-readable summaries, and only
 then fails the ordinary check if any scanner found a threshold violation or
 encountered an execution error.
+
+actionlint scans only tracked `.github/workflows/*.yml` and `.yaml` files and
+uses the installed ShellCheck CLI for embedded `run:` blocks. Standalone
+ShellCheck scans tracked `*.sh`, `*.bash`, and `*.bats` files plus executable
+tracked files with a supported shell shebang. An empty relevant file set is
+recorded as a successful skip.
+
+Checkov runs offline with `--skip-download` and an explicit IaC-only framework
+allowlist. It does not scan packages, images, secrets, GitHub Actions, or source
+code, does not use a Prisma Cloud API key, and does not upload results. A
+zero-resource scan is recorded as a successful skip. Failed checks and inline
+suppressions remain visible in the retained JSON and CLI reports.
 
 OpenSSF Scorecard runs in a separate `scorecard` job with
 `continue-on-error: true`. It is informational and must not be selected as a
@@ -102,15 +116,37 @@ this repository's tracked files.
 
 ## Scanner policy ownership
 
-The ruleset workflow supplies `/dev/null` for Trivy's target-repository
-configuration and ignore inputs, and supplies its secret configuration from the
-trusted `segh` checkout. Misconfiguration checks use the scanner's pinned
-bundle, while vulnerability databases use Trivy's standard download and cache
-behavior. Pull-request files cannot weaken thresholds or add ignore rules.
+The ruleset workflow passes actionlint, ShellCheck, Checkov, and Trivy
+configuration only from the trusted `segh` checkout. The actionlint
+configuration owns accepted diagnostic exclusions and organization runner
+labels. The ShellCheck configuration owns accepted standalone and embedded
+shell exclusions. The Checkov configuration owns the explicit IaC framework
+allowlist and accepted Checkov ID exclusions; its pinned release plus that
+reviewed exclusion list is the deterministic offline policy baseline.
+
+The workflow supplies `/dev/null` for Trivy's target-repository configuration
+and ignore inputs and supplies its secret configuration from the trusted
+checkout. Vulnerability databases use Trivy's standard download and cache
+behavior. Pull-request files cannot weaken thresholds, add centrally accepted
+exclusions, load external Checkov policies, enable hosted enforcement rules, or
+replace scanner commands with wrapper scripts.
 
 Change scanner versions, thresholds, or exclusions only through review in the
 protected `segh` repository. Keep the workflow and job names stable so ruleset
 enforcement does not drift.
+
+## Tool licensing
+
+| Tool       | Pinned version | License    | Redistribution obligation                                                  |
+| ---------- | -------------- | ---------- | -------------------------------------------------------------------------- |
+| actionlint | v1.7.12        | MIT        | Preserve its copyright and permission notice.                              |
+| ShellCheck | v0.11.0        | GPL-3.0    | GPL source and license obligations apply if its binary is redistributed.   |
+| Checkov    | 3.3.8          | Apache-2.0 | Preserve its license and notices and identify redistributed modifications. |
+
+All three may be used internally on commercial repositories without a license
+fee. `segh` downloads their unmodified CLI release artifacts at workflow runtime
+and does not vendor modified ShellCheck source or binaries. Running ShellCheck
+as an analyzer does not make the target repository's source GPL-covered.
 
 ## Organization audit
 
@@ -135,13 +171,16 @@ artifacts.
 Before making the scanner check required:
 
 1. Run a clean pull request and confirm `PR security / scan` succeeds.
-2. In test branches, introduce one detectable workflow issue, secret,
-   high-severity vulnerable dependency, and high-severity misconfiguration.
+2. In test branches, introduce one detectable zizmor finding, invalid workflow
+   expression, embedded shell diagnostic, standalone shell diagnostic, enabled
+   Checkov failure, high-severity vulnerable dependency, and secret.
 3. Confirm each case fails the same stable required check.
-4. Confirm all JSON, text, log, and status files remain downloadable on failure.
-5. Confirm a fork pull request and a Dependabot pull request use no privileged
+4. Confirm repositories with no workflows, shell scripts, or supported IaC
+   resources record successful skips.
+5. Confirm all JSON, text, log, and status files remain downloadable on failure.
+6. Confirm a fork pull request and a Dependabot pull request use no privileged
    follow-up.
-6. Enable the required workflow/check rule for the intended repository set.
+7. Enable the required workflow/check rule for the intended repository set.
 
 GitHub's current ruleset documentation is the authority for organization
 required-workflow availability and limits.

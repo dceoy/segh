@@ -11,7 +11,7 @@ Organization audit
 Organization ruleset required workflow
   ├─ trusted segh scanner configuration
   ├─ untrusted pull-request checkout
-  ├─ zizmor + three independent Trivy scans
+  ├─ zizmor + actionlint/ShellCheck + Checkov + two Trivy scans
   └─ ordinary required check + retained JSON/text/log artifacts
 ```
 
@@ -20,8 +20,9 @@ Organization ruleset required workflow
 The central ruleset workflow is the policy boundary. Scanner versions are
 checksum-verified through Aqua, action dependencies are pinned to full commit
 SHAs, and scanner arguments come from the trusted `segh` checkout. The
-pull-request checkout is only scanner input. It cannot supply Trivy
-configuration, ignore files, or zizmor configuration.
+pull-request checkout is only scanner input. It cannot supply actionlint,
+ShellCheck, Checkov, Trivy, or zizmor configuration, exclusions, or wrapper
+scripts.
 
 The scanner job has only `contents: read`. It does not receive an App private
 key, installation token, publication credential, or write permission. Fork and

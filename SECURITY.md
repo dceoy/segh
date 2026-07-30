@@ -5,8 +5,9 @@ security-advisory interface.
 
 The central pull-request workflow treats the target checkout as untrusted data.
 It grants only `contents: read`, disables target-provided scanner
-configuration and ignore files, installs checksum-verified scanner versions,
-and retains reports as ordinary workflow artifacts.
+configuration, exclusions, external policies, and wrapper scripts, installs
+checksum-verified scanner versions, and retains reports as ordinary workflow
+artifacts.
 
 Install organization required workflows and rulesets only from reviewed commits
 on protected `main`. Keep the App private key in Actions secrets, install the

@@ -26,6 +26,26 @@
       "algorithm": "sha256"
     },
     {
+      "id": "github_release/github.com/bridgecrewio/checkov/3.3.8/checkov_darwin_X86_64.zip",
+      "checksum": "35B0461510CF1A680DC4450D2362DE6CA4AED101D86699F20A4329806230DB1B",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/bridgecrewio/checkov/3.3.8/checkov_linux_X86_64.zip",
+      "checksum": "7F9F62EB3812FEE7CB9C570503A266A599F5458B362FE581C14DCF4A44027BD4",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/bridgecrewio/checkov/3.3.8/checkov_linux_arm64.zip",
+      "checksum": "AFE1D3C96DF7119F16DD27AC4971EB83D2F9F50EC2150CE9E2BAD6F483733B0C",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/bridgecrewio/checkov/3.3.8/checkov_windows_X86_64.zip",
+      "checksum": "38DF789780A62142FEF1474AF98094D9BFA440DE1BE982D51E2AFFC8881E7EE2",
+      "algorithm": "sha256"
+    },
+    {
       "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-darwin-amd64.tar.gz",
       "checksum": "F6F06D94B6241521C53D15450C5209B028270BF966F842AFB11C030C79F5BC16",
       "algorithm": "sha256"
@@ -53,6 +73,31 @@
     {
       "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-windows-arm64.zip",
       "checksum": "947B9A5BF762D465710B376C156F0184ABB2168378B0826AF1899E0EE7183742",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/koalaman/shellcheck/v0.11.0/shellcheck-v0.11.0.darwin.aarch64.tar.xz",
+      "checksum": "56AFFDD8DE5527894DCA6DC3D7E0A99A873B0F004D7AABC30AE407D3F48B0A79",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/koalaman/shellcheck/v0.11.0/shellcheck-v0.11.0.darwin.x86_64.tar.xz",
+      "checksum": "3C89DB4EDCAB7CF1C27BFF178882E0F6F27F7AFDF54E859FA041FCA10FEBE4C6",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/koalaman/shellcheck/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz",
+      "checksum": "12B331C1D2DB6B9EB13CFCA64306B1B157A86EB69DB83023E261EAA7E7C14588",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/koalaman/shellcheck/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz",
+      "checksum": "8C3BE12B05D5C177A04C29E3C78CE89AC86F1595681CAB149B65B97C4E227198",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/koalaman/shellcheck/v0.11.0/shellcheck-v0.11.0.zip",
+      "checksum": "8A4E35AB0B331C85D73567B12F2A444DF187F483E5079CEFFA6BDA1FAA2E740E",
       "algorithm": "sha256"
     },
     {

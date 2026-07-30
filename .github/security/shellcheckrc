@@ -1,0 +1,3 @@
+# Organization-owned ShellCheck exclusions belong here. There are no accepted
+# exclusions in the current baseline. Passing this file explicitly prevents a
+# target repository's .shellcheckrc from changing either ShellCheck invocation.

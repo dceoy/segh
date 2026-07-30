@@ -91,35 +91,99 @@ jobs:
             status=$render_status
           fi
           printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/zizmor.status"
-      - name: Run Trivy misconfiguration gate
+      - name: Run actionlint and embedded ShellCheck gate
+        if: always()
+        working-directory: _target
+        env:
+          SHELLCHECK_OPTS: --rcfile=${{ github.workspace }}/_segh/.github/security/shellcheckrc
+        run: |
+          set +e
+          workflow_files=()
+          while IFS= read -r -d '' file; do
+            workflow_files+=("$file")
+          done < <(git ls-files -z -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          if (( ${#workflow_files[@]} == 0 )); then
+            printf 'Skipped: no tracked GitHub Actions workflow files.\n' \
+              > "$GITHUB_WORKSPACE/security-results/actionlint.txt"
+            status=0
+          else
+            actionlint \
+              --no-color \
+              --config-file "$GITHUB_WORKSPACE/_segh/.github/security/actionlint.yaml" \
+              --shellcheck shellcheck \
+              "${workflow_files[@]}" \
+              > "$GITHUB_WORKSPACE/security-results/actionlint.txt" 2>&1
+            status=$?
+            if (( status == 0 )) && [[ ! -s "$GITHUB_WORKSPACE/security-results/actionlint.txt" ]]; then
+              printf 'Passed: actionlint and embedded ShellCheck checked %d workflow files.\n' \
+                "${#workflow_files[@]}" > "$GITHUB_WORKSPACE/security-results/actionlint.txt"
+            fi
+          fi
+          printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/actionlint.status"
+      - name: Run standalone ShellCheck gate
         if: always()
         working-directory: _target
         run: |
           set +e
-          trivy fs \
-            --config /dev/null \
-            --ignorefile /dev/null \
-            --scanners misconfig \
-            --severity HIGH,CRITICAL \
-            --exit-code 1 \
-            --format json \
-            --output "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.json" \
-            --skip-dirs .git \
-            --skip-check-update \
-            --skip-version-check \
-            . 2> "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.log"
-          status=$?
-          trivy convert \
-            --config /dev/null \
-            --scanners misconfig \
-            --format table \
-            --output "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.txt" \
-            "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.json"
-          convert_status=$?
-          if (( status == 0 && convert_status != 0 )); then
-            status=$convert_status
+          script_files=()
+          declare -A seen_scripts=()
+          while IFS= read -r -d '' file; do
+            script_files+=("$file")
+            seen_scripts["$file"]=1
+          done < <(git ls-files -z -- '*.sh' '*.bash' '*.bats')
+          shell_shebang='^#![[:space:]]*(/usr/bin/env([[:space:]]+-S)?[[:space:]]+)?(/[^[:space:]]*/)?(ba|da|k|z)?sh([[:space:]]|$)'
+          while IFS= read -r -d '' entry; do
+            mode=${entry%% *}
+            file=${entry#*$'\t'}
+            if [[ "$mode" != "100755" || -n "${seen_scripts[$file]:-}" ]]; then
+              continue
+            fi
+            IFS= read -r -n 256 first_line < "$file" || true
+            if [[ "$first_line" =~ $shell_shebang ]]; then
+              script_files+=("$file")
+              seen_scripts["$file"]=1
+            fi
+          done < <(git ls-files -z --stage)
+          if (( ${#script_files[@]} == 0 )); then
+            printf 'Skipped: no tracked standalone shell scripts.\n' \
+              > "$GITHUB_WORKSPACE/security-results/shellcheck.txt"
+            status=0
+          else
+            shellcheck \
+              --color=never \
+              --format=gcc \
+              --rcfile "$GITHUB_WORKSPACE/_segh/.github/security/shellcheckrc" \
+              --severity=style \
+              -- \
+              "${script_files[@]}" \
+              > "$GITHUB_WORKSPACE/security-results/shellcheck.txt" 2>&1
+            status=$?
+            if (( status == 0 )) && [[ ! -s "$GITHUB_WORKSPACE/security-results/shellcheck.txt" ]]; then
+              printf 'Passed: ShellCheck checked %d standalone shell scripts.\n' \
+                "${#script_files[@]}" > "$GITHUB_WORKSPACE/security-results/shellcheck.txt"
+            fi
           fi
-          printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.status"
+          printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/shellcheck.status"
+      - name: Run Checkov infrastructure-as-code gate
+        if: always()
+        working-directory: _target
+        run: |
+          set +e
+          checkov \
+            --directory . \
+            --config-file "$GITHUB_WORKSPACE/_segh/.github/security/checkov.yaml" \
+            --skip-download \
+            --output json \
+            --output cli \
+            --output-file-path \
+              "$GITHUB_WORKSPACE/security-results/checkov.json,$GITHUB_WORKSPACE/security-results/checkov.txt" \
+            > "$GITHUB_WORKSPACE/security-results/checkov.log" 2>&1
+          status=$?
+          if (( status == 0 )) && [[ ! -s "$GITHUB_WORKSPACE/security-results/checkov.txt" ]]; then
+            printf 'Skipped: no supported infrastructure-as-code resources were found.\n' \
+              > "$GITHUB_WORKSPACE/security-results/checkov.txt"
+          fi
+          printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/checkov.status"
       - name: Run Trivy vulnerability gate
         if: always()
         working-directory: _target
@@ -180,7 +244,7 @@ jobs:
       - name: Publish scanner summary
         if: always()
         run: |
-          for scanner in zizmor trivy-misconfiguration trivy-vulnerability trivy-secret; do
+          for scanner in zizmor actionlint shellcheck checkov trivy-vulnerability trivy-secret; do
             {
               printf '## %s\n\n' "$scanner"
               if [[ -f "security-results/$scanner.txt" ]]; then
@@ -204,7 +268,7 @@ jobs:
         if: always()
         run: |
           failed=0
-          for scanner in zizmor trivy-misconfiguration trivy-vulnerability trivy-secret; do
+          for scanner in zizmor actionlint shellcheck checkov trivy-vulnerability trivy-secret; do
             status_file="security-results/$scanner.status"
             if [[ ! -f "$status_file" ]]; then
               echo "::error::$scanner did not produce a status"

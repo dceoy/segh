@@ -296,7 +296,15 @@ func TestPRSecurityScanAndScanSelfStepsStayInSync(t *testing.T) {
 	if !reflect.DeepEqual(scanSteps, scanSelfSteps) {
 		t.Fatalf("jobs.scan and jobs.scan-self steps diverged:\nscan:      %v\nscan-self: %v", scanSteps, scanSelfSteps)
 	}
-	for _, want := range []string{"Run zizmor gate", "Run Trivy secret gate", "Enforce scanner gates"} {
+	for _, want := range []string{
+		"Run zizmor gate",
+		"Run actionlint and embedded ShellCheck gate",
+		"Run standalone ShellCheck gate",
+		"Run Checkov infrastructure-as-code gate",
+		"Run Trivy vulnerability gate",
+		"Run Trivy secret gate",
+		"Enforce scanner gates",
+	} {
 		if !slicesContains(scanSelfSteps, want) {
 			t.Errorf("jobs.scan-self is missing step %q", want)
 		}
@@ -315,6 +323,83 @@ func TestPRSecurityScanAndScanSelfStepsStayInSync(t *testing.T) {
 				"step %q diverged between jobs.scan and jobs.scan-self beyond the intentional checkout differences:\nscan:      %+v\nscan-self: %+v",
 				name, normalizedScan, normalizedScanSelf,
 			)
+		}
+	}
+}
+
+// TestPRSecurityUsesDedicatedScannerOwnership pins the hard scanner cutovers:
+// Checkov owns infrastructure-as-code, actionlint owns workflow correctness
+// (including embedded ShellCheck), standalone ShellCheck owns tracked shell
+// files, and Trivy retains only vulnerability and secret scanning.
+func TestPRSecurityUsesDedicatedScannerOwnership(t *testing.T) {
+	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	names := stepNames(job.Steps)
+	if slicesContains(names, "Run Trivy misconfiguration gate") {
+		t.Error("jobs.scan still contains the superseded Trivy misconfiguration gate")
+	}
+
+	actionlintStep, ok := findStep(job.Steps, "Run actionlint and embedded ShellCheck gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing the actionlint gate")
+	}
+	for _, want := range []string{
+		"git ls-files",
+		"--config-file \"$GITHUB_WORKSPACE/_segh/.github/security/actionlint.yaml\"",
+		"--shellcheck shellcheck",
+		"security-results/actionlint.status",
+	} {
+		if !strings.Contains(actionlintStep.Run, want) {
+			t.Errorf("actionlint gate does not contain %q", want)
+		}
+	}
+	if opts := actionlintStep.Env["SHELLCHECK_OPTS"]; !strings.Contains(opts, "_segh/.github/security/shellcheckrc") {
+		t.Errorf("actionlint gate SHELLCHECK_OPTS = %q, want trusted ShellCheck configuration", opts)
+	}
+
+	shellcheckStep, ok := findStep(job.Steps, "Run standalone ShellCheck gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing the standalone ShellCheck gate")
+	}
+	for _, want := range []string{
+		"git ls-files",
+		"--rcfile \"$GITHUB_WORKSPACE/_segh/.github/security/shellcheckrc\"",
+		"security-results/shellcheck.status",
+	} {
+		if !strings.Contains(shellcheckStep.Run, want) {
+			t.Errorf("standalone ShellCheck gate does not contain %q", want)
+		}
+	}
+
+	checkovStep, ok := findStep(job.Steps, "Run Checkov infrastructure-as-code gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing the Checkov gate")
+	}
+	for _, want := range []string{
+		"--config-file \"$GITHUB_WORKSPACE/_segh/.github/security/checkov.yaml\"",
+		"--skip-download",
+		"security-results/checkov.json",
+		"security-results/checkov.txt",
+		"security-results/checkov.status",
+	} {
+		if !strings.Contains(checkovStep.Run, want) {
+			t.Errorf("Checkov gate does not contain %q", want)
+		}
+	}
+
+	allScripts := make([]string, 0, len(job.Steps))
+	for _, step := range job.Steps {
+		allScripts = append(allScripts, step.Run)
+	}
+	joined := strings.Join(allScripts, "\n")
+	if strings.Contains(joined, "--scanners misconfig") {
+		t.Error("jobs.scan still invokes Trivy misconfiguration scanning")
+	}
+	for _, want := range []string{"--scanners vuln", "--scanners secret"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("jobs.scan no longer contains %q", want)
 		}
 	}
 }
