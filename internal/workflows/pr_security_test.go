@@ -756,7 +756,7 @@ func TestPRSecurityStandaloneShellCheckGateSuppressesAshDialectNote(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(shellcheckrcDir, "shellcheckrc"), rc, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(shellcheckrcDir, "shellcheckrc"), rc, 0o600); err != nil { // #nosec G703 -- rc is this repository's own trusted shellcheckrc content read from the fixed shellcheckrcPath constant, and the destination sits under this test's own t.TempDir(), not any external input.
 		t.Fatal(err)
 	}
 	// aqua's shim resolves the pinned ShellCheck version by searching upward
@@ -772,14 +772,14 @@ func TestPRSecurityStandaloneShellCheckGateSuppressesAshDialectNote(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "_segh", "aqua.yaml"), aquaConfig, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "_segh", "aqua.yaml"), aquaConfig, 0o600); err != nil { // #nosec G703 -- aquaConfig is this repository's own trusted aqua.yaml read from the fixed aquaConfigPath constant, and the destination sits under this test's own t.TempDir(), not any external input.
 		t.Fatal(err)
 	}
 	aquaChecksums, err := os.ReadFile(aquaChecksumsPath) // #nosec G304 -- aquaChecksumsPath is a fixed repository-relative constant.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "_segh", "aqua-checksums.json"), aquaChecksums, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "_segh", "aqua-checksums.json"), aquaChecksums, 0o600); err != nil { // #nosec G703 -- aquaChecksums is this repository's own trusted aqua-checksums.json read from the fixed aquaChecksumsPath constant, and the destination sits under this test's own t.TempDir(), not any external input.
 		t.Fatal(err)
 	}
 
