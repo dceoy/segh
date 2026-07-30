@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -372,7 +373,7 @@ func TestRunFailsClosedWhenInstallationAccountDoesNotMatchConfiguredOrganization
 	}
 }
 
-func TestRunFailsClosedWhenInstallationReportsAllButReturnsNoRepositories(t *testing.T) {
+func TestRunSucceedsForAllRepositoriesInstallationOnEmptyOrganization(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/orgs/org/installations":
@@ -386,20 +387,59 @@ func TestRunFailsClosedWhenInstallationReportsAllButReturnsNoRepositories(t *tes
 		}
 	})
 	inventory, err := service.Run(context.Background())
+	if err != nil {
+		t.Fatalf("err = %v, want nil for an empty organization covered by an all-repositories installation", err)
+	}
+	if !inventory.Complete {
+		t.Fatalf("Complete = false, want true for verified empty organization")
+	}
+	if inventory.Total != 0 || inventory.Selected != 0 || len(inventory.Errors) != 0 {
+		t.Fatalf("inventory = %#v, want complete empty inventory", inventory)
+	}
+}
+
+func TestRunFailsClosedWhenInstallationCountIsPositiveButReturnsNoRepositories(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/orgs/org/installations":
+			_, _ = io.WriteString(writer, `{"total_count":1,"installations":[{"id":1,"account":{"login":"org"},"repository_selection":"all"}]}`)
+		case "/installation/repositories":
+			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[]}`)
+		case "/orgs/org/repos":
+			_, _ = io.WriteString(writer, `[]`)
+		default:
+			t.Errorf("unexpected path = %s", request.URL.Path)
+		}
+	})
+	inventory, err := service.Run(context.Background())
 	if err == nil {
-		t.Fatalf("err = nil, want error when the installation returns no repositories to verify identity")
+		t.Fatalf("err = nil, want error for inconsistent accessible repository response")
 	}
 	if inventory.Complete {
-		t.Fatalf("Complete = true, want false when the installation returns no repositories to verify identity")
+		t.Fatalf("Complete = true, want false when total_count is positive but repositories is empty")
 	}
-	found := false
-	for _, runErr := range inventory.Errors {
-		if runErr.Kind == "installation_scope" {
-			found = true
+}
+
+func TestRunPreservesInstallationPermissionErrorAfterSuccessfulEnumeration(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/orgs/org/installations":
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(writer, `{"message":"Resource not accessible by integration"}`)
+		case "/orgs/org/repos":
+			_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo-1","default_branch":"main"}]`)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
 		}
+	})
+	inventory, err := service.Run(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("err = %v, want wrapped 403 APIError", err)
 	}
-	if !found {
-		t.Fatalf("errors = %#v, want an installation_scope error", inventory.Errors)
+	if inventory.Complete || inventory.Total != 1 {
+		t.Fatalf("inventory = %#v, want incomplete inventory with successful repository enumeration", inventory)
 	}
 }
 

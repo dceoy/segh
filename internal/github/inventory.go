@@ -143,6 +143,9 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		return inventory.Exclusions[i].Repository < inventory.Exclusions[j].Repository
 	})
 	if !inventory.Complete {
+		if installationErr != nil {
+			return inventory, fmt.Errorf("verify installation coverage: %w", installationErr)
+		}
 		return inventory, fmt.Errorf("repository enumeration incomplete")
 	}
 	return inventory, nil
@@ -189,6 +192,9 @@ func (s *InventoryService) verifyInstallationCoversOrganization(ctx context.Cont
 		return 0, fmt.Errorf("list repositories accessible to installation %d: %w", s.installationID, err)
 	}
 	if len(accessible.Repositories) == 0 {
+		if accessible.TotalCount == 0 {
+			return 0, nil
+		}
 		return 0, fmt.Errorf(
 			"installation %d reports repository_selection \"all\" but returned no repositories; cannot verify it covers organization %q",
 			s.installationID, s.cfg.Organization,
