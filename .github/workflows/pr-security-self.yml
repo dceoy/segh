@@ -221,19 +221,48 @@ jobs:
     # This job runs after scan-self completes (so its single-shot result is
     # already known) and publishes an explicit check run pinned to
     # github.event.pull_request.head.sha, so the gate can actually be
-    # required for this repository. It carries checks:write on its own,
-    # separate from the job that checks out and scans untrusted pull-request
-    # content, and it never checks out or runs anything from that content.
+    # required for this repository. It never checks out or runs anything
+    # from pull-request content.
+    #
+    # It must not publish with github.token: that token's identity is the
+    # shared default "GitHub Actions" App, indistinguishable from the token
+    # any other workflow in this repository also gets. A same-repository
+    # pull request can add an ordinary pull_request-triggered job with
+    # checks:write and forge a successful "segh source scan (head commit)"
+    # run on its own head SHA with that same identity, and repository
+    # secrets are no protection either: pull_request (unlike pull_request_target)
+    # exposes them to same-repository pull requests too. The publisher
+    # identity instead comes from a dedicated GitHub App token minted here,
+    # gated by the self-scan-publisher environment's deployment-branch policy
+    # (restricted to the base branch only). pull_request_target runs with
+    # github.ref set to that base branch, so this job can obtain the
+    # environment secrets; an ordinary pull_request job runs against an
+    # ephemeral merge ref that never matches the policy, so GitHub refuses it
+    # the same secrets before it can mint a token. Require the published
+    # check to come from this dedicated App's ID, not just its name, so a
+    # forged same-named check from the default App identity cannot satisfy
+    # it either. See docs/workflows.md for the one-time rollout steps this
+    # depends on (App creation, environment policy, required-check App
+    # pinning).
     needs: scan-self
     if: always() && needs.scan-self.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    environment: self-scan-publisher
     permissions:
-      checks: write
+      contents: read
     steps:
+      - name: Create dedicated publisher App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SEGH_SCAN_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY }}
+          permission-checks: write
+          permission-metadata: read
       - name: Publish the gate result on the pull request's head commit
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           conclusion=failure
           if [[ "${{ needs.scan-self.result }}" == "success" ]]; then

@@ -46,13 +46,46 @@ comes from the base branch.
 `pull_request_target` runs with `GITHUB_SHA` set to the base branch's commit,
 not the pull request's head, so the check run GitHub Actions creates
 automatically for the `scan-self` job does not attach to the commit branch
-protection evaluates. A separate `publish-self-check` job, which holds no
-other privilege and never checks out pull-request content, therefore
-publishes an explicit check run named `segh source scan (head commit)`
-pinned to the pull request's head SHA once `scan-self` completes. Require
-that check (not the job-level `PR security / scan-self` context, which
-evaluates the wrong commit) on `dceoy/segh`'s own branch protection or
-ruleset.
+protection evaluates. A separate `publish-self-check` job, which never checks
+out pull-request content, therefore publishes an explicit check run named
+`segh source scan (head commit)` pinned to the pull request's head SHA once
+`scan-self` completes. Require that check (not the job-level
+`PR security / scan-self` context, which evaluates the wrong commit) on
+`dceoy/segh`'s own branch protection or ruleset.
+
+`publish-self-check` cannot publish with the default `github.token`: that
+token's identity is the shared "GitHub Actions" App available to every
+workflow in the repository, including one an ordinary same-repository pull
+request adds under the `pull_request` trigger. A repository secret is not a
+sufficient substitute either, because `pull_request` (unlike
+`pull_request_target`) already exposes repository secrets to
+same-repository pull requests. The job instead mints a token from a
+dedicated GitHub App, gated by an environment whose deployment-branch policy
+allows only the base branch. `pull_request_target` runs with `github.ref`
+set to that base branch, so this job can reach the environment secrets; an
+ordinary `pull_request` job runs against an ephemeral merge ref that never
+matches the policy, so GitHub denies it those secrets before it can mint a
+forged token.
+
+Before requiring `segh source scan (head commit)` on `dceoy/segh`:
+
+1. Create a GitHub App scoped to Checks: Write and Metadata: Read only, and
+   install it on the `dceoy/segh` repository.
+2. Create a repository environment named `self-scan-publisher` and restrict
+   its deployment branches to the base branch (`main`) only, with no other
+   repository able to satisfy that policy.
+3. Add the App ID and private key as the `self-scan-publisher` environment's
+   `SEGH_SCAN_PUBLISHER_APP_ID` and `SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY`
+   secrets, not repository-level secrets.
+4. In the required-check configuration, pin `segh source scan (head commit)`
+   to this App's ID, not only its name, so a same-named check published by
+   the default App identity cannot satisfy it.
+
+This rollout cannot be exercised or verified from within a pull request
+against `dceoy/segh`: `pull_request_target` only takes effect once its
+workflow definition is on the base branch, and the App, environment, and
+required-check App pinning are one-time repository configuration outside
+this repository's tracked files.
 
 ## Scanner policy ownership
 
