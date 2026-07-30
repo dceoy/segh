@@ -248,6 +248,21 @@ func validateReportArtifacts(inventory model.Inventory, audit model.Audit, cfg c
 	if err := validateInventory(inventory, cfg); err != nil {
 		return err
 	}
+	if err := validateAudit(inventory, audit); err != nil {
+		return err
+	}
+	expected := policy.New(cfg, audit.GeneratedAt).Evaluate(inventory)
+	equal, err := canonicalJSONEqual(audit.Results, expected.Results)
+	if err != nil {
+		return fmt.Errorf("compare audit results: %w", err)
+	}
+	if !equal {
+		return fmt.Errorf("audit results do not match the inventory and configuration")
+	}
+	return nil
+}
+
+func validateAudit(inventory model.Inventory, audit model.Audit) error {
 	if audit.SchemaVersion != model.PolicySchemaVersion {
 		return fmt.Errorf("unsupported audit schema version %d", audit.SchemaVersion)
 	}
@@ -265,15 +280,10 @@ func validateReportArtifacts(inventory model.Inventory, audit model.Audit, cfg c
 		)
 	}
 	counts := map[string]int{}
-	validStatuses := map[model.PolicyStatus]bool{
-		model.PolicyPass:        true,
-		model.PolicyFail:        true,
-		model.PolicyUnknown:     true,
-		model.PolicyUnsupported: true,
-		model.PolicyExempt:      true,
-	}
 	for i, result := range audit.Results {
-		if !validStatuses[result.Status] {
+		switch result.Status {
+		case model.PolicyPass, model.PolicyFail, model.PolicyUnknown, model.PolicyUnsupported, model.PolicyExempt:
+		default:
 			return fmt.Errorf("audit result %d has invalid status %q", i, result.Status)
 		}
 		if result.PolicyID == "" {
@@ -284,31 +294,19 @@ func validateReportArtifacts(inventory model.Inventory, audit model.Audit, cfg c
 	if !maps.Equal(counts, audit.Counts) {
 		return fmt.Errorf("audit counts do not match its policy results")
 	}
-	expected := policy.New(cfg, audit.GeneratedAt).Evaluate(inventory)
-	// audit.Results was JSON-decoded, so its Observed/Expected any fields hold
-	// generic decode shapes (e.g. []string becomes []any). Round-trip expected
-	// through the same encode/decode path before comparing so both sides use
-	// identical representations rather than only their originating Go types.
-	expectedJSON, err := json.Marshal(expected.Results)
-	if err != nil {
-		return fmt.Errorf("encode expected audit results: %w", err)
-	}
-	var normalizedExpected []model.PolicyResult
-	if err := json.Unmarshal(expectedJSON, &normalizedExpected); err != nil {
-		return fmt.Errorf("decode expected audit results: %w", err)
-	}
-	resultsJSON, err := json.Marshal(audit.Results)
-	if err != nil {
-		return fmt.Errorf("encode audit results: %w", err)
-	}
-	normalizedJSON, err := json.Marshal(normalizedExpected)
-	if err != nil {
-		return fmt.Errorf("encode normalized expected audit results: %w", err)
-	}
-	if !bytes.Equal(resultsJSON, normalizedJSON) {
-		return fmt.Errorf("audit results do not match the inventory and configuration")
-	}
 	return nil
+}
+
+func canonicalJSONEqual(left, right any) (bool, error) {
+	leftJSON, err := json.Marshal(left)
+	if err != nil {
+		return false, fmt.Errorf("encode left value: %w", err)
+	}
+	rightJSON, err := json.Marshal(right)
+	if err != nil {
+		return false, fmt.Errorf("encode right value: %w", err)
+	}
+	return bytes.Equal(leftJSON, rightJSON), nil
 }
 
 func readJSON(path string, value any) error {

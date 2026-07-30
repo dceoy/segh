@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"bytes"
+	"encoding/json"
+	"time"
+)
 
 const (
 	InventorySchemaVersion = 2
@@ -43,37 +47,75 @@ type RepositoryExclusion struct {
 }
 
 type Repository struct {
-	ID                         int64                   `json:"id"`
-	FullName                   string                  `json:"full_name"`
-	HTMLURL                    string                  `json:"html_url,omitempty"`
-	Visibility                 string                  `json:"visibility"`
-	Archived                   bool                    `json:"archived"`
-	Disabled                   bool                    `json:"disabled"`
-	Fork                       bool                    `json:"fork"`
-	Template                   bool                    `json:"template"`
-	DefaultBranch              string                  `json:"default_branch"`
-	Topics                     []string                `json:"topics,omitempty"`
-	CustomProperties           map[string]any          `json:"custom_properties,omitempty"`
-	ActionsEnabled             Observed[bool]          `json:"actions_enabled"`
-	AllowedActions             Observed[string]        `json:"allowed_actions"`
-	DefaultWorkflowPermissions Observed[string]        `json:"default_workflow_permissions"`
-	ForkPRApproval             Observed[bool]          `json:"fork_pr_approval"`
-	Ruleset                    Observed[bool]          `json:"ruleset"`
-	BranchProtection           Observed[bool]          `json:"branch_protection"`
-	RequiredPullRequests       Observed[bool]          `json:"required_pull_requests"`
-	RequiredChecks             Observed[bool]          `json:"required_checks"`
-	ForcePushRestricted        Observed[bool]          `json:"force_push_restricted"`
-	DeletionRestricted         Observed[bool]          `json:"deletion_restricted"`
-	CodeSecurityConfiguration  Observed[string]        `json:"code_security_configuration"`
-	CodeQL                     Observed[bool]          `json:"codeql"`
-	SecretScanning             Observed[bool]          `json:"secret_scanning"`
-	PushProtection             Observed[bool]          `json:"push_protection"`
-	DependencyGraph            Observed[bool]          `json:"dependency_graph"`
-	DependabotAlerts           Observed[bool]          `json:"dependabot_alerts"`
-	DependabotSecurityUpdates  Observed[bool]          `json:"dependabot_security_updates"`
-	SecurityMD                 Observed[bool]          `json:"security_md"`
-	SHAPinningEnforced         Observed[bool]          `json:"sha_pinning_enforced"`
-	Capabilities               map[string]Availability `json:"capabilities,omitempty"`
+	ID                         int64                    `json:"id"`
+	FullName                   string                   `json:"full_name"`
+	HTMLURL                    string                   `json:"html_url,omitempty"`
+	Visibility                 string                   `json:"visibility"`
+	Archived                   bool                     `json:"archived"`
+	Disabled                   bool                     `json:"disabled"`
+	Fork                       bool                     `json:"fork"`
+	Template                   bool                     `json:"template"`
+	DefaultBranch              string                   `json:"default_branch"`
+	Topics                     []string                 `json:"topics,omitempty"`
+	CustomProperties           Observed[map[string]any] `json:"-"`
+	ActionsEnabled             Observed[bool]           `json:"actions_enabled"`
+	AllowedActions             Observed[string]         `json:"allowed_actions"`
+	DefaultWorkflowPermissions Observed[string]         `json:"default_workflow_permissions"`
+	ForkPRApproval             Observed[bool]           `json:"fork_pr_approval"`
+	Ruleset                    Observed[bool]           `json:"ruleset"`
+	BranchProtection           Observed[bool]           `json:"branch_protection"`
+	RequiredPullRequests       Observed[bool]           `json:"required_pull_requests"`
+	RequiredChecks             Observed[bool]           `json:"required_checks"`
+	ForcePushRestricted        Observed[bool]           `json:"force_push_restricted"`
+	DeletionRestricted         Observed[bool]           `json:"deletion_restricted"`
+	CodeSecurityConfiguration  Observed[string]         `json:"code_security_configuration"`
+	CodeQL                     Observed[bool]           `json:"codeql"`
+	SecretScanning             Observed[bool]           `json:"secret_scanning"`
+	PushProtection             Observed[bool]           `json:"push_protection"`
+	DependencyGraph            Observed[bool]           `json:"dependency_graph"`
+	DependabotAlerts           Observed[bool]           `json:"dependabot_alerts"`
+	DependabotSecurityUpdates  Observed[bool]           `json:"dependabot_security_updates"`
+	SecurityMD                 Observed[bool]           `json:"security_md"`
+	SHAPinningEnforced         Observed[bool]           `json:"sha_pinning_enforced"`
+}
+
+type repositoryJSON Repository
+
+type customPropertiesCapabilities struct {
+	CustomProperties Availability `json:"custom_properties,omitempty"`
+}
+
+type repositoryWire struct {
+	repositoryJSON
+	CustomProperties map[string]any                `json:"custom_properties,omitempty"`
+	Capabilities     *customPropertiesCapabilities `json:"capabilities,omitempty"`
+}
+
+// MarshalJSON retains the version 2 wire format for the typed observation.
+func (r Repository) MarshalJSON() ([]byte, error) {
+	var capabilities *customPropertiesCapabilities
+	if r.CustomProperties.State != "" && r.CustomProperties.State != Available {
+		capabilities = &customPropertiesCapabilities{CustomProperties: r.CustomProperties.State}
+	}
+	return json.Marshal(repositoryWire{
+		repositoryJSON: repositoryJSON(r), CustomProperties: r.CustomProperties.Value, Capabilities: capabilities,
+	})
+}
+
+// UnmarshalJSON restores the observation without weakening strict decoding.
+func (r *Repository) UnmarshalJSON(data []byte) error {
+	var decoded repositoryWire
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	*r = Repository(decoded.repositoryJSON)
+	r.CustomProperties = Observed[map[string]any]{State: Available, Value: decoded.CustomProperties, Source: "properties/values"}
+	if decoded.Capabilities != nil && decoded.Capabilities.CustomProperties != "" {
+		r.CustomProperties.State = decoded.Capabilities.CustomProperties
+	}
+	return nil
 }
 
 type PolicyStatus string

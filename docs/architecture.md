@@ -77,6 +77,19 @@ Unavailable endpoints never silently pass policy:
 - `unknown` means permission, ambiguity, or another failure prevented a
   reliable observation.
 
+## End-to-end command evaluation
+
+An isolated `run` command prototype invoked the existing inventory, audit, and
+report stages so their strict artifact validation and exit behavior remained
+unchanged. Measured after the governance simplifications in issues 13–16, it
+changed production Go from 2,175 to 2,204 lines and the organization-audit
+workflow from 149 to 123 lines: a net increase from 2,324 to 2,327 lines.
+
+Although shell branching moved into the CLI, total code did not decrease.
+Adding the command was therefore rejected under the issue 17 implementation
+gate. The three stage commands remain explicit compatibility and evidence
+boundaries without adding a second orchestration layer.
+
 ## GitHub Enterprise Server
 
 Inventory supports GHES through the configured web hostname and records missing
