@@ -3,12 +3,16 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/dceoy/segh/internal/config"
 	"github.com/dceoy/segh/internal/model"
+	"github.com/dceoy/segh/internal/policy"
 )
 
 func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
@@ -16,7 +20,7 @@ func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--help"}, "Usage:"},
+		{[]string{"--help"}, "GitHub security governance audit"},
 		{[]string{"--version"}, "test-version"},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -29,122 +33,238 @@ func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
 	}
 }
 
-func TestPublicationTargetUsesScannedCommitNotInventorySHA(t *testing.T) {
-	inventoryRepos := map[string]model.Repository{
-		"org/repo": {FullName: "org/repo", DefaultBranch: "main"},
-	}
-	scannedCommits := map[string]string{"org/repo": strings.Repeat("a", 40)}
-	sha, ref, reject := publicationTarget("org/repo", true, "", "", inventoryRepos, scannedCommits)
-	if reject != "" {
-		t.Fatalf("unexpected rejection: %s", reject)
-	}
-	if sha != strings.Repeat("a", 40) || ref != "refs/heads/main" {
-		t.Fatalf("sha = %q, ref = %q", sha, ref)
+func TestRemovedCommandUsesStableUsageExit(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{"--config", "../../config/organization.yaml", "scan"}, "test", &stdout, &stderr)
+	if err == nil || ExitCode(err) != exitUsage || !strings.Contains(err.Error(), `unknown command "scan"`) {
+		t.Fatalf("err=%v code=%d", err, ExitCode(err))
 	}
 }
 
-func TestPublicationTargetRejectsMissingScannedCommit(t *testing.T) {
-	inventoryRepos := map[string]model.Repository{
-		"org/repo": {FullName: "org/repo", DefaultBranch: "main"},
-	}
-	_, _, reject := publicationTarget("org/repo", true, "", "", inventoryRepos, map[string]string{})
-	if reject == "" {
-		t.Fatal("expected rejection when no scanned commit SHA was recorded")
-	}
-}
-
-func TestPublicationTargetRejectsRepositoryNotInInventory(t *testing.T) {
-	_, _, reject := publicationTarget("org/missing", true, "", "", map[string]model.Repository{}, map[string]string{})
-	if reject == "" {
-		t.Fatal("expected rejection for a repository absent from the inventory")
-	}
-}
-
-func TestPublicationTargetUsesFlagsWithoutInventory(t *testing.T) {
-	sha, ref, reject := publicationTarget("org/repo", false, strings.Repeat("b", 40), "refs/heads/main", nil, nil)
-	if reject != "" {
-		t.Fatalf("unexpected rejection: %s", reject)
-	}
-	if sha != strings.Repeat("b", 40) || ref != "refs/heads/main" {
-		t.Fatalf("sha = %q, ref = %q", sha, ref)
-	}
-}
-
-func TestScanRunErrorCatchesRunLevelFailuresWithoutFailedResults(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		run  model.ScanRun
-	}{
-		{
-			name: "clone or filter error with no scanner results",
-			run: model.ScanRun{
-				Selected: 1,
-				Errors:   []model.RunError{{Component: "clone", Kind: "runtime", Message: "boom"}},
-			},
-		},
-		{
-			name: "total timeout leaves repositories unprocessed",
-			run: model.ScanRun{
-				Selected:     2,
-				Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}},
-				Errors:       []model.RunError{{Component: "scan", Kind: "total_timeout", Message: "deadline exceeded"}},
-			},
-		},
-		{
-			name: "fewer repositories executed than selected",
-			run: model.ScanRun{
-				Selected:     2,
-				Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}},
-			},
-		},
-	} {
-		if err := scanRunError(test.run); err == nil {
-			t.Fatalf("%s: expected error, got nil", test.name)
-		}
-	}
-}
-
-func TestScanRunErrorAcceptsCompleteRuns(t *testing.T) {
-	run := model.ScanRun{
-		Selected:     1,
-		Repositories: []model.RepositoryExecution{{Repository: "a/b", Status: "complete"}},
-		Results:      []model.ScannerResult{{Repository: "a/b", Scanner: "trivy", Status: model.ScannerClean}},
-	}
-	if err := scanRunError(run); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestReadRenameMap(t *testing.T) {
+func TestAuditReturnsIncompleteForIncompletePassingInventory(t *testing.T) {
 	dir := t.TempDir()
-	writeList := func(name, content string) string {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
+	cfg := testConfig(dir)
+	inventory := validInventory(cfg)
+	inventory.Complete = false
+	inventory.Errors = []model.RunError{{Component: "inventory", Kind: "timeout", Message: "deadline exceeded"}}
+	inventoryPath := filepath.Join(dir, "inventory.json")
+	writeJSON(t, inventoryPath, inventory)
+
+	var stdout bytes.Buffer
+	err := runAudit(cfg, []string{"--inventory", inventoryPath}, &stdout)
+	if err == nil || ExitCode(err) != exitIncomplete {
+		t.Fatalf("err=%v code=%d", err, ExitCode(err))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "audit.json")); err != nil {
+		t.Fatalf("audit output was not written: %v", err)
+	}
+}
+
+func TestInventoryRequiresInstallationID(t *testing.T) {
+	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "")
+	var stdout bytes.Buffer
+	err := runInventory(context.Background(), testConfig(t.TempDir()), nil, &stdout)
+	if err == nil || ExitCode(err) != exitAuth ||
+		!strings.Contains(err.Error(), "SEGH_GITHUB_INSTALLATION_ID must be a positive integer") {
+		t.Fatalf("err = %v, code = %d", err, ExitCode(err))
+	}
+}
+
+func TestReportUsesConfiguredOutputDirectory(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	inventory := validInventory(cfg)
+	audit := validAudit(cfg)
+	writeJSON(t, filepath.Join(dir, "inventory.json"), inventory)
+	writeJSON(t, filepath.Join(dir, "audit.json"), audit)
+
+	var stdout bytes.Buffer
+	if err := runReport(cfg, nil, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"report.json", "report.md"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s was not written: %v", name, err)
 		}
-		return path
 	}
-	if renames, err := readRenameMap(""); err != nil || renames != nil {
-		t.Fatalf("empty path: renames=%v err=%v", renames, err)
-	}
-	pairs := writeList("pairs.zlist", "old.yml\x00new.yml\x00")
-	renames, err := readRenameMap(pairs)
+}
+
+func TestValidateReportArtifactsAcceptsSliceTypedExpectedValueAfterJSONRoundTrip(t *testing.T) {
+	// repository.visibility's Expected value is a []string, decoded from JSON
+	// into []any on the audit side but left as []string on the freshly
+	// evaluated side; the comparison must normalize both before comparing.
+	cfg := testConfig(t.TempDir())
+	cfg.Policies.Repository.AllowedVisibilities = []string{"public", "internal"}
+	inventory := validInventory(cfg)
+	audit := policy.New(cfg, time.Now().UTC()).Evaluate(inventory)
+
+	data, err := json.Marshal(audit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(renames) != 1 || renames["old.yml"] != "new.yml" {
-		t.Fatalf("renames = %#v", renames)
+	var roundTripped model.Audit
+	if err := json.Unmarshal(data, &roundTripped); err != nil {
+		t.Fatal(err)
 	}
-	odd := writeList("odd.zlist", "old.yml\x00")
-	if _, err := readRenameMap(odd); err == nil {
-		t.Fatal("expected an error for an unpaired entry")
+	if err := validateReportArtifacts(inventory, roundTripped, cfg); err != nil {
+		t.Fatalf("validateReportArtifacts() = %v, want nil for a legitimate round-tripped audit", err)
 	}
 }
 
-func TestUnknownCommandUsesStableUsageExit(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), []string{"--config", "../../config/pr.yaml", "unknown"}, "test", &stdout, &stderr)
-	if err == nil || ExitCode(err) != exitUsage {
-		t.Fatalf("err=%v code=%d", err, ExitCode(err))
+func TestValidateReportArtifactsRejectsAuditPredatingInventoryAfterSuppressionExpiry(t *testing.T) {
+	cfg := testConfig(t.TempDir())
+	expires := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	cfg.Suppressions = []model.Suppression{{
+		Policy:     "repository.ruleset",
+		Repository: "example/repository",
+		Owner:      "security",
+		Rationale:  "temporary migration",
+		Expires:    &expires,
+	}}
+	inventory := validInventory(cfg)
+	inventory.GeneratedAt = expires.Add(time.Hour)
+	inventory.Repositories[0].Ruleset.Value = false
+	audit := policy.New(cfg, expires.Add(-time.Hour)).Evaluate(inventory)
+
+	err := validateReportArtifacts(inventory, audit, cfg)
+	if err == nil || !strings.Contains(err.Error(), "predates inventory") {
+		t.Fatalf("validateReportArtifacts() = %v, want audit-before-inventory error", err)
+	}
+}
+
+func TestValidateReportArtifactsRejectsInconsistentInputs(t *testing.T) {
+	cfg := testConfig(t.TempDir())
+	tests := []struct {
+		name   string
+		change func(*model.Inventory, *model.Audit)
+		want   string
+	}{
+		{
+			name: "inventory schema",
+			change: func(inventory *model.Inventory, _ *model.Audit) {
+				inventory.SchemaVersion = 0
+			},
+			want: "unsupported inventory schema version",
+		},
+		{
+			name: "audit schema",
+			change: func(_ *model.Inventory, audit *model.Audit) {
+				audit.SchemaVersion = 0
+			},
+			want: "unsupported audit schema version",
+		},
+		{
+			name: "configured organization",
+			change: func(inventory *model.Inventory, audit *model.Audit) {
+				inventory.Organization = "other"
+				audit.Organization = "other"
+			},
+			want: "does not match configured organization",
+		},
+		{
+			name: "artifact organizations",
+			change: func(_ *model.Inventory, audit *model.Audit) {
+				audit.Organization = "other"
+			},
+			want: "does not match inventory organization",
+		},
+		{
+			name: "inventory github host",
+			change: func(inventory *model.Inventory, _ *model.Audit) {
+				inventory.GitHubHost = "https://github.example.com"
+			},
+			want: "does not match configured github.web_url",
+		},
+		{
+			name: "inventory records",
+			change: func(inventory *model.Inventory, _ *model.Audit) {
+				inventory.Selected = 0
+			},
+			want: "counts do not match its records",
+		},
+		{
+			name: "audit counts",
+			change: func(_ *model.Inventory, audit *model.Audit) {
+				audit.Results[0].Status = model.PolicyFail
+			},
+			want: "counts do not match its policy results",
+		},
+		{
+			name: "unknown policy status",
+			change: func(_ *model.Inventory, audit *model.Audit) {
+				audit.Results[0].Status = "unexpected"
+				audit.Counts = map[string]int{"unexpected": 1}
+			},
+			want: "invalid status",
+		},
+		{
+			name: "missing audit results",
+			change: func(_ *model.Inventory, audit *model.Audit) {
+				audit.Results = nil
+				audit.Counts = map[string]int{}
+			},
+			want: "results do not match the inventory and configuration",
+		},
+		{
+			// Repository, PolicyID, and Status are unchanged and Counts still
+			// balances, so only a full comparison of the re-evaluated result
+			// catches tampered evidence/remediation content.
+			name: "tampered evidence and remediation",
+			change: func(_ *model.Inventory, audit *model.Audit) {
+				audit.Results[0].Evidence = "fabricated evidence"
+				audit.Results[0].Remediation = "fabricated remediation"
+			},
+			want: "results do not match the inventory and configuration",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inventory := validInventory(cfg)
+			audit := validAudit(cfg)
+			test.change(&inventory, &audit)
+			err := validateReportArtifacts(inventory, audit, cfg)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q error, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func testConfig(outputDirectory string) config.Config {
+	cfg := config.Default()
+	cfg.Organization = "example"
+	cfg.Output.Directory = outputDirectory
+	cfg.Policies.Repository.RequireRuleset = true
+	return cfg
+}
+
+func validInventory(cfg config.Config) model.Inventory {
+	return model.Inventory{
+		SchemaVersion: model.InventorySchemaVersion,
+		Organization:  cfg.Organization,
+		GitHubHost:    cfg.GitHub.WebURL,
+		GeneratedAt:   time.Now().UTC(),
+		Complete:      true,
+		Total:         1,
+		Selected:      1,
+		Repositories: []model.Repository{{
+			FullName: "example/repository",
+			Ruleset:  model.Observed[bool]{State: model.Available, Value: true},
+		}},
+	}
+}
+
+func validAudit(cfg config.Config) model.Audit {
+	return policy.New(cfg, time.Now().UTC()).Evaluate(validInventory(cfg))
+}
+
+func writeJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

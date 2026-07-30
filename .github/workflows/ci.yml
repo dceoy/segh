@@ -29,7 +29,6 @@ jobs:
       - name: Validate configuration
         run: |
           go run ./cmd/segh --config segh.example.yaml validate
-          go run ./cmd/segh --config config/pr.yaml validate
           go run ./cmd/segh --config config/organization.yaml validate
           jq empty schema/*.json config/*.json renovate.json aqua-checksums.json
       - name: Check formatting
@@ -39,8 +38,6 @@ jobs:
             files+=("$file")
           done < <(find cmd internal -name '*.go' -type f -print0)
           test -z "$(gofmt -l "${files[@]}")"
-      - name: Validate optional Semgrep lock
-        run: uv lock --check --project tools
       - name: Vet
         run: go vet ./...
       - name: Test

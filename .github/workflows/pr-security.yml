@@ -7,10 +7,107 @@ permissions:
   contents: read
 
 jobs:
-  segh:
-    # Keep both the reusable workflow and the scanner source on an immutable,
-    # maintainer-reviewed revision. Update these SHAs together through a trusted
-    # maintenance change; never derive them from the pull request under test.
-    uses: dceoy/segh/.github/workflows/reusable-pr-security.yml@fecd9f20cfd7219af53a8ae712e6efe1e54ee1b8
-    with:
-      segh-ref: fecd9f20cfd7219af53a8ae712e6efe1e54ee1b8
+  scan:
+    # Ruleset workflows run in each target repository. Do not run this ordinary
+    # pull_request copy in the protected source repository, where a PR controls
+    # github.workflow_sha.
+    if: github.repository != 'dceoy/segh'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted scanner configuration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dceoy/segh
+          ref: ${{ github.workflow_sha }}
+          path: _segh
+          persist-credentials: false
+      - name: Check out pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: _target
+          persist-credentials: false
+      - name: Write trusted publication metadata
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p security-results
+          printf '%s\n' "$PR_NUMBER" > security-results/pr-number
+          printf '%s\n' "$HEAD_SHA" > security-results/head-sha
+      - name: Install checksum-verified scanners
+        uses: aquaproj/aqua-installer@a78671ff723534c879a9c8aa62c99a3a05dddb49 # v4.0.5
+        with:
+          aqua_version: v2.62.1
+          working_directory: _segh
+      - name: Run zizmor
+        id: zizmor
+        working-directory: _target
+        run: |
+          mkdir -p ../security-results
+          set +e
+          zizmor --offline --no-config --strict-collection --format=sarif . > ../security-results/zizmor.sarif
+          status=$?
+          if (( status != 0 )); then
+            exit "$status"
+          fi
+      - name: Run Trivy misconfiguration scan
+        working-directory: _target
+        run: |
+          trivy fs \
+            --config /dev/null \
+            --ignorefile /dev/null \
+            --scanners misconfig \
+            --format sarif \
+            --output "$GITHUB_WORKSPACE/security-results/trivy.sarif" \
+            --skip-dirs .git \
+            --skip-check-update \
+            --skip-version-check \
+            --offline-scan \
+            .
+      - name: Retain raw SARIF
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr-security-publication
+          path: security-results
+          if-no-files-found: warn
+          retention-days: 14
+
+  scorecard:
+    # Scorecard's pull_request mode analyzes the repository at the workspace
+    # root, so keep it separate from the nested checkouts used by scan.
+    if: github.repository != 'dceoy/segh'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Prepare Scorecard output
+        run: mkdir -p security-results
+      - name: Run OpenSSF Scorecard
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: security-results/scorecard.sarif
+          results_format: sarif
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_results: false
+      - name: Retain Scorecard SARIF
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr-security-scorecard
+          path: security-results/scorecard.sarif
+          if-no-files-found: warn
+          retention-days: 14

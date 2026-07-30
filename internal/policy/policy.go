@@ -5,7 +5,6 @@ import (
 	"path"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/dceoy/segh/internal/config"
@@ -63,17 +62,9 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 		results = append(results, observedString(repo.FullName, "actions.allowed_actions", "high", repo.AllowedActions, actions.AllowedActions,
 			"Configure the repository or organization allowed Actions policy with GitHub-native controls."))
 	}
-	if actions.RequireFullSHA {
-		results = append(results, observedBool(repo.FullName, "actions.full_sha", "high", repo.FullSHAPinning, true,
-			"Enable the segh Renovate preset, resolve mutable references, then enforce SHA pinning through the organization Actions policy."))
-	}
 	if actions.RequireSHAPinningEnforcement {
 		results = append(results, observedBool(repo.FullName, "actions.sha_pinning_enforced", "high", repo.SHAPinningEnforced, true,
 			"After mutable references are remediated, require full-length SHA pinning in the organization or enterprise Actions policy."))
-	}
-	if actions.RequireRenovate {
-		results = append(results, observedBool(repo.FullName, "actions.renovate", "medium", repo.RenovateConfigured, true,
-			"Onboard the repository to Renovate and extend the checked-in segh GitHub Actions digest-pinning preset."))
 	}
 	if actions.RequireForkPRApproval != nil {
 		results = append(results, observedBool(repo.FullName, "actions.fork_pr_approval", "medium", repo.ForkPRApproval, *actions.RequireForkPRApproval,
@@ -263,19 +254,4 @@ func Violations(audit model.Audit) bool {
 
 func Partial(audit model.Audit) bool {
 	return audit.Counts[string(model.PolicyUnknown)] > 0 || audit.Counts[string(model.PolicyUnsupported)] > 0
-}
-
-func RemediationClass(policyID string) string {
-	switch {
-	case strings.HasPrefix(policyID, "actions.full_sha"):
-		return "Renovate plus GitHub Actions policy"
-	case strings.HasPrefix(policyID, "actions."):
-		return "GitHub Actions organization settings"
-	case strings.HasPrefix(policyID, "code_security."):
-		return "GitHub Code Security Configuration"
-	case strings.HasPrefix(policyID, "repository."):
-		return "GitHub organization ruleset"
-	default:
-		return "manual review"
-	}
 }

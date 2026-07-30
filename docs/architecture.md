@@ -1,62 +1,94 @@
-# Architecture and result model
+# Architecture
 
-## Boundaries
+## Boundary
 
-The `cmd/segh` package only selects a command and stable exit code. Internal
-packages intentionally separate:
+`segh` owns organization-specific governance:
 
-- `github`: short-lived authentication, retrying REST access, capability-aware
-  inventory;
-- `policy`: explicit deterministic comparisons and expiring suppressions;
-- `scanner`: fixed external-tool adapters and isolated worktrees;
-- `sarif` / `publication`: native finding preservation and GitHub publication;
-- `gate`: fingerprint-based baseline comparison;
-- `batch` / `merge` / `report`: deterministic execution and consolidation.
+- repository selection from visibility, topics, explicit lists, and custom
+  properties;
+- coverage and drift assessment for Security Configurations, Actions policy,
+  rulesets, and repository protections;
+- explicit `available`, `unsupported`, and `unknown` capability states;
+- deterministic policy evaluation and reports;
+- owned, justified, repository-scoped suppressions with optional expiry.
 
-There is no dynamic plugin or rule engine. External commands are fixed arrays
-passed directly to the operating system, never to a shell.
+GitHub-native tooling owns generic security infrastructure:
 
-## Normalized state
+```text
+Organization ruleset / central required workflow
+  ├─ read-only pinned scanner tools and actions
+  └─ retained raw SARIF artifacts
 
-Inventory observations have a `state` of `available`, `unknown`, or
-`unsupported`, plus the source endpoint and a bounded reason. Policy records
-use `pass`, `fail`, `unknown`, `unsupported`, or `exempt`. Missing permissions
-and unavailable GHES capabilities can therefore never silently become a pass.
+Protected per-target workflow_run follow-up
+  ├─ validates the central workflow ID and artifact metadata
+  └─ github/codeql-action/upload-sarif (one category per scanner)
 
-Scanner states are:
+Code Scanning merge protection
+  └─ required analyses and severity thresholds
 
-- `clean`: scanner completed and emitted valid SARIF with no findings;
-- `findings`: scanner completed and emitted one or more findings;
-- `failed`: timeout, invalid SARIF, version mismatch, or runtime failure;
-- `skipped`: disabled or no supported files;
-- `planned`: dry-run selection without a clone or scanner execution.
+Security Configurations and organization policy
+  └─ CodeQL, secret scanning, push protection, dependency and Actions controls
 
-Aqua verifies the native scanners and developer tools against its pinned
-registry metadata. Optional Semgrep is locked with hashes for its complete
-Python dependency graph in `tools/uv.lock`; add `tools/.venv/bin` to `PATH` only
-when organization-specific Semgrep rules are enabled.
+segh
+  └─ native-control inventory → policy evaluation → compliance report
+```
 
-Each run records its ID, configuration SHA-256, selected count, per-repository
-queue/start/end/duration, scanner version/duration, errors, and coverage.
-GitHub API retries and rate-limit events are structured JSON log events.
+The Go CLI contains no scanner process runner, clone manager, SARIF parser or
+publisher, fingerprint gate, GitHub App signer, custom HTTP transport, batcher,
+or workflow engine.
 
-## Determinism and persistence
+The central ruleset workflow is disabled in its own source repository because
+an ordinary source-repository pull request controls that run's workflow
+revision. Every target repository installs the publisher on its protected
+default branch and pins the accepted central workflow identity in a repository
+variable. This keeps the write-capable follow-up in the repository where the
+ruleset scan runs without trusting a same-named workflow supplied by a pull
+request.
 
-Inventory, policy, scanner, batch, and report arrays are sorted by repository
-and stable identifier. JSON is the canonical automation format; optional JSONL
-contains one normalized record per line. Markdown is an operator summary, and
-raw SARIF remains an artifact. The toolkit does not create a database.
+## API and authentication
 
-Schemas are versioned in each top-level document. Incompatible versions are
-rejected rather than guessed. Artifacts should be retained only for the
-configured period; private source worktrees are always temporary and are never
-uploaded or cached.
+Inventory normalization remains in Go because it combines several
+capability-sensitive GitHub endpoints into stable observations. Requests are
+delegated to `gh api`; every request uses `--hostname` derived from
+`github.web_url`. Repository enumeration decodes one page at a time, each
+independently bounded, rather than accumulating every page behind a single
+response cap. The GitHub CLI owns token discovery and REST transport; `segh`
+drives pagination itself and retries transient transport failures, HTTP
+429/5xx responses, and explicit rate-limit responses with bounded exponential
+backoff.
 
-## Capability differences
+`GH_TOKEN` and its matching `SEGH_GITHUB_INSTALLATION_ID` are required for
+inventory. GitHub Actions generates both from a read-only App using
+`actions/create-github-app-token`; local use requires an externally supplied
+token and installation ID. The ID lets `segh` verify authoritative
+organization installation metadata without accepting an App private key. No
+private key or long-lived installation token is parsed or cached by `segh`.
 
-REST, web, and GraphQL endpoints are explicit for GitHub Enterprise Cloud or
-Server. REST endpoints returning feature-unavailable responses are recorded as
-`unsupported`; permission or ambiguous responses are `unknown`. SARIF upload
-has a separate `unsupported` result and retains the source SARIF. This is
-especially important on GHES installations without code scanning licensing or
-newer organization ruleset and Code Security Configuration APIs.
+## Determinism and capability states
+
+Repository and policy arrays are sorted by stable identifiers. JSON is the
+canonical automation format, and the consolidated Markdown report is the
+operator summary. Incompatible schema versions are rejected.
+
+Unavailable endpoints never silently pass policy:
+
+- `available` means the control was observed;
+- `unsupported` means the endpoint or feature is absent;
+- `unknown` means permission, ambiguity, or another failure prevented a
+  reliable observation.
+
+## GitHub Enterprise Server
+
+Inventory supports GHES through the configured web hostname and records missing
+features as `unsupported` or `unknown`. The direct scanner workflow remains
+usable where its pinned Actions and Code Scanning are supported. On GHES
+versions without Code Scanning or compatible action support, raw SARIF remains
+an Actions artifact, but GitHub-native publication and merge enforcement are
+reduced or unavailable. `segh` does not restore a custom upload fallback.
+
+The supplied cross-repository organization-audit workflow is scoped to a
+GitHub.com-hosted control repository because its trusted source is the public
+`dceoy/segh` repository. It fails explicitly on GHES instead of reusing a GHES
+token across hosts. GHES Actions deployments must adapt the workflow to a
+protected same-host source mirror or an equivalently verified release artifact;
+this does not change the CLI's GHES inventory support.

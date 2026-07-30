@@ -14,18 +14,18 @@ func TestEvaluateStatusesAndSuppressionExpiry(t *testing.T) {
 	future := now.Add(time.Hour)
 	cfg := config.Default()
 	cfg.Organization = "example"
-	cfg.Policies.Actions.RequireFullSHA = true
+	cfg.Policies.Actions.RequireSHAPinningEnforcement = true
 	cfg.Policies.Repository.RequireSecurityMD = true
 	cfg.Suppressions = []model.Suppression{
-		{Policy: "actions.full_sha", Repository: "example/repo", Owner: "sec", Rationale: "migration", Expires: &future},
+		{Policy: "actions.sha_pinning_enforced", Repository: "example/repo", Owner: "sec", Rationale: "migration", Expires: &future},
 		{Policy: "repository.security_md", Repository: "example/repo", Owner: "sec", Rationale: "expired", Expires: &expired},
 	}
 	inventory := model.Inventory{
 		Organization: "example",
 		Repositories: []model.Repository{{
-			FullName:       "example/repo",
-			FullSHAPinning: model.Observed[bool]{State: model.Available, Value: false, Source: "fixture"},
-			SecurityMD:     model.Observed[bool]{State: model.Unknown, Source: "fixture", Reason: "permission"},
+			FullName:           "example/repo",
+			SHAPinningEnforced: model.Observed[bool]{State: model.Available, Value: false, Source: "fixture"},
+			SecurityMD:         model.Observed[bool]{State: model.Unknown, Source: "fixture", Reason: "permission"},
 		}},
 	}
 	audit := New(cfg, now).Evaluate(inventory)
@@ -63,8 +63,8 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 	cfg.Organization = "example"
 	cfg.Policies.Actions = config.ActionsPolicy{
 		Enabled: &enabled, DefaultWorkflowPermissions: "read", AllowedActions: "selected",
-		RequireFullSHA: true, RequireSHAPinningEnforcement: true, RequireRenovate: true,
-		RequireForkPRApproval: &enabled,
+		RequireSHAPinningEnforcement: true,
+		RequireForkPRApproval:        &enabled,
 	}
 	cfg.Policies.CodeSecurity = config.CodeSecurityPolicy{
 		Configuration: "default", CodeQL: "required", SecretScanning: "required",
@@ -81,9 +81,9 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 	repository := model.Repository{
 		FullName: "example/repo", Visibility: "private",
 		ActionsEnabled: availableTrue, DefaultWorkflowPermissions: model.Observed[string]{State: model.Available, Value: "read"},
-		AllowedActions: model.Observed[string]{State: model.Available, Value: "selected"},
-		FullSHAPinning: availableTrue, SHAPinningEnforced: availableTrue, RenovateConfigured: availableTrue,
-		ForkPRApproval: availableTrue, CodeSecurityConfiguration: model.Observed[string]{State: model.Available, Value: "default"},
+		AllowedActions:     model.Observed[string]{State: model.Available, Value: "selected"},
+		SHAPinningEnforced: availableTrue,
+		ForkPRApproval:     availableTrue, CodeSecurityConfiguration: model.Observed[string]{State: model.Available, Value: "default"},
 		CodeQL: availableTrue, SecretScanning: availableTrue, PushProtection: availableTrue,
 		DependencyGraph: availableTrue, DependabotAlerts: availableTrue, DependabotSecurityUpdates: availableTrue,
 		Ruleset: availableTrue, BranchProtection: availableTrue, RequiredPullRequests: availableTrue,
@@ -91,7 +91,7 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 		SecurityMD: availableTrue,
 	}
 	audit := New(cfg, time.Now()).Evaluate(model.Inventory{Organization: "example", Repositories: []model.Repository{repository}})
-	if len(audit.Results) != 25 || audit.Counts[string(model.PolicyPass)] != 25 {
+	if len(audit.Results) != 23 || audit.Counts[string(model.PolicyPass)] != 23 {
 		t.Fatalf("results=%d counts=%#v", len(audit.Results), audit.Counts)
 	}
 	for i := 1; i < len(audit.Results); i++ {

@@ -1,17 +1,12 @@
-version: 1
+version: 2
 organization: example-org
 
 github:
   web_url: https://github.com
-  api_url: https://api.github.com
-  graphql_url: https://api.github.com/graphql
 
-auth:
-  app_id: 12345
-  installation_id: 0
-  private_key_env: SEGH_GITHUB_APP_PRIVATE_KEY
-  token_env: SEGH_GITHUB_TOKEN
-  allow_existing_token: false
+inventory:
+  concurrency: 4
+  timeout: 30m
 
 selectors:
   exclude_archived: true
@@ -19,7 +14,7 @@ selectors:
   exclude_forks: true
   visibilities: [private, internal, public]
   include_topics: []
-  exclude_topics: [security-scan-exempt]
+  exclude_topics: [security-audit-exempt]
   custom_properties: {}
   repositories: []
   exclude: []
@@ -29,9 +24,7 @@ policies:
     enabled: true
     allowed_actions: selected
     default_workflow_permissions: read
-    require_full_sha: true
     require_sha_pinning_enforcement: false
-    require_renovate: true
     require_fork_pr_approval: true
   code_security:
     configuration: Organization default
@@ -61,62 +54,5 @@ suppressions:
     rationale: Migration is tracked in the security program.
     expires: 2026-12-31T00:00:00Z
 
-scanners:
-  zizmor:
-    enabled: true
-    version: 1.28.0
-    timeout: 5m
-    cpu_seconds: 300
-    memory_mb: 2048
-    exclude: []
-  trivy:
-    enabled: true
-    version: 0.72.0
-    timeout: 10m
-    cpu_seconds: 600
-    memory_mb: 3072
-    exclude: [.terraform/**]
-  scorecard:
-    enabled: true
-    version: 5.5.0
-    timeout: 10m
-    cpu_seconds: 600
-    memory_mb: 2048
-    exclude: []
-  semgrep:
-    enabled: false
-    version: 1.171.0
-    timeout: 10m
-    cpu_seconds: 600
-    memory_mb: 3072
-    exclude: [vendor/**]
-    rules: []
-
-execution:
-  concurrency: 4
-  repository_timeout: 25m
-  total_timeout: 6h
-  api_timeout: 30s
-  max_retries: 4
-  base_retry_delay: 1s
-  dry_run: false
-
-publication:
-  enabled: true
-  poll_timeout: 2m
-  category_prefix: segh
-
 output:
   directory: segh-results
-  jsonl: true
-  retention_days: 14
-
-pull_request:
-  report_only: true
-  thresholds:
-    default:
-      minimum_severity: high
-      rules: []
-    zizmor:
-      minimum_severity: high
-      rules: []

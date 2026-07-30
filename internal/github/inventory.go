@@ -2,10 +2,8 @@ package github
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -13,26 +11,19 @@ import (
 	"time"
 
 	"github.com/dceoy/segh/internal/config"
-	"github.com/dceoy/segh/internal/logging"
 	"github.com/dceoy/segh/internal/model"
-	"gopkg.in/yaml.v3"
 )
 
-var actionTagPattern = regexp.MustCompile(`^[A-Za-z0-9_.+/-]+$`)
-var fullSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
-var dockerDigestPattern = regexp.MustCompile(`(?i)^sha256:[0-9a-f]{64}$`)
-
 type InventoryService struct {
-	cfg    config.Config
-	client *Client
-	log    *logging.Logger
+	cfg            config.Config
+	client         API
+	installationID int64
 }
 
 type apiRepository struct {
 	ID                  int64    `json:"id"`
 	FullName            string   `json:"full_name"`
 	HTMLURL             string   `json:"html_url"`
-	CloneURL            string   `json:"clone_url"`
 	Visibility          string   `json:"visibility"`
 	Private             bool     `json:"private"`
 	Archived            bool     `json:"archived"`
@@ -46,8 +37,16 @@ type apiRepository struct {
 	} `json:"security_and_analysis"`
 }
 
-func NewInventoryService(cfg config.Config, client *Client, log *logging.Logger) *InventoryService {
-	return &InventoryService{cfg: cfg, client: client, log: log}
+type apiInstallation struct {
+	ID                  int64  `json:"id"`
+	RepositorySelection string `json:"repository_selection"`
+	Account             struct {
+		Login string `json:"login"`
+	} `json:"account"`
+}
+
+func NewInventoryService(cfg config.Config, client API, installationID int64) *InventoryService {
+	return &InventoryService{cfg: cfg, client: client, installationID: installationID}
 }
 
 func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
@@ -58,15 +57,43 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		GeneratedAt:   time.Now().UTC(),
 		Complete:      true,
 	}
+	installationCount, installationErr := s.verifyInstallationCoversOrganization(ctx)
+	if installationErr != nil {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{Component: "inventory", Kind: "installation_scope", Message: installationErr.Error()})
+	}
 	repos, err := s.listRepositories(ctx)
 	if err != nil {
 		inventory.Complete = false
 		inventory.Errors = append(inventory.Errors, model.RunError{Component: "inventory", Kind: "enumeration", Message: err.Error()})
+		if installationErr != nil {
+			return inventory, errors.Join(
+				fmt.Errorf("verify installation coverage: %w", installationErr),
+				err,
+			)
+		}
 		return inventory, err
 	}
 	inventory.Total = len(repos)
+	if installationErr == nil && installationCount != len(repos) {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{
+			Component: "inventory", Kind: "installation_scope",
+			Message: fmt.Sprintf(
+				"installation reports %d accessible repositories but organization enumeration returned %d; inventory coverage cannot be verified",
+				installationCount, len(repos),
+			),
+		})
+	}
+	for _, missing := range missingExplicitRepositories(s.cfg.Selectors.Repositories, repos) {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{
+			Repository: missing, Component: "selectors", Kind: "repository_not_found",
+			Message: fmt.Sprintf("repository %q in selectors.repositories was not found in the organization's enumerated repositories", missing),
+		})
+	}
 
-	concurrency := s.cfg.Execution.Concurrency
+	concurrency := s.cfg.Inventory.Concurrency
 	jobs := make(chan apiRepository)
 	results := make(chan model.Repository, len(repos))
 	var workers sync.WaitGroup
@@ -122,24 +149,140 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		return inventory.Exclusions[i].Repository < inventory.Exclusions[j].Repository
 	})
 	if !inventory.Complete {
+		if installationErr != nil {
+			return inventory, fmt.Errorf("verify installation coverage: %w", installationErr)
+		}
 		return inventory, fmt.Errorf("repository enumeration incomplete")
 	}
 	return inventory, nil
 }
 
-func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepository, error) {
-	var all []apiRepository
-	for page := 1; ; page++ {
-		var batch []apiRepository
-		path := fmt.Sprintf("/orgs/%s/repos?per_page=100&page=%d&type=all&sort=full_name&direction=asc", pathEscape(s.cfg.Organization), page)
-		if err := s.client.Get(ctx, path, &batch); err != nil {
-			return nil, err
+// verifyInstallationCoversOrganization fails closed unless authoritative
+// organization installation metadata says the installation is scoped to all
+// repositories. actions/create-github-app-token with owner expands to every
+// repository in the installation, not every repository in the organization,
+// so a selected-repository installation would otherwise silently omit
+// ungoverned repositories.
+//
+// GET /installation/repositories does not guarantee repository_selection.
+// The workflow therefore passes the installation ID emitted alongside
+// GH_TOKEN, and the read-only organization Administration permission lets
+// segh find that exact ID through GET /orgs/{org}/installations. The accessible
+// repository endpoint remains useful for binding the token to the configured
+// account and cross-checking its total_count against organization enumeration.
+func (s *InventoryService) verifyInstallationCoversOrganization(ctx context.Context) (int, error) {
+	metadata, err := s.getInstallationMetadata(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if metadata.RepositorySelection != "all" {
+		return 0, fmt.Errorf(
+			"installation %d repository_selection is %q, not \"all\"; organization-wide inventory coverage cannot be verified",
+			s.installationID, metadata.RepositorySelection,
+		)
+	}
+	if !strings.EqualFold(metadata.Account.Login, s.cfg.Organization) {
+		return 0, fmt.Errorf(
+			"installation %d account %q does not match configured organization %q; organization-wide inventory coverage cannot be verified",
+			s.installationID, metadata.Account.Login, s.cfg.Organization,
+		)
+	}
+
+	var accessible struct {
+		TotalCount   int `json:"total_count"`
+		Repositories []struct {
+			FullName string `json:"full_name"`
+		} `json:"repositories"`
+	}
+	if err := s.client.Get(ctx, "/installation/repositories?per_page=1", &accessible); err != nil {
+		return 0, fmt.Errorf("list repositories accessible to installation %d: %w", s.installationID, err)
+	}
+	if len(accessible.Repositories) == 0 {
+		if accessible.TotalCount == 0 {
+			return 0, nil
 		}
-		all = append(all, batch...)
-		if len(batch) < 100 {
-			return all, nil
+		return 0, fmt.Errorf(
+			"installation %d reports repository_selection \"all\" but returned no repositories; cannot verify it covers organization %q",
+			s.installationID, s.cfg.Organization,
+		)
+	}
+	owner, _, ok := strings.Cut(accessible.Repositories[0].FullName, "/")
+	if !ok || !strings.EqualFold(owner, s.cfg.Organization) {
+		return 0, fmt.Errorf(
+			"installation %d repository owner %q does not match configured organization %q; organization-wide inventory coverage cannot be verified",
+			s.installationID, owner, s.cfg.Organization,
+		)
+	}
+	return accessible.TotalCount, nil
+}
+
+func (s *InventoryService) getInstallationMetadata(ctx context.Context) (apiInstallation, error) {
+	if s.installationID <= 0 {
+		return apiInstallation{}, fmt.Errorf("SEGH_GITHUB_INSTALLATION_ID must be a positive integer")
+	}
+	for page := 1; ; page++ {
+		var response struct {
+			Installations []apiInstallation `json:"installations"`
+		}
+		apiPath := fmt.Sprintf(
+			"/orgs/%s/installations?per_page=100&page=%d",
+			pathEscape(s.cfg.Organization), page,
+		)
+		if err := s.client.Get(ctx, apiPath, &response); err != nil {
+			return apiInstallation{}, fmt.Errorf("get organization installation metadata: %w", err)
+		}
+		for _, installation := range response.Installations {
+			if installation.ID == s.installationID {
+				return installation, nil
+			}
+		}
+		if len(response.Installations) < 100 {
+			return apiInstallation{}, fmt.Errorf(
+				"installation %d was not found in configured organization %q",
+				s.installationID, s.cfg.Organization,
+			)
 		}
 	}
+}
+
+func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepository, error) {
+	var repositories []apiRepository
+	for page := 1; ; page++ {
+		var batch []apiRepository
+		apiPath := fmt.Sprintf(
+			"/orgs/%s/repos?per_page=100&page=%d&type=all&sort=full_name&direction=asc",
+			pathEscape(s.cfg.Organization), page,
+		)
+		if err := s.client.Get(ctx, apiPath, &batch); err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, batch...)
+		if len(batch) < 100 {
+			return repositories, nil
+		}
+	}
+}
+
+// missingExplicitRepositories reports entries of selectors.repositories that were not
+// found among the organization's enumerated repositories. A typo, rename, or a
+// repository the token cannot see would otherwise be silently dropped: exclusionReason
+// treats an allowlist as "not explicitly included" for every repository it doesn't
+// match, so a wholly unmatched entry never surfaces as anything but a normal exclusion.
+func missingExplicitRepositories(allowlist []string, repos []apiRepository) []string {
+	if len(allowlist) == 0 {
+		return nil
+	}
+	enumerated := make(map[string]bool, len(repos))
+	for _, repo := range repos {
+		enumerated[repo.FullName] = true
+	}
+	var missing []string
+	for _, name := range allowlist {
+		if !enumerated[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.Repository {
@@ -155,7 +298,6 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 		ID:               raw.ID,
 		FullName:         raw.FullName,
 		HTMLURL:          raw.HTMLURL,
-		CloneURL:         raw.CloneURL,
 		Visibility:       visibility,
 		Archived:         raw.Archived,
 		Disabled:         raw.Disabled,
@@ -164,7 +306,7 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 		DefaultBranch:    raw.DefaultBranch,
 		Topics:           sortedStrings(raw.Topics),
 		Capabilities:     map[string]model.Availability{},
-		CustomProperties: map[string]string{},
+		CustomProperties: map[string]any{},
 	}
 	repo.SecretScanning = observedSecurity(raw, "secret_scanning")
 	repo.PushProtection = observedSecurity(raw, "secret_scanning_push_protection")
@@ -172,31 +314,19 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 	repo.DependencyGraph = s.endpointFeatureEnabled(ctx, base+"/dependency-graph/sbom", "dependency_graph/sbom")
 	repo.DependabotSecurityUpdates = s.endpointFeatureEnabled(ctx, base+"/automated-security-fixes", "automated_security_fixes")
 
-	var branch struct {
-		Commit struct {
-			SHA string `json:"sha"`
-		} `json:"commit"`
-	}
-	repo.DefaultBranchSHA = s.getObservedString(ctx, base+"/branches/"+pathEscape(raw.DefaultBranch), "default_branch", func() (string, error) {
-		if err := s.client.Get(ctx, base+"/branches/"+pathEscape(raw.DefaultBranch), &branch); err != nil {
-			return "", err
-		}
-		return branch.Commit.SHA, nil
-	})
-
-	var languages map[string]int64
-	if err := s.client.Get(ctx, base+"/languages", &languages); err == nil {
-		repo.Languages = languages
-	} else {
-		repo.Capabilities["languages"] = stateFor(err)
-	}
 	var properties []struct {
 		PropertyName string `json:"property_name"`
 		Value        any    `json:"value"`
 	}
 	if err := s.client.Get(ctx, base+"/properties/values", &properties); err == nil {
 		for _, property := range properties {
-			repo.CustomProperties[property.PropertyName] = fmt.Sprint(property.Value)
+			value, valid := normalizeCustomPropertyValue(property.Value)
+			if !valid {
+				repo.CustomProperties = map[string]any{}
+				repo.Capabilities["custom_properties"] = model.Unknown
+				break
+			}
+			repo.CustomProperties[property.PropertyName] = value
 		}
 	} else {
 		repo.Capabilities["custom_properties"] = stateFor(err)
@@ -207,25 +337,19 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 		AllowedActions     string `json:"allowed_actions"`
 		SHAPinningRequired *bool  `json:"sha_pinning_required"`
 	}
-	repo.ActionsEnabled = s.getObservedBool(ctx, base+"/actions/permissions", "actions_permissions", func() (bool, error) {
-		if err := s.client.Get(ctx, base+"/actions/permissions", &actions); err != nil {
-			return false, err
-		}
-		return actions.Enabled, nil
-	})
-	repo.AllowedActions = s.getObservedString(ctx, base+"/actions/permissions", "actions_permissions", func() (string, error) {
-		if err := s.client.Get(ctx, base+"/actions/permissions", &actions); err != nil {
-			return "", err
-		}
-		return actions.AllowedActions, nil
-	})
 	if err := s.client.Get(ctx, base+"/actions/permissions", &actions); err != nil {
 		state, reason := ErrorState(err)
+		repo.ActionsEnabled = model.Observed[bool]{State: model.Availability(state), Source: "actions_permissions", Reason: reason}
+		repo.AllowedActions = model.Observed[string]{State: model.Availability(state), Source: "actions_permissions", Reason: reason}
 		repo.SHAPinningEnforced = model.Observed[bool]{State: model.Availability(state), Source: "actions_permissions", Reason: reason}
-	} else if actions.SHAPinningRequired == nil {
-		repo.SHAPinningEnforced = model.Observed[bool]{State: model.Unknown, Source: "actions_permissions", Reason: "field unavailable"}
 	} else {
-		repo.SHAPinningEnforced = model.Observed[bool]{State: model.Available, Value: *actions.SHAPinningRequired, Source: "actions_permissions"}
+		repo.ActionsEnabled = model.Observed[bool]{State: model.Available, Value: actions.Enabled, Source: "actions_permissions"}
+		repo.AllowedActions = model.Observed[string]{State: model.Available, Value: actions.AllowedActions, Source: "actions_permissions"}
+		if actions.SHAPinningRequired == nil {
+			repo.SHAPinningEnforced = model.Observed[bool]{State: model.Unknown, Source: "actions_permissions", Reason: "field unavailable"}
+		} else {
+			repo.SHAPinningEnforced = model.Observed[bool]{State: model.Available, Value: *actions.SHAPinningRequired, Source: "actions_permissions"}
+		}
 	}
 	var workflowPermissions struct {
 		DefaultWorkflowPermissions   string `json:"default_workflow_permissions"`
@@ -314,13 +438,15 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 	repo.ForcePushRestricted = mergeControl(rulesErr, ruleTypes["non_fast_forward"], classicForcePush)
 	repo.DeletionRestricted = mergeControl(rulesErr, ruleTypes["deletion"], classicDeletion)
 	var securityConfig struct {
-		Name string `json:"name"`
+		Configuration struct {
+			Name string `json:"name"`
+		} `json:"configuration"`
 	}
 	repo.CodeSecurityConfiguration = s.getObservedString(ctx, base+"/code-security-configuration", "code_security_configuration", func() (string, error) {
 		if err := s.client.Get(ctx, base+"/code-security-configuration", &securityConfig); err != nil {
 			return "", err
 		}
-		return securityConfig.Name, nil
+		return securityConfig.Configuration.Name, nil
 	})
 	var defaultSetup struct {
 		State string `json:"state"`
@@ -337,10 +463,6 @@ func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.
 		return err == nil, err
 	})
 	repo.SecurityMD = s.securityPolicyExists(ctx, base, raw.DefaultBranch)
-	repo.RenovateConfigured = s.anyContentExists(ctx, base, raw.DefaultBranch, []string{
-		"renovate.json", "renovate.json5", ".github/renovate.json", ".github/renovate.json5",
-	}, "renovate_config")
-	repo.FullSHAPinning, repo.ActionPinningStatus = s.workflowPinning(ctx, base, raw.DefaultBranch)
 	return repo
 }
 
@@ -470,393 +592,6 @@ func (s *InventoryService) anyContentExists(ctx context.Context, base, branch st
 	return model.Observed[bool]{State: model.Available, Value: false, Source: source}
 }
 
-func (s *InventoryService) workflowPinning(ctx context.Context, base, branch string) (model.Observed[bool], model.Observed[string]) {
-	var files []struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
-	}
-	source := "contents/.github/workflows"
-	err := s.client.Get(ctx, base+"/contents/.github/workflows?ref="+pathEscape(branch), &files)
-	var apiErr *APIError
-	if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
-		return model.Observed[bool]{State: model.Available, Value: true, Source: source, Reason: "no workflows"},
-			model.Observed[string]{State: model.Available, Value: "no_actions", Source: source}
-	}
-	if err != nil {
-		state, reason := ErrorState(err)
-		return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
-			model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
-	}
-	counts := &pinningCounts{}
-	visited := map[string]bool{}
-	for _, file := range files {
-		if file.Type != "file" || (!strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml")) {
-			continue
-		}
-		decoded, err := s.fetchContent(ctx, base+"/contents/.github/workflows/"+pathEscape(file.Name)+"?ref="+pathEscape(branch))
-		if err != nil {
-			return pinningError(source, fmt.Errorf("%s: %w", file.Name, err))
-		}
-		unpinnedIn, err := s.scanUses(ctx, base, branch, file.Name, decoded, visited, counts)
-		if err != nil {
-			return pinningError(source, err)
-		}
-		if unpinnedIn != "" {
-			return model.Observed[bool]{State: model.Available, Value: false, Source: source, Reason: unpinnedIn + " contains a mutable action reference"},
-				model.Observed[string]{State: model.Available, Value: "unpinned", Source: source, Reason: unpinnedIn}
-		}
-	}
-	actionCount, resolvedCount, staleCount := counts.actions, counts.resolved, counts.stale
-	status := "pinned_freshness_unknown"
-	switch {
-	case actionCount == 0:
-		status = "no_actions"
-	case staleCount > 0:
-		status = "pinned_stale"
-	case resolvedCount == actionCount:
-		status = "pinned_current"
-	}
-	return model.Observed[bool]{State: model.Available, Value: true, Source: source},
-		model.Observed[string]{State: model.Available, Value: status, Source: source}
-}
-
-type pinningCounts struct {
-	actions  int
-	resolved int
-	stale    int
-}
-
-type actionUse struct {
-	action string
-	ref    string
-	tag    string
-}
-
-var errContentUnavailable = errors.New("content unavailable")
-
-func pinningError(source string, err error) (model.Observed[bool], model.Observed[string]) {
-	state, reason := ErrorState(err)
-	if errors.Is(err, errContentUnavailable) {
-		state, reason = string(model.Unknown), err.Error()
-	}
-	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason},
-		model.Observed[string]{State: model.Availability(state), Source: source, Reason: reason}
-}
-
-// fetchContent returns decoded GitHub contents API data. Existing content that
-// cannot be inspected is an error so callers cannot silently treat an oversized
-// workflow or local action definition as successfully verified.
-func (s *InventoryService) fetchContent(ctx context.Context, path string) ([]byte, error) {
-	var item struct {
-		Content  string `json:"content"`
-		Encoding string `json:"encoding"`
-		Size     int64  `json:"size"`
-	}
-	if err := s.client.Get(ctx, path, &item); err != nil {
-		return nil, err
-	}
-	if item.Encoding != "base64" {
-		return nil, fmt.Errorf("%w: unsupported encoding %q", errContentUnavailable, item.Encoding)
-	}
-	if item.Size > 1<<20 {
-		return nil, fmt.Errorf("%w: exceeds 1 MiB limit", errContentUnavailable)
-	}
-	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(item.Content, "\n", ""))
-	if err != nil {
-		return nil, fmt.Errorf("invalid content encoding")
-	}
-	return decoded, nil
-}
-
-// scanUses walks every `uses:` reference in decoded workflow/action content, recursing
-// into repository-local composite actions (./...) so their own third-party references
-// are also evaluated for SHA pinning. visited guards against local-action reference
-// cycles. It returns the name of the first source containing a mutable (non-SHA)
-// third-party reference, or "" if every reference found is fully SHA-pinned.
-func (s *InventoryService) scanUses(ctx context.Context, base, branch, sourceName string, decoded []byte, visited map[string]bool, counts *pinningCounts) (string, error) {
-	uses, err := parseActionUses(decoded)
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", sourceName, err)
-	}
-	for _, use := range uses {
-		action, ref := use.action, use.ref
-		if strings.HasPrefix(action, "docker://") {
-			// docker:// tags carry no freshness signal comparable to a GitHub ref, so a
-			// digest-pinned image is counted as an action but never marked "resolved";
-			// an unpinned tag (or no tag/digest at all) is treated as mutable.
-			counts.actions++
-			if !dockerDigestPattern.MatchString(ref) {
-				return sourceName, nil
-			}
-			continue
-		}
-		if strings.HasPrefix(action, "./") {
-			localPath := strings.Trim(strings.TrimPrefix(action, "."), "/")
-			if strings.HasSuffix(localPath, ".yml") || strings.HasSuffix(localPath, ".yaml") {
-				// A local reusable-workflow call, not a composite action directory; it has no action.yml to fetch.
-				continue
-			}
-			if visited[localPath] {
-				continue
-			}
-			visited[localPath] = true
-			actionFile, content, err := s.fetchLocalActionDefinition(ctx, base, branch, localPath)
-			if err != nil {
-				return "", err
-			}
-			if actionFile == "" {
-				continue
-			}
-			unpinnedIn, err := s.scanUses(ctx, base, branch, actionFile, content, visited, counts)
-			if err != nil || unpinnedIn != "" {
-				return unpinnedIn, err
-			}
-			continue
-		}
-		if ref == "" {
-			continue
-		}
-		counts.actions++
-		if !fullSHAPattern.MatchString(ref) {
-			return sourceName, nil
-		}
-		if use.tag != "" {
-			if current, ok := s.resolveActionTag(ctx, action, use.tag); ok {
-				counts.resolved++
-				if !strings.EqualFold(current, ref) {
-					counts.stale++
-				}
-			}
-		}
-	}
-	return "", nil
-}
-
-// parseActionUses decodes Actions YAML and visits only the structural locations where
-// GitHub accepts `uses`: reusable-workflow jobs, workflow steps, and composite-action
-// steps. Parsing errors fail pinning evaluation closed instead of allowing malformed or
-// parser-differential input to be reported as fully pinned.
-func parseActionUses(content []byte) ([]actionUse, error) {
-	var document yaml.Node
-	if err := yaml.Unmarshal(content, &document); err != nil {
-		return nil, fmt.Errorf("parse Actions YAML: %w", err)
-	}
-	if len(document.Content) == 0 {
-		return nil, nil
-	}
-	root, err := dereferenceYAMLNode(document.Content[0])
-	if err != nil {
-		return nil, err
-	}
-	if root.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("actions YAML root must be a mapping")
-	}
-
-	var uses []actionUse
-	jobs, found, err := yamlMappingValue(root, "jobs")
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		jobs, err = dereferenceYAMLNode(jobs)
-		if err != nil {
-			return nil, err
-		}
-		if jobs.Kind != yaml.MappingNode {
-			return nil, fmt.Errorf("actions YAML jobs must be a mapping")
-		}
-		for index := 1; index < len(jobs.Content); index += 2 {
-			job, err := dereferenceYAMLNode(jobs.Content[index])
-			if err != nil {
-				return nil, err
-			}
-			if job.Kind != yaml.MappingNode {
-				return nil, fmt.Errorf("actions YAML job must be a mapping")
-			}
-			uses, err = appendActionUse(uses, job)
-			if err != nil {
-				return nil, err
-			}
-			uses, err = appendStepUses(uses, job)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	runs, found, err := yamlMappingValue(root, "runs")
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		runs, err = dereferenceYAMLNode(runs)
-		if err != nil {
-			return nil, err
-		}
-		if runs.Kind != yaml.MappingNode {
-			return nil, fmt.Errorf("actions YAML runs must be a mapping")
-		}
-		uses, err = appendStepUses(uses, runs)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return uses, nil
-}
-
-func appendStepUses(uses []actionUse, parent *yaml.Node) ([]actionUse, error) {
-	steps, found, err := yamlMappingValue(parent, "steps")
-	if err != nil || !found {
-		return uses, err
-	}
-	steps, err = dereferenceYAMLNode(steps)
-	if err != nil {
-		return nil, err
-	}
-	if steps.Kind != yaml.SequenceNode {
-		return nil, fmt.Errorf("actions YAML steps must be a sequence")
-	}
-	for _, rawStep := range steps.Content {
-		step, err := dereferenceYAMLNode(rawStep)
-		if err != nil {
-			return nil, err
-		}
-		if step.Kind != yaml.MappingNode {
-			return nil, fmt.Errorf("actions YAML step must be a mapping")
-		}
-		uses, err = appendActionUse(uses, step)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return uses, nil
-}
-
-func appendActionUse(uses []actionUse, mapping *yaml.Node) ([]actionUse, error) {
-	value, found, err := yamlMappingValue(mapping, "uses")
-	if err != nil || !found {
-		return uses, err
-	}
-	value, err = dereferenceYAMLNode(value)
-	if err != nil {
-		return nil, err
-	}
-	if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
-		return nil, fmt.Errorf("actions YAML uses value must be a string")
-	}
-	raw := strings.TrimSpace(value.Value)
-	action, ref := raw, ""
-	if separator := strings.LastIndexByte(raw, '@'); separator >= 0 {
-		action, ref = raw[:separator], raw[separator+1:]
-	}
-	tag := strings.TrimSpace(strings.TrimPrefix(value.LineComment, "#"))
-	if !actionTagPattern.MatchString(tag) {
-		tag = ""
-	}
-	return append(uses, actionUse{action: action, ref: ref, tag: tag}), nil
-}
-
-func yamlMappingValue(mapping *yaml.Node, name string) (*yaml.Node, bool, error) {
-	mapping, err := dereferenceYAMLNode(mapping)
-	if err != nil {
-		return nil, false, err
-	}
-	if mapping.Kind != yaml.MappingNode {
-		return nil, false, fmt.Errorf("actions YAML value containing %q must be a mapping", name)
-	}
-	var found *yaml.Node
-	for index := 0; index+1 < len(mapping.Content); index += 2 {
-		key, err := dereferenceYAMLNode(mapping.Content[index])
-		if err != nil {
-			return nil, false, err
-		}
-		if key.Kind != yaml.ScalarNode || key.Value != name {
-			continue
-		}
-		if found != nil {
-			return nil, false, fmt.Errorf("actions YAML contains duplicate %q keys", name)
-		}
-		found = mapping.Content[index+1]
-	}
-	return found, found != nil, nil
-}
-
-func dereferenceYAMLNode(node *yaml.Node) (*yaml.Node, error) {
-	visited := map[*yaml.Node]bool{}
-	for node != nil && node.Kind == yaml.AliasNode {
-		if node.Alias == nil || visited[node] {
-			return nil, fmt.Errorf("actions YAML contains an invalid alias")
-		}
-		visited[node] = true
-		node = node.Alias
-	}
-	if node == nil {
-		return nil, fmt.Errorf("actions YAML contains an empty node")
-	}
-	return node, nil
-}
-
-// fetchLocalActionDefinition resolves a repository-local composite action directory
-// (e.g. ".github/actions/example") to its action.yml/action.yaml content. It returns a
-// nil content and nil error when neither file exists, since a local `uses:` path that
-// carries no action metadata cannot itself introduce an unpinned third-party reference.
-func (s *InventoryService) fetchLocalActionDefinition(ctx context.Context, base, branch, dirPath string) (string, []byte, error) {
-	escaped := escapeContentPath(dirPath)
-	for _, name := range []string{"action.yml", "action.yaml"} {
-		content, err := s.fetchContent(ctx, base+"/contents/"+escaped+"/"+name+"?ref="+pathEscape(branch))
-		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
-			continue
-		}
-		if err != nil {
-			return "", nil, fmt.Errorf("%s/%s: %w", dirPath, name, err)
-		}
-		return dirPath + "/" + name, content, nil
-	}
-	return "", nil, nil
-}
-
-func escapeContentPath(value string) string {
-	parts := strings.Split(value, "/")
-	for i, part := range parts {
-		parts[i] = pathEscape(part)
-	}
-	return strings.Join(parts, "/")
-}
-
-func (s *InventoryService) resolveActionTag(ctx context.Context, action, tag string) (string, bool) {
-	parts := strings.Split(action, "/")
-	if len(parts) < 2 {
-		return "", false
-	}
-	base := "/repos/" + pathEscape(parts[0]) + "/" + pathEscape(parts[1])
-	var ref struct {
-		Object struct {
-			Type string `json:"type"`
-			SHA  string `json:"sha"`
-		} `json:"object"`
-	}
-	if err := s.client.Get(ctx, base+"/git/ref/tags/"+pathEscape(tag), &ref); err != nil {
-		return "", false
-	}
-	if ref.Object.Type == "commit" {
-		return ref.Object.SHA, true
-	}
-	if ref.Object.Type != "tag" {
-		return "", false
-	}
-	var annotated struct {
-		Object struct {
-			Type string `json:"type"`
-			SHA  string `json:"sha"`
-		} `json:"object"`
-	}
-	if err := s.client.Get(ctx, base+"/git/tags/"+pathEscape(ref.Object.SHA), &annotated); err != nil || annotated.Object.Type != "commit" {
-		return "", false
-	}
-	return annotated.Object.SHA, true
-}
-
 func (s *InventoryService) exclusionReason(repo model.Repository) (reason string, propertiesUnknown bool) {
 	selectors := s.cfg.Selectors
 	if selectors.ExcludeArchived && repo.Archived {
@@ -891,7 +626,11 @@ func (s *InventoryService) exclusionReason(repo model.Repository) (reason string
 			return "", true
 		}
 		for key, expected := range selectors.CustomProperties {
-			if repo.CustomProperties[key] != expected {
+			matches, valid := customPropertyMatches(repo.CustomProperties[key], expected)
+			if !valid {
+				return "", true
+			}
+			if !matches {
 				return "custom property " + key, false
 			}
 		}
@@ -925,4 +664,39 @@ func intersects(left, right []string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeCustomPropertyValue(value any) (any, bool) {
+	switch typed := value.(type) {
+	case nil, string:
+		return typed, true
+	case []any:
+		values := make([]string, len(typed))
+		for i, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			values[i] = text
+		}
+		sort.Strings(values)
+		return values, true
+	case []string:
+		return sortedStrings(typed), true
+	default:
+		return nil, false
+	}
+}
+
+func customPropertyMatches(value any, expected string) (matches, valid bool) {
+	switch typed := value.(type) {
+	case nil:
+		return false, true
+	case string:
+		return typed == expected, true
+	case []string:
+		return slices.Contains(typed, expected), true
+	default:
+		return false, false
+	}
 }

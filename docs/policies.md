@@ -1,39 +1,21 @@
-# Policy and native-control mapping
+# Policy mapping
 
-`segh` reports drift; it does not mutate settings. Prefer the native or delegated
-control shown below.
+Policies compare normalized observations with explicit expected state.
 
-| Policy prefix | Preferred enforcement/remediation |
+| Prefix | Primary native control |
 |---|---|
-| `actions.default_workflow_permissions` | Organization default `GITHUB_TOKEN` permission |
-| `actions.allowed_actions` | Organization allowed Actions/source policy |
-| `actions.full_sha` | Renovate digest pinning, then Actions SHA-pinning enforcement |
-| `actions.sha_pinning_enforced` | Organization or enterprise Actions policy |
-| `actions.renovate` | Organization Renovate onboarding using the checked-in preset |
-| `actions.fork_pr_approval` | Organization/repository Actions fork approval setting |
-| `code_security.*` | GitHub Code Security Configuration and CodeQL default setup |
-| `repository.ruleset` | Organization ruleset covering the default branch |
-| `repository.branch_protection` | Prefer ruleset; repository branch protection as fallback |
-| `repository.security_md` | Repository file or organization default community health file |
-| classification/visibility | Organization repository policy and reviewed exception |
+| `actions.*` | Organization or enterprise Actions policy |
+| `code_security.*` | GitHub Security Configuration and feature APIs |
+| `repository.*` | Organization rulesets or classic branch protection |
 
-Every result contains repository, policy ID, status, severity, observed and
-expected values, evidence source, and remediation. Suppressions require policy,
-owner, rationale, optional repository glob, and optional expiry. An expired
-suppression is itself a failing record and cannot exempt the original result.
+`actions.sha_pinning_enforced` audits GitHub's native SHA-pinning enforcement
+state. `segh` no longer downloads and recursively parses repository workflow
+files; organization Actions policy is authoritative for enforcement.
 
-For Actions, inventory distinguishes `unpinned`, `pinned_stale`,
-`pinned_current`, and `pinned_freshness_unknown`. Staleness is observable only
-when a full SHA has a Renovate-style version comment and the referenced tag can
-be resolved. Renovate remains the update authority.
+Policy status is `pass`, `fail`, `unknown`, `unsupported`, or `exempt`.
+Unsupported capabilities and permission failures never become passes.
 
-## Actions pinning rollout
-
-1. Audit mutable references and Renovate onboarding in report-only mode.
-2. Extend `local>dceoy/segh:config/renovate-preset` and merge its digest-pinning
-   PRs. Renovate preserves readable comments such as `# v7.0.1`.
-3. Resolve or narrowly suppress remaining findings.
-4. Set `require_sha_pinning_enforcement: true` only after repositories comply,
-   then enable the organization/enterprise native enforcement control.
-
-Do not preserve compatibility with mutable Action tags.
+Suppressions require a policy ID, owner, rationale, and optional repository
+glob and expiry. A matching unexpired suppression produces `exempt`. An expired
+suppression adds an explicit failure, so temporary exceptions cannot disappear
+silently.
