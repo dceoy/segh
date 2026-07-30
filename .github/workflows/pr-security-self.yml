@@ -56,6 +56,31 @@ jobs:
           working_directory: _segh
       - name: Prepare report directory
         run: mkdir -p security-results
+      - name: Reject symlinks from the pull request checkout
+        working-directory: _target
+        run: |
+          rejected=()
+          while IFS= read -r -d '' entry; do
+            mode=${entry%% *}
+            file=${entry#*$'\t'}
+            if [[ "$mode" == "120000" ]]; then
+              rejected+=("$file")
+              rm -f -- "$file"
+            fi
+          done < <(git ls-files -z --stage)
+          if (( ${#rejected[@]} > 0 )); then
+            {
+              printf 'Rejected %d pull-request-controlled symlink(s) before scanning:\n' \
+                "${#rejected[@]}"
+              printf '%s\n' "${rejected[@]}"
+            } > "$GITHUB_WORKSPACE/security-results/rejected-symlinks.txt"
+            for file in "${rejected[@]}"; do
+              printf '::warning file=%s::Rejected tracked symlink before scanning; no scanner receives paths outside the pull request checkout.\n' "$file"
+            done
+          else
+            printf 'No tracked symlinks were present.\n' \
+              > "$GITHUB_WORKSPACE/security-results/rejected-symlinks.txt"
+          fi
       - name: Run zizmor gate
         working-directory: _target
         run: |
@@ -96,9 +121,13 @@ jobs:
         run: |
           set +e
           workflow_files=()
-          while IFS= read -r -d '' file; do
-            workflow_files+=("$file")
-          done < <(git ls-files -z -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          while IFS= read -r -d '' entry; do
+            mode=${entry%% *}
+            file=${entry#*$'\t'}
+            if [[ "$mode" == "100644" || "$mode" == "100755" ]]; then
+              workflow_files+=("$file")
+            fi
+          done < <(git ls-files -z --stage -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
           if (( ${#workflow_files[@]} == 0 )); then
             printf 'Skipped: no tracked GitHub Actions workflow files.\n' \
               > "$GITHUB_WORKSPACE/security-results/actionlint.txt"
@@ -124,15 +153,19 @@ jobs:
           set +e
           script_files=()
           declare -A seen_scripts=()
-          while IFS= read -r -d '' file; do
-            script_files+=("$file")
-            seen_scripts["$file"]=1
-          done < <(git ls-files -z -- '*.sh' '*.bash' '*.bats')
-          shell_shebang='^#![[:space:]]*(/usr/bin/env([[:space:]]+-S)?[[:space:]]+)?(/[^[:space:]]*/)?(ba|da|k|z)?sh([[:space:]]|$)'
+          shell_shebang='^#![[:space:]]*(/usr/bin/env([[:space:]]+-S)?[[:space:]]+)?(/[^[:space:]]*/)?(busybox[[:space:]]+)?(sh|ash|dash|bash|ksh93|ksh88|ksh|oksh|zsh|bats)([[:space:]]|$)'
           while IFS= read -r -d '' entry; do
             mode=${entry%% *}
             file=${entry#*$'\t'}
-            if [[ "$mode" != "100755" || -n "${seen_scripts[$file]:-}" ]]; then
+            if [[ "$mode" != "100644" && "$mode" != "100755" ]]; then
+              continue
+            fi
+            if [[ "$file" == *.sh || "$file" == *.bash || "$file" == *.bats ]]; then
+              script_files+=("$file")
+              seen_scripts["$file"]=1
+              continue
+            fi
+            if [[ -n "${seen_scripts[$file]:-}" ]]; then
               continue
             fi
             IFS= read -r -n 256 first_line < "$file" || true

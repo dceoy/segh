@@ -6,6 +6,8 @@ package workflows
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -524,5 +526,186 @@ func TestPRSecurityScorecardGatedToOrdinaryPullRequestEvent(t *testing.T) {
 	}
 	if !strings.Contains(job.If, "github.event_name == 'pull_request'") {
 		t.Errorf("jobs.scorecard.if = %q, want it to contain %q", job.If, "github.event_name == 'pull_request'")
+	}
+}
+
+// runGit runs git against dir, failing the test on error.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// writeExecutable writes an executable file, failing the test on error.
+func writeExecutable(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G302 -- this temporary test fixture must be executable.
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeStubShellCheck installs an executable "shellcheck" on PATH (via a
+// dedicated directory returned for the caller to prepend) that records its
+// arguments to argvLog instead of analyzing anything. Tests use it to
+// observe which files the gate script decided to pass to ShellCheck without
+// depending on ShellCheck's own installed version or diagnostics.
+func writeStubShellCheck(t *testing.T, argvLog string) string {
+	t.Helper()
+	stubDir := t.TempDir()
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argvLog + "\"\nexit 0\n"
+	writeExecutable(t, filepath.Join(stubDir, "shellcheck"), stub)
+	return stubDir
+}
+
+// TestPRSecurityStandaloneShellCheckGateDiscoversAllTrackedShellScripts pins
+// that the standalone ShellCheck gate's file-discovery script in
+// pr-security.yml (executed here for real against a throwaway git
+// repository standing in for the pull request checkout) enumerates a
+// non-executable, extensionless shell script and an executable script with
+// a #!/bin/ash shebang: the two gaps issue #33's acceptance criterion called
+// out, since shebang inspection used to be limited to executable (mode
+// 100755) files and the recognized-interpreter pattern did not include
+// "ash". It also pins that a tracked symlink is never passed to ShellCheck,
+// even when its name matches a recognized extension, closing the same
+// candidate-list invariant the actionlint gate needs (see
+// TestPRSecurityUsesDedicatedScannerOwnership and the "Reject symlinks from
+// the pull request checkout" step). A stub "shellcheck" on PATH records its
+// arguments so the test exercises only this enumeration logic, not
+// ShellCheck's own installed behavior.
+func TestPRSecurityStandaloneShellCheckGateDiscoversAllTrackedShellScripts(t *testing.T) {
+	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	step, ok := findStep(job.Steps, "Run standalone ShellCheck gate")
+	if !ok {
+		t.Fatal("jobs.scan is missing step \"Run standalone ShellCheck gate\"")
+	}
+
+	target := t.TempDir()
+	runGit(t, target, "init", "-q")
+	runGit(t, target, "config", "user.email", "test@example.invalid")
+	runGit(t, target, "config", "user.name", "test")
+
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.Mkdir(filepath.Join(target, "scripts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Non-executable, extensionless: only a first-line shebang identifies it.
+	if err := os.WriteFile(filepath.Join(target, "scripts", "tool"), []byte("#!/bin/bash\necho hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Executable, with a shebang the old pattern did not recognize.
+	writeExecutable(t, filepath.Join(target, "scripts", "legacy-ash"), "#!/bin/ash\necho hi\n")
+	// Tracked symlink whose name matches a recognized extension: must never
+	// be admitted as a scan candidate, wherever it points.
+	if err := os.Symlink("/etc/passwd", filepath.Join(target, "scripts", "evil.sh")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, target, "add", "-A")
+
+	workspace := t.TempDir()
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(filepath.Join(workspace, "security-results"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	shellcheckrcDir := filepath.Join(workspace, "_segh", ".github", "security")
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(shellcheckrcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shellcheckrcDir, "shellcheckrc"), []byte("# test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	argvLog := filepath.Join(t.TempDir(), "argv.log")
+	stubDir := writeStubShellCheck(t, argvLog)
+
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.Command("bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
+	cmd.Dir = target
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run standalone ShellCheck gate script: %v\n%s", err, out)
+	}
+
+	argv, err := os.ReadFile(argvLog) // #nosec G304 -- argvLog is created inside this test's unique temporary directory.
+	if err != nil {
+		t.Fatalf("stub shellcheck was not invoked: %v", err)
+	}
+	for _, want := range []string{"scripts/tool", "scripts/legacy-ash"} {
+		if !strings.Contains(string(argv), want) {
+			t.Errorf("standalone ShellCheck gate did not pass %q to ShellCheck; argv:\n%s", want, argv)
+		}
+	}
+	if strings.Contains(string(argv), "evil.sh") {
+		t.Errorf("standalone ShellCheck gate passed a tracked symlink to ShellCheck; argv:\n%s", argv)
+	}
+}
+
+// TestPRSecurityRejectSymlinksStepRemovesTrackedSymlinks pins that the
+// "Reject symlinks from the pull request checkout" step deletes every
+// tracked symlink from the pull request checkout (protecting scanners like
+// Checkov that walk the directory tree directly rather than through a
+// git-ls-files candidate list, which a mode filter alone cannot cover) while
+// leaving ordinary tracked files untouched, and records what it removed.
+func TestPRSecurityRejectSymlinksStepRemovesTrackedSymlinks(t *testing.T) {
+	job, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	step, ok := findStep(job.Steps, "Reject symlinks from the pull request checkout")
+	if !ok {
+		t.Fatal("jobs.scan is missing step \"Reject symlinks from the pull request checkout\"")
+	}
+
+	target := t.TempDir()
+	runGit(t, target, "init", "-q")
+	runGit(t, target, "config", "user.email", "test@example.invalid")
+	runGit(t, target, "config", "user.name", "test")
+
+	regularPath := filepath.Join(target, "main.tf")
+	if err := os.WriteFile(regularPath, []byte("# regular file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(target, "escape.tf")
+	if err := os.Symlink("/etc/passwd", symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, target, "add", "-A")
+
+	workspace := t.TempDir()
+	// #nosec G301 -- this temporary test fixture directory only holds throwaway files.
+	if err := os.MkdirAll(filepath.Join(workspace, "security-results"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	cmd := exec.Command("bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
+	cmd.Dir = target
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run symlink-rejection step: %v\n%s", err, out)
+	}
+
+	if _, err := os.Lstat(symlinkPath); !os.IsNotExist(err) {
+		t.Errorf("symlink %s still exists after the rejection step (err=%v)", symlinkPath, err)
+	}
+	if _, err := os.Lstat(regularPath); err != nil {
+		t.Errorf("regular file %s was unexpectedly removed: %v", regularPath, err)
+	}
+
+	report, err := os.ReadFile(filepath.Join(workspace, "security-results", "rejected-symlinks.txt")) // #nosec G304 -- the path is created inside this test's unique temporary directory.
+	if err != nil {
+		t.Fatalf("rejected-symlinks.txt was not written: %v", err)
+	}
+	if !strings.Contains(string(report), "escape.tf") {
+		t.Errorf("rejected-symlinks.txt does not mention the rejected symlink; report:\n%s", report)
 	}
 }

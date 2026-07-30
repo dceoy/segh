@@ -28,11 +28,23 @@ uploads `pr-security-reports`, writes bounded human-readable summaries, and only
 then fails the ordinary check if any scanner found a threshold violation or
 encountered an execution error.
 
-actionlint scans only tracked `.github/workflows/*.yml` and `.yaml` files and
-uses the installed ShellCheck CLI for embedded `run:` blocks. Standalone
-ShellCheck scans tracked `*.sh`, `*.bash`, and `*.bats` files plus executable
-tracked files with a supported shell shebang. An empty relevant file set is
-recorded as a successful skip.
+Before any gate runs, a dedicated step deletes every tracked symlink from the
+pull-request checkout and records what it removed in
+`rejected-symlinks.txt`, with a `::warning::` annotation per path. `git
+ls-files` and directory-walking scanners alike would otherwise resolve a
+pull-request-controlled symlink to a path outside `_target` (for example
+into `_segh` or runner files); removing tracked symlinks up front closes
+that off for every gate, including Checkov, whose directory scan has no
+git-aware candidate list to filter.
+
+actionlint scans only tracked, non-symlink `.github/workflows/*.yml` and
+`.yaml` files and uses the installed ShellCheck CLI for embedded `run:`
+blocks. Standalone ShellCheck scans every tracked, non-symlink regular file:
+`*.sh`, `*.bash`, and `*.bats` files unconditionally, plus any other tracked
+file (executable or not) whose first line is a shebang naming a
+ShellCheck-supported interpreter (`sh`, `ash`, `dash`, `bash`, `ksh`,
+`ksh88`, `ksh93`, `oksh`, `zsh`, `bats`, or `busybox` followed by one of
+those). An empty relevant file set is recorded as a successful skip.
 
 Checkov runs offline with `--skip-download` and an explicit IaC-only framework
 allowlist. It does not scan packages, images, secrets, GitHub Actions, or source
