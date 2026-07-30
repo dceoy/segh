@@ -21,6 +21,7 @@ const (
 	prSecuritySelfWorkflowPath = "../../.github/workflows/pr-security-self.yml"
 	shellcheckrcPath           = "../../.github/security/shellcheckrc"
 	aquaConfigPath             = "../../aqua.yaml"
+	aquaChecksumsPath          = "../../aqua-checksums.json"
 )
 
 type prSecurityStep struct {
@@ -764,11 +765,21 @@ func TestPRSecurityStandaloneShellCheckGateSuppressesAshDialectNote(t *testing.T
 	// alongside AQUA_CONFIG (set from jobs.scan.env by setJobEnv below) it
 	// silently falls back to whatever "shellcheck" is next on PATH, such as
 	// an older distro-packaged version that predates the --rcfile flag.
+	// aqua.yaml requires checksums (checksum.require_checksum: true), so
+	// aqua-checksums.json must sit alongside it exactly as it does in a real
+	// checkout of this repository into "_segh".
 	aquaConfig, err := os.ReadFile(aquaConfigPath) // #nosec G304 -- aquaConfigPath is a fixed repository-relative constant.
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "_segh", "aqua.yaml"), aquaConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aquaChecksums, err := os.ReadFile(aquaChecksumsPath) // #nosec G304 -- aquaChecksumsPath is a fixed repository-relative constant.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "_segh", "aqua-checksums.json"), aquaChecksums, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
