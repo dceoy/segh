@@ -9,6 +9,7 @@ import (
 func TestRepositoryCustomPropertiesRetainVersionTwoWireFormat(t *testing.T) {
 	repository := Repository{
 		FullName: "example/repository",
+		Topics:   []string{"governance"},
 		CustomProperties: Observed[map[string]any]{
 			State: Available,
 			Value: map[string]any{"tier": "critical", "teams": []string{"platform", "security"}},
@@ -19,11 +20,9 @@ func TestRepositoryCustomPropertiesRetainVersionTwoWireFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, `"custom_properties":{"teams":["platform","security"],"tier":"critical"}`) {
-		t.Fatalf("repository JSON = %s", text)
-	}
-	if strings.Contains(text, `"capabilities"`) || strings.Contains(text, `"custom_properties":{"state"`) {
-		t.Fatalf("repository JSON changed the version 2 custom-property shape: %s", text)
+	const want = `{"id":0,"full_name":"example/repository","visibility":"","archived":false,"disabled":false,"fork":false,"template":false,"default_branch":"","topics":["governance"],"custom_properties":{"teams":["platform","security"],"tier":"critical"},"actions_enabled":{"state":""},"allowed_actions":{"state":""},"default_workflow_permissions":{"state":""},"fork_pr_approval":{"state":""},"ruleset":{"state":""},"branch_protection":{"state":""},"required_pull_requests":{"state":""},"required_checks":{"state":""},"force_push_restricted":{"state":""},"deletion_restricted":{"state":""},"code_security_configuration":{"state":""},"codeql":{"state":""},"secret_scanning":{"state":""},"push_protection":{"state":""},"dependency_graph":{"state":""},"dependabot_alerts":{"state":""},"dependabot_security_updates":{"state":""},"security_md":{"state":""},"sha_pinning_enforced":{"state":""}}`
+	if text != want {
+		t.Fatalf("repository JSON = %s\nwant = %s", text, want)
 	}
 
 	var decoded Repository
