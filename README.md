@@ -81,7 +81,8 @@ rulesets, branch protection, custom properties, dependency graph, Dependabot
 coverage, and repository metadata. It does not clone repositories or run
 scanners.
 
-`GH_HOST` selects GitHub Enterprise Server and defaults to `github.com`.
+`GH_HOST` selects GHE.com or GitHub Enterprise Server and defaults to
+`github.com`.
 The matching short-lived App token and installation ID are required for a live
 audit. See [docs/github-app-permissions.md](docs/github-app-permissions.md).
 

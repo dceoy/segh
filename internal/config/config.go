@@ -7,8 +7,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"regexp"
-	"slices"
 	"time"
 
 	"github.com/dceoy/segh/internal/model"
@@ -101,9 +99,9 @@ func Load(configPath string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
+	var document any
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
+	if err := dec.Decode(&document); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	var trailing any
@@ -112,59 +110,21 @@ func Load(configPath string) (Config, error) {
 	} else if !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
-	if err := rejectNullValues(data); err != nil {
+	if err := validateConfigDocument(document); err != nil {
 		return Config{}, err
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("decode typed config: %w", err)
+	}
+	if err := cfg.validateSemantics(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
-func (c Config) Validate() error {
+func (c Config) validateSemantics() error {
 	var errs []error
-	if c.Version != 4 {
-		errs = append(errs, fmt.Errorf("version must be 4"))
-	}
-	if c.Organization == "" {
-		errs = append(errs, fmt.Errorf("organization is required"))
-	}
-	if !c.Policies.configured() {
-		errs = append(errs, fmt.Errorf("at least one policy must be configured"))
-	}
-	if c.Inventory.Concurrency < 1 || c.Inventory.Concurrency > 64 {
-		errs = append(errs, fmt.Errorf("inventory.concurrency must be between 1 and 64"))
-	}
-	if time.Duration(c.Inventory.Timeout) <= 0 {
-		errs = append(errs, fmt.Errorf("inventory.timeout must be positive"))
-	}
-	for name, values := range map[string][]string{
-		"selectors.visibilities":                   c.Selectors.Visibilities,
-		"selectors.include_topics":                 c.Selectors.IncludeTopics,
-		"selectors.exclude_topics":                 c.Selectors.ExcludeTopics,
-		"selectors.repositories":                   c.Selectors.Repositories,
-		"selectors.exclude":                        c.Selectors.Exclude,
-		"policies.repository.allowed_visibilities": c.Policies.Repository.AllowedVisibilities,
-	} {
-		if duplicate, ok := firstDuplicate(values); ok {
-			errs = append(errs, fmt.Errorf("%s contains duplicate value %q", name, duplicate))
-		}
-	}
-	for _, visibility := range append(slices.Clone(c.Selectors.Visibilities), c.Policies.Repository.AllowedVisibilities...) {
-		if !slices.Contains([]string{"public", "private", "internal"}, visibility) {
-			errs = append(errs, fmt.Errorf("invalid visibility %q", visibility))
-		}
-	}
-	if value := c.Policies.Actions.DefaultWorkflowPermissions; value != "" && value != "read" && value != "write" {
-		errs = append(errs, fmt.Errorf("policies.actions.default_workflow_permissions must be read or write"))
-	}
-	if value := c.Policies.Actions.AllowedActions; value != "" && !slices.Contains([]string{"all", "local_only", "selected"}, value) {
-		errs = append(errs, fmt.Errorf("policies.actions.allowed_actions must be all, local_only, or selected"))
-	}
 	for i, suppression := range c.Suppressions {
-		if suppression.Policy == "" || suppression.Owner == "" || suppression.Rationale == "" {
-			errs = append(errs, fmt.Errorf("suppressions[%d] requires policy, owner, and rationale", i))
-		}
 		if _, err := path.Match(suppression.Repository, "owner/repository"); suppression.Repository != "" && err != nil {
 			errs = append(errs, fmt.Errorf("suppressions[%d].repository is not a valid glob", i))
 		}
@@ -172,90 +132,11 @@ func (c Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-const (
-	durationPatternText = `^\+?(([0-9]{1,5}(\.[0-9]{0,9})?|\.[0-9]{1,9})(ns|us|µs|μs|ms|s|m|h)){1,16}$`
-	zeroDurationPattern = `^\+?((0{1,5}(\.0{0,9})?|\.0{1,9})(ns|us|µs|μs|ms|s|m|h)){1,16}$`
-)
-
-var durationPattern = regexp.MustCompile(durationPatternText)
-var zeroDuration = regexp.MustCompile(zeroDurationPattern)
-
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind != yaml.ScalarNode || node.Tag != "!!str" {
-		return fmt.Errorf("duration must be a string")
-	}
-	if !durationPattern.MatchString(node.Value) || zeroDuration.MatchString(node.Value) {
-		return fmt.Errorf("duration must be positive and use at most 16 components with 5 integer and 9 fractional digits each")
-	}
 	parsed, err := time.ParseDuration(node.Value)
 	if err != nil {
 		return fmt.Errorf("parse duration: %w", err)
 	}
 	*d = Duration(parsed)
 	return nil
-}
-
-// rejectNullValues re-parses the raw document because yaml.v3 maps explicit
-// nulls to Go zero values. The JSON schema permits null nowhere, so accepting a
-// direct, bare, or aliased null would make runtime validation weaker than the
-// published contract.
-func rejectNullValues(data []byte) error {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return fmt.Errorf("decode config node tree: %w", err)
-	}
-	if len(doc.Content) == 0 {
-		return nil
-	}
-	if containsNull(&doc) {
-		return fmt.Errorf("configuration must not contain null values")
-	}
-	return nil
-}
-
-func containsNull(node *yaml.Node) bool {
-	if node == nil {
-		return false
-	}
-	if node.Tag == "!!null" {
-		return true
-	}
-	if node.Kind == yaml.AliasNode {
-		return containsNull(node.Alias)
-	}
-	for _, child := range node.Content {
-		if containsNull(child) {
-			return true
-		}
-	}
-	return false
-}
-
-func firstDuplicate(values []string) (string, bool) {
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			return value, true
-		}
-		seen[value] = struct{}{}
-	}
-	return "", false
-}
-
-func (p Policies) configured() bool {
-	actions := p.Actions
-	if actions.Enabled != nil || actions.AllowedActions != "" || actions.DefaultWorkflowPermissions != "" ||
-		actions.RequireSHAPinningEnforcement || actions.RequireForkPRApproval != nil {
-		return true
-	}
-	dependencies := p.Dependencies
-	if dependencies.DependencyGraph != nil || dependencies.DependabotAlerts != nil ||
-		dependencies.DependabotSecurityUpdates != nil {
-		return true
-	}
-	repository := p.Repository
-	return repository.RequireRuleset || repository.RequireBranchProtection || repository.RequirePullRequest ||
-		repository.RequireRequiredChecks || repository.RestrictForcePushes || repository.RestrictDeletions ||
-		repository.RequireSecurityMD || len(repository.AllowedVisibilities) > 0 || repository.ProhibitArchived ||
-		repository.ProhibitForks || repository.ProhibitTemplates
 }
