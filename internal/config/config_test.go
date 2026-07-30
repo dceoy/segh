@@ -86,6 +86,50 @@ func TestLoadRejectsEmptyCodeSecurityPolicy(t *testing.T) {
 	}
 }
 
+func TestSchemaAndRuntimeRejectNullPolicySections(t *testing.T) {
+	schemaData, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v3.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Policies struct {
+				Properties map[string]struct {
+					Type string `json:"type"`
+				} `json:"properties"`
+			} `json:"policies"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schemaData, &schema); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		section string
+		value   string // text after the colon, e.g. " null" or "" for a bare key
+		other   string
+	}{
+		{"actions", " null", "repository:\n    require_ruleset: true\n"},
+		{"code_security", " null", "repository:\n    require_ruleset: true\n"},
+		{"repository", " null", "actions:\n    enabled: true\n"},
+		{"code_security", "", "repository:\n    require_ruleset: true\n"}, // bare key: the shape a human types by accident
+	} {
+		if schemaType := schema.Properties.Policies.Properties[tc.section].Type; schemaType != "object" {
+			t.Fatalf("policies.%s schema type = %q, want object so null is not a valid type", tc.section, schemaType)
+		}
+
+		configPath := filepath.Join(t.TempDir(), "segh.yaml")
+		data := "version: 3\norganization: test\npolicies:\n  " + tc.section + ":" + tc.value + "\n  " + tc.other
+		if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want := "policies." + tc.section + " must be an object, not null"
+		if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load() with %s: null = %v, want error containing %q", tc.section, err, want)
+		}
+	}
+}
+
 func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
 	data := "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n"

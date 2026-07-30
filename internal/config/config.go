@@ -111,6 +111,9 @@ func Load(configPath string) (Config, error) {
 	} else if !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
+	if err := rejectNullPolicySections(data); err != nil {
+		return Config{}, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -210,6 +213,39 @@ func (p *CodeSecurityPolicy) UnmarshalYAML(node *yaml.Node) error {
 	}
 	*p = CodeSecurityPolicy(decoded)
 	p.present = true
+	return nil
+}
+
+// rejectNullPolicySections re-parses the raw document because struct
+// decoding discards node kinds: yaml.v3 leaves the field zero-valued for an
+// explicit null instead of invoking its UnmarshalYAML.
+func rejectNullPolicySections(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(root.Content); i += 2 {
+		if root.Content[i].Value != "policies" {
+			continue
+		}
+		policies := root.Content[i+1]
+		if policies.Kind != yaml.MappingNode {
+			return nil
+		}
+		for j := 0; j < len(policies.Content); j += 2 {
+			key := policies.Content[j].Value
+			switch key {
+			case "actions", "code_security", "repository":
+				if policies.Content[j+1].Tag == "!!null" {
+					return fmt.Errorf("policies.%s must be an object, not null", key)
+				}
+			}
+		}
+	}
 	return nil
 }
 
