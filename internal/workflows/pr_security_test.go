@@ -20,6 +20,7 @@ const (
 	prSecurityWorkflowPath     = "../../.github/workflows/pr-security.yml"
 	prSecuritySelfWorkflowPath = "../../.github/workflows/pr-security-self.yml"
 	shellcheckrcPath           = "../../.github/security/shellcheckrc"
+	aquaConfigPath             = "../../aqua.yaml"
 )
 
 type prSecurityStep struct {
@@ -32,6 +33,7 @@ type prSecurityStep struct {
 type prSecurityJob struct {
 	If          string            `yaml:"if"`
 	Permissions map[string]string `yaml:"permissions"`
+	Env         map[string]string `yaml:"env"`
 	Steps       []prSecurityStep  `yaml:"steps"`
 }
 
@@ -331,6 +333,38 @@ func TestPRSecurityScanAndScanSelfStepsStayInSync(t *testing.T) {
 	}
 }
 
+// TestPRSecurityScanJobsPinAquaConfigToTrustedCheckout pins that both scan
+// (pr-security.yml) and scan-self (pr-security-self.yml) set job-level
+// env.AQUA_CONFIG to the trusted checkout's aqua.yaml. Every scanner step in
+// both jobs runs with working-directory: _target, the untrusted pull request
+// checkout; aqua's shims otherwise resolve a pinned tool version by
+// searching upward from the invoking process's working directory for an
+// aqua.yaml, independent of PATH order, so without this a pull request that
+// carries its own aqua.yaml in "_target" (guaranteed for scan-self, whose
+// "_target" is always a checkout of this repository, which has one at its
+// root) chooses the very tool version that scans it, and a target repository
+// with no aqua.yaml of its own instead falls back silently to whatever
+// same-named binary happens to be preinstalled on the runner. Job-level env
+// is invisible to TestPRSecurityScanAndScanSelfStepsStayInSync, which
+// compares only steps, so this property needs its own pin.
+func TestPRSecurityScanJobsPinAquaConfigToTrustedCheckout(t *testing.T) {
+	scan, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
+	if !ok {
+		t.Fatal("jobs.scan is missing")
+	}
+	if config := scan.Env["AQUA_CONFIG"]; !strings.Contains(config, "_segh/aqua.yaml") {
+		t.Errorf("jobs.scan.env.AQUA_CONFIG = %q, want it to point at the trusted checkout's aqua.yaml", config)
+	}
+
+	scanSelf, ok := loadPRSecuritySelfWorkflow(t).Jobs["scan-self"]
+	if !ok {
+		t.Fatal("jobs.scan-self is missing")
+	}
+	if config := scanSelf.Env["AQUA_CONFIG"]; !strings.Contains(config, "_segh/aqua.yaml") {
+		t.Errorf("jobs.scan-self.env.AQUA_CONFIG = %q, want it to point at the trusted checkout's aqua.yaml", config)
+	}
+}
+
 // TestPRSecurityUsesDedicatedScannerOwnership pins the hard scanner cutovers:
 // Checkov owns infrastructure-as-code, actionlint owns workflow correctness
 // (including embedded ShellCheck), standalone ShellCheck owns tracked shell
@@ -424,6 +458,18 @@ func findStep(steps []prSecurityStep, name string) (prSecurityStep, bool) {
 		}
 	}
 	return prSecurityStep{}, false
+}
+
+// setJobEnv exports a job's job-level env vars into the test process,
+// expanding the "${{ github.workspace }}" expression the same way the
+// Actions runner would before a step ever sees it (unlike "$GITHUB_WORKSPACE"
+// references inside a step's own run script, which bash expands from the
+// environment variable this function's caller sets separately).
+func setJobEnv(t *testing.T, job prSecurityJob, workspace string) {
+	t.Helper()
+	for key, value := range job.Env {
+		t.Setenv(key, strings.ReplaceAll(value, "${{ github.workspace }}", workspace))
+	}
 }
 
 // TestPRSecurityScanSelfAllowsForkPullRequestCheckout pins that scan-self's
@@ -712,8 +758,22 @@ func TestPRSecurityStandaloneShellCheckGateSuppressesAshDialectNote(t *testing.T
 	if err := os.WriteFile(filepath.Join(shellcheckrcDir, "shellcheckrc"), rc, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// aqua's shim resolves the pinned ShellCheck version by searching upward
+	// from its invoking process's working directory (cmd.Dir below, "target",
+	// which is unrelated to this repository) for an aqua.yaml; without one
+	// alongside AQUA_CONFIG (set from jobs.scan.env by setJobEnv below) it
+	// silently falls back to whatever "shellcheck" is next on PATH, such as
+	// an older distro-packaged version that predates the --rcfile flag.
+	aquaConfig, err := os.ReadFile(aquaConfigPath) // #nosec G304 -- aquaConfigPath is a fixed repository-relative constant.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "_segh", "aqua.yaml"), aquaConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Setenv("GITHUB_WORKSPACE", workspace)
+	setJobEnv(t, job, workspace)
 	cmd := exec.CommandContext(context.Background(), "bash", "-c", step.Run) // #nosec G204 -- step.Run is this repository's own gate script, not external input.
 	cmd.Dir = target
 	if out, err := cmd.CombinedOutput(); err != nil {

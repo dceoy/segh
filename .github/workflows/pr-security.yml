@@ -26,6 +26,20 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+    env:
+      # aqua's shims resolve a pinned tool version by searching upward from
+      # the invoking process's working directory for an aqua.yaml, entirely
+      # independent of PATH order. Every scanner step below runs with
+      # working-directory: _target, the untrusted pull request checkout, so
+      # without this a scanner invocation resolves against a pull-request-
+      # controlled aqua.yaml if "_target" happens to have one (letting a
+      # pull request choose the very tool version that scans it) or, absent
+      # one, silently falls back to whatever same-named binary is next on
+      # PATH, such as an older distro-packaged ShellCheck, rather than the
+      # checksum-verified version pinned in this repository's aqua.yaml.
+      # Pointing every scanner invocation at the trusted checkout's aqua.yaml
+      # closes both gaps.
+      AQUA_CONFIG: ${{ github.workspace }}/_segh/aqua.yaml
     steps:
       - name: Check out trusted scanner configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
