@@ -18,6 +18,9 @@ type InventoryService struct {
 	cfg            config.Config
 	client         API
 	installationID int64
+
+	permissionMu  sync.Mutex
+	permissionErr *APIError
 }
 
 type apiRepository struct {
@@ -44,6 +47,23 @@ type apiInstallation struct {
 
 func NewInventoryService(cfg config.Config, client API, installationID int64) *InventoryService {
 	return &InventoryService{cfg: cfg, client: client, installationID: installationID}
+}
+
+// notePermissionFailure records the first 401/403 encountered while collecting
+// per-repository Actions, Administration, or Contents data. Those calls
+// otherwise fold every failure into an Observed value, so a missing GitHub App
+// repository permission would only ever weaken audit coverage to partial
+// instead of surfacing the documented authentication/permission exit code.
+func (s *InventoryService) notePermissionFailure(err error) {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || (apiErr.StatusCode != 401 && apiErr.StatusCode != 403) {
+		return
+	}
+	s.permissionMu.Lock()
+	defer s.permissionMu.Unlock()
+	if s.permissionErr == nil {
+		s.permissionErr = apiErr
+	}
 }
 
 func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
@@ -143,6 +163,13 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		inventory.Complete = false
 		inventory.Errors = append(inventory.Errors, model.RunError{Component: "inventory", Kind: "timeout", Message: err.Error()})
 	}
+	if s.permissionErr != nil {
+		inventory.Complete = false
+		inventory.Errors = append(inventory.Errors, model.RunError{
+			Component: "inventory", Kind: "repository_permission",
+			Message: "repository collection lacks a required permission: " + s.permissionErr.Error(),
+		})
+	}
 	sort.Slice(inventory.Repositories, func(i, j int) bool {
 		return inventory.Repositories[i].FullName < inventory.Repositories[j].FullName
 	})
@@ -172,6 +199,9 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 			runErrs = append(runErrs, fmt.Errorf(
 				"collect organization custom properties: %w", customPropertiesErr,
 			))
+		}
+		if s.permissionErr != nil {
+			runErrs = append(runErrs, fmt.Errorf("collect repository controls: %w", s.permissionErr))
 		}
 		return inventory, errors.Join(runErrs...)
 	}
@@ -448,6 +478,7 @@ func (s *InventoryService) collectActionsControls(ctx context.Context, base stri
 		SHAPinningRequired *bool  `json:"sha_pinning_required"`
 	}
 	if err := s.client.Get(ctx, base+"/actions/permissions", &actions); err != nil {
+		s.notePermissionFailure(err)
 		state, reason := ErrorState(err)
 		repo.ActionsEnabled = model.Observed[bool]{State: model.Availability(state), Source: "actions_permissions", Reason: reason}
 		repo.AllowedActions = model.Observed[string]{State: model.Availability(state), Source: "actions_permissions", Reason: reason}
@@ -466,6 +497,7 @@ func (s *InventoryService) collectActionsControls(ctx context.Context, base stri
 	}
 	repo.DefaultWorkflowPermissions = getObserved("workflow_permissions", func() (string, error) {
 		if err := s.client.Get(ctx, base+"/actions/permissions/workflow", &workflowPermissions); err != nil {
+			s.notePermissionFailure(err)
 			return "", err
 		}
 		return workflowPermissions.DefaultWorkflowPermissions, nil
@@ -475,6 +507,7 @@ func (s *InventoryService) collectActionsControls(ctx context.Context, base stri
 	}
 	repo.ForkPRApproval = getObserved("fork_pr_approval", func() (bool, error) {
 		if err := s.client.Get(ctx, base+"/actions/permissions/fork-pr-contributor-approval", &forkApproval); err != nil {
+			s.notePermissionFailure(err)
 			return false, err
 		}
 		return forkApproval.ApprovalPolicy != "first_time_contributors_new_to_github", nil
@@ -494,6 +527,7 @@ func (s *InventoryService) collectBranchGovernance(ctx context.Context, base, br
 		}
 		repo.Ruleset = model.Observed[bool]{State: model.Available, Value: len(effectiveRules) > 0, Source: rulesSource}
 	} else {
+		s.notePermissionFailure(rulesErr)
 		state, reason := ErrorState(rulesErr)
 		repo.Ruleset = model.Observed[bool]{State: model.Availability(state), Source: rulesSource, Reason: reason}
 	}
@@ -516,6 +550,7 @@ func (s *InventoryService) collectBranchGovernance(ctx context.Context, base, br
 		classicProtection, classicPullRequests, classicChecks = absent, absent, absent
 		classicForcePush, classicDeletion = absent, absent
 	} else if protectionErr != nil {
+		s.notePermissionFailure(protectionErr)
 		state, reason := ErrorState(protectionErr)
 		unknown := model.Observed[bool]{State: model.Availability(state), Source: protectionSource, Reason: reason}
 		classicProtection, classicPullRequests, classicChecks = unknown, unknown, unknown
@@ -586,6 +621,7 @@ func (s *InventoryService) probeEndpoint(ctx context.Context, path, source strin
 	if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
 		return model.Observed[bool]{State: model.Available, Value: false, Source: source}
 	}
+	s.notePermissionFailure(err)
 	state, reason := ErrorState(err)
 	return model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason}
 }
@@ -614,6 +650,7 @@ func (s *InventoryService) securityPolicyExists(ctx context.Context, base, branc
 		if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
 			return s.anyContentExists(ctx, base, branch, securityMDPaths, "security_md")
 		}
+		s.notePermissionFailure(err)
 		state, reason := ErrorState(err)
 		return model.Observed[bool]{State: model.Availability(state), Source: "community/profile", Reason: reason}
 	}

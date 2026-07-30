@@ -180,6 +180,35 @@ func TestOrganizationCollectionPermissionFailuresUseAuthenticationExitCode(t *te
 	}
 }
 
+func TestRepositoryPermissionFailuresUseAuthenticationExitCode(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		forbiddenEndpoint string
+	}{
+		{"actions", "actions_permissions"},
+		{"administration", "branch_protection"},
+		{"contents", "community_profile"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			installFakeGitHubCLI(t, test.forbiddenEndpoint)
+			t.Setenv("GH_TOKEN", "test-token")
+			t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
+			var stdout, stderr bytes.Buffer
+			err := Run(context.Background(), []string{
+				"audit",
+				"--config", writeConfig(t, false, false),
+				"--inventory-output", filepath.Join(dir, "inventory.json"),
+				"--audit-output", filepath.Join(dir, "audit.json"),
+				"--markdown-output", filepath.Join(dir, "report.md"),
+			}, "test", &stdout, &stderr)
+			if err == nil || ExitCode(err) != exitAuth {
+				t.Fatalf("err=%v code=%d", err, ExitCode(err))
+			}
+		})
+	}
+}
+
 func TestValidateArtifactsRejectsTamperingAndHostMismatch(t *testing.T) {
 	cfg := config.Default()
 	cfg.Organization = "example"
@@ -230,7 +259,22 @@ func installFakeGitHubCLI(t *testing.T, forbiddenEndpoint string) {
 	}
 	dependencyGraphResult := `printf '%s' '{"sbom":{}}'`
 	if forbiddenEndpoint == "dependency_graph" {
-		dependencyGraphResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
+		// 400, not 401/403: this fixture drives an "unknown" Observed value to
+		// test incomplete-coverage precedence, not the authentication exit code
+		// covered by TestRepositoryPermissionFailuresUseAuthenticationExitCode.
+		dependencyGraphResult = `printf '%s' 'gh: Bad Request (HTTP 400)' >&2; exit 1`
+	}
+	actionsPermissionsResult := `printf '%s' '{"enabled":true,"allowed_actions":"all","sha_pinning_required":true}'`
+	if forbiddenEndpoint == "actions_permissions" {
+		actionsPermissionsResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
+	}
+	branchProtectionResult := `printf '%s' 'gh: Not Found (HTTP 404)' >&2; exit 1`
+	if forbiddenEndpoint == "branch_protection" {
+		branchProtectionResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
+	}
+	communityProfileResult := `printf '%s' '{"files":{"security":{}}}'`
+	if forbiddenEndpoint == "community_profile" {
+		communityProfileResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
 	}
 	body := `#!/bin/sh
 case "$*" in
@@ -253,7 +297,7 @@ case "$*" in
     printf '%s' '{"approval_policy":"all_external_contributors"}'
     ;;
   *"/repos/example/repo/actions/permissions")
-    printf '%s' '{"enabled":true,"allowed_actions":"all","sha_pinning_required":true}'
+    ` + actionsPermissionsResult + `
     ;;
   *"/repos/example/repo/dependency-graph/sbom")
     ` + dependencyGraphResult + `
@@ -268,11 +312,10 @@ case "$*" in
     printf '%s' '[]'
     ;;
   *"/repos/example/repo/branches/main/protection")
-    printf '%s' 'gh: Not Found (HTTP 404)' >&2
-    exit 1
+    ` + branchProtectionResult + `
     ;;
   *"/repos/example/repo/community/profile")
-    printf '%s' '{"files":{"security":{}}}'
+    ` + communityProfileResult + `
     ;;
   *)
     printf '%s' 'gh: Not Found (HTTP 404)' >&2

@@ -8,9 +8,9 @@ permissions:
 
 jobs:
   scan:
-    # Organization rulesets run this workflow in target repositories. The
-    # source repository uses its ordinary CI workflow instead.
-    if: github.repository != 'dceoy/segh'
+    # Organization rulesets run this workflow in target repositories, and it
+    # also runs here so changes to this centrally trusted scanner
+    # configuration are scanned before merge.
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -20,7 +20,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: dceoy/segh
-          ref: ${{ github.workflow_sha }}
+          # pull_request (unlike pull_request_target) runs the workflow
+          # version proposed by the pull request itself. For a same-repository
+          # pull request, github.workflow_sha can therefore resolve to that
+          # proposal, so a pull request that edits this scanner configuration
+          # must not be allowed to also supply its own "trusted" checkout.
+          # Pin to the pre-pull-request base commit here instead; target
+          # repositories keep github.workflow_sha, which always names a
+          # dceoy/segh commit unrelated to the repository being scanned.
+          ref: ${{ github.repository == 'dceoy/segh' && github.event.pull_request.base.sha || github.workflow_sha }}
           path: _segh
           persist-credentials: false
       - name: Check out pull request
@@ -92,6 +100,10 @@ jobs:
             --format table \
             --output "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.txt" \
             "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.json"
+          convert_status=$?
+          if (( status == 0 && convert_status != 0 )); then
+            status=$convert_status
+          fi
           printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/trivy-misconfiguration.status"
       - name: Run Trivy vulnerability gate
         if: always()
@@ -116,6 +128,10 @@ jobs:
             --format table \
             --output "$GITHUB_WORKSPACE/security-results/trivy-vulnerability.txt" \
             "$GITHUB_WORKSPACE/security-results/trivy-vulnerability.json"
+          convert_status=$?
+          if (( status == 0 && convert_status != 0 )); then
+            status=$convert_status
+          fi
           printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/trivy-vulnerability.status"
       - name: Run Trivy secret gate
         if: always()
@@ -141,6 +157,10 @@ jobs:
             --format table \
             --output "$GITHUB_WORKSPACE/security-results/trivy-secret.txt" \
             "$GITHUB_WORKSPACE/security-results/trivy-secret.json"
+          convert_status=$?
+          if (( status == 0 && convert_status != 0 )); then
+            status=$convert_status
+          fi
           printf '%s\n' "$status" > "$GITHUB_WORKSPACE/security-results/trivy-secret.status"
       - name: Publish scanner summary
         if: always()
