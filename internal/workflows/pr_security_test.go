@@ -197,6 +197,36 @@ func TestPRSecurityPublishSelfCheckUsesDedicatedAppToken(t *testing.T) {
 	}
 }
 
+// TestPRSecurityPublishSelfCheckAppTokenUsesClientID pins that the "Create
+// dedicated publisher App token" step authenticates with client-id, not the
+// deprecated app-id input: actions/create-github-app-token marks app-id
+// deprecated in favor of client-id. The Client ID comes from the
+// self-scan-publisher environment's SEGH_SCAN_PUBLISHER_CLIENT_ID variable
+// (vars, not secrets: a Client ID is not sensitive), while the private key
+// still comes from that environment's SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY
+// secret.
+func TestPRSecurityPublishSelfCheckAppTokenUsesClientID(t *testing.T) {
+	job, ok := loadPRSecuritySelfWorkflow(t).Jobs["publish-self-check"]
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing")
+	}
+	step, ok := findStep(job.Steps, "Create dedicated publisher App token")
+	if !ok {
+		t.Fatal("jobs.publish-self-check is missing step \"Create dedicated publisher App token\"")
+	}
+	if _, hasAppID := step.With["app-id"]; hasAppID {
+		t.Errorf("jobs.publish-self-check step \"Create dedicated publisher App token\" with.app-id = %v, want the deprecated app-id input removed", step.With["app-id"])
+	}
+	clientID, _ := step.With["client-id"].(string)
+	if !strings.Contains(clientID, "vars.SEGH_SCAN_PUBLISHER_CLIENT_ID") {
+		t.Errorf("jobs.publish-self-check step \"Create dedicated publisher App token\" with.client-id = %q, want it to reference vars.SEGH_SCAN_PUBLISHER_CLIENT_ID", clientID)
+	}
+	privateKey, _ := step.With["private-key"].(string)
+	if !strings.Contains(privateKey, "secrets.SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY") {
+		t.Errorf("jobs.publish-self-check step \"Create dedicated publisher App token\" with.private-key = %q, want it to reference secrets.SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY", privateKey)
+	}
+}
+
 // ignoredCheckoutWithKeys lists, per step name, the "with" inputs that are
 // intentionally different between scan (which checks out another
 // repository's trusted config and pull request under pull_request) and

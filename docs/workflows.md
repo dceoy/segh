@@ -113,12 +113,16 @@ Before requiring `segh source scan (head commit)` on `dceoy/segh`:
 2. Create a repository environment named `self-scan-publisher` and restrict
    its deployment branches to the base branch (`main`) only, with no other
    repository able to satisfy that policy.
-3. Add the App ID and private key as the `self-scan-publisher` environment's
-   `SEGH_SCAN_PUBLISHER_APP_ID` and `SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY`
-   secrets, not repository-level secrets.
+3. Add the Client ID as the `self-scan-publisher` environment's
+   `SEGH_SCAN_PUBLISHER_CLIENT_ID` variable (not a secret: a Client ID is not
+   sensitive) and the private key as its `SEGH_SCAN_PUBLISHER_APP_PRIVATE_KEY`
+   secret. Use environment-scoped values, not repository-level ones, for
+   both.
 4. In the required-check configuration, pin `segh source scan (head commit)`
-   to this App's ID, not only its name, so a same-named check published by
-   the default App identity cannot satisfy it.
+   to this App's numeric App ID (shown on the App's settings page; distinct
+   from the Client ID used in step 3 to mint the token), not only its name,
+   so a same-named check published by the default App identity cannot
+   satisfy it.
 
 This rollout cannot be exercised or verified from within a pull request
 against `dceoy/segh`: `pull_request_target` only takes effect once its
