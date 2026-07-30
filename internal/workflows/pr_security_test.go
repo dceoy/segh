@@ -190,11 +190,99 @@ func TestPRSecurityPublishSelfCheckUsesDedicatedAppToken(t *testing.T) {
 	}
 }
 
+// ignoredCheckoutWithKeys lists, per step name, the "with" inputs that are
+// intentionally different between scan (which checks out another
+// repository's trusted config and pull request under pull_request) and
+// scan-self (which checks out this repository's own base commit and pull
+// request under pull_request_target): the trusted-config checkout's
+// source/ref, and scan-self's required fork-checkout opt-in.
+var ignoredCheckoutWithKeys = map[string][]string{
+	"Check out trusted scanner configuration": {"repository", "ref"},
+	"Check out pull request":                  {"allow-unsafe-pr-checkout"},
+}
+
+func readPRSecurityWorkflowFile(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(prSecurityWorkflowPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", prSecurityWorkflowPath, err)
+	}
+	return data
+}
+
+func readPRSecuritySelfWorkflowFile(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(prSecuritySelfWorkflowPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", prSecuritySelfWorkflowPath, err)
+	}
+	return data
+}
+
+// rawJobSteps decodes a job's steps as untyped maps rather than through
+// prSecurityStep, so comparison below is not limited to the handful of
+// fields prSecurityStep happens to declare: any field on any step,
+// including ones added after this test is written, is compared.
+func rawJobSteps(t *testing.T, data []byte, job string) []map[string]any {
+	t.Helper()
+	var document map[string]any
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		t.Fatalf("parse workflow: %v", err)
+	}
+	jobs, ok := document["jobs"].(map[string]any)
+	if !ok {
+		t.Fatal("jobs is missing or not a mapping")
+	}
+	jobRaw, ok := jobs[job].(map[string]any)
+	if !ok {
+		t.Fatalf("jobs.%s is missing or not a mapping", job)
+	}
+	stepsRaw, ok := jobRaw["steps"].([]any)
+	if !ok {
+		t.Fatalf("jobs.%s.steps is missing or not a sequence", job)
+	}
+	steps := make([]map[string]any, len(stepsRaw))
+	for i, item := range stepsRaw {
+		step, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("jobs.%s.steps[%d] is not a mapping", job, i)
+		}
+		steps[i] = step
+	}
+	return steps
+}
+
+// normalizedRawStep returns a copy of step with the given keys removed from
+// its "with" mapping, leaving every other field, including ones not named
+// here, untouched for comparison.
+func normalizedRawStep(step map[string]any, ignoredWithKeys []string) map[string]any {
+	normalized := make(map[string]any, len(step))
+	for key, value := range step {
+		normalized[key] = value
+	}
+	with, ok := normalized["with"].(map[string]any)
+	if !ok || len(ignoredWithKeys) == 0 {
+		return normalized
+	}
+	normalizedWith := make(map[string]any, len(with))
+	for key, value := range with {
+		normalizedWith[key] = value
+	}
+	for _, key := range ignoredWithKeys {
+		delete(normalizedWith, key)
+	}
+	normalized["with"] = normalizedWith
+	return normalized
+}
+
 // TestPRSecurityScanAndScanSelfStepsStayInSync pins that scan and scan-self
 // run the same scanner and enforcement steps. A pull request cannot edit
 // scan-self's own definition, but nothing stops a future change from
 // updating scan's gate logic while forgetting scan-self's, silently
-// reopening the enforcement gap scan-self exists to close.
+// reopening the enforcement gap scan-self exists to close. The comparison
+// covers every field of every step (uses, with, env, run, if,
+// working-directory, continue-on-error, and so on) except the checkout
+// inputs in ignoredCheckoutWithKeys, which are intentionally different.
 func TestPRSecurityScanAndScanSelfStepsStayInSync(t *testing.T) {
 	scan, ok := loadPRSecurityWorkflow(t).Jobs["scan"]
 	if !ok {
@@ -206,11 +294,27 @@ func TestPRSecurityScanAndScanSelfStepsStayInSync(t *testing.T) {
 	}
 	scanSteps, scanSelfSteps := stepNames(scan.Steps), stepNames(scanSelf.Steps)
 	if !reflect.DeepEqual(scanSteps, scanSelfSteps) {
-		t.Errorf("jobs.scan and jobs.scan-self steps diverged:\nscan:      %v\nscan-self: %v", scanSteps, scanSelfSteps)
+		t.Fatalf("jobs.scan and jobs.scan-self steps diverged:\nscan:      %v\nscan-self: %v", scanSteps, scanSelfSteps)
 	}
 	for _, want := range []string{"Run zizmor gate", "Run Trivy secret gate", "Enforce scanner gates"} {
 		if !slicesContains(scanSelfSteps, want) {
 			t.Errorf("jobs.scan-self is missing step %q", want)
+		}
+	}
+	scanRawSteps := rawJobSteps(t, readPRSecurityWorkflowFile(t), "scan")
+	scanSelfRawSteps := rawJobSteps(t, readPRSecuritySelfWorkflowFile(t), "scan-self")
+	if len(scanRawSteps) != len(scanSelfRawSteps) {
+		t.Fatalf("jobs.scan has %d steps, jobs.scan-self has %d", len(scanRawSteps), len(scanSelfRawSteps))
+	}
+	for i, name := range scanSteps {
+		ignoredWithKeys := ignoredCheckoutWithKeys[name]
+		normalizedScan := normalizedRawStep(scanRawSteps[i], ignoredWithKeys)
+		normalizedScanSelf := normalizedRawStep(scanSelfRawSteps[i], ignoredWithKeys)
+		if !reflect.DeepEqual(normalizedScan, normalizedScanSelf) {
+			t.Errorf(
+				"step %q diverged between jobs.scan and jobs.scan-self beyond the intentional checkout differences:\nscan:      %+v\nscan-self: %+v",
+				name, normalizedScan, normalizedScanSelf,
+			)
 		}
 	}
 }
