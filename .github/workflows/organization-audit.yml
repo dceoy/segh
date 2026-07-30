@@ -20,13 +20,45 @@ jobs:
         with:
           path: _control
           persist-credentials: false
+      - name: Validate control platform and source pin
+        id: source
+        env:
+          CONTROL_SERVER_URL: ${{ github.server_url }}
+        run: |
+          if [[ "$CONTROL_SERVER_URL" != "https://github.com" ]]; then
+            echo "::error::The supplied organization-audit workflow supports GitHub.com control repositories only. Adapt it to a protected same-host source mirror before using it on GHES."
+            exit 1
+          fi
+          source_commit_file="_control/config/segh-source-commit"
+          if [[ ! -f "$source_commit_file" ]]; then
+            echo "::error::Create $source_commit_file with a reviewed dceoy/segh commit from protected main."
+            exit 1
+          fi
+          source_commit=$(<"$source_commit_file")
+          if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::$source_commit_file must contain exactly one lowercase 40-character commit SHA."
+            exit 1
+          fi
+          printf 'commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
       - name: Check out trusted segh source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: dceoy/segh
-          ref: f9eb4b2b16cc584410a62174ed2f462703c7f81e
+          ref: ${{ steps.source.outputs.commit }}
           path: _segh
           persist-credentials: false
+          fetch-depth: 0
+      - name: Verify segh source is on protected main
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        working-directory: _segh
+        run: |
+          git fetch --force --no-tags origin \
+            refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$SOURCE_COMMIT" refs/remotes/origin/main; then
+            echo "::error::The pinned segh source commit is not reachable from dceoy/segh protected main."
+            exit 1
+          fi
       - name: Create read-only GitHub App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0

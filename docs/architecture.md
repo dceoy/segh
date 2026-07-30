@@ -85,3 +85,10 @@ usable where its pinned Actions and Code Scanning are supported. On GHES
 versions without Code Scanning or compatible action support, raw SARIF remains
 an Actions artifact, but GitHub-native publication and merge enforcement are
 reduced or unavailable. `segh` does not restore a custom upload fallback.
+
+The supplied cross-repository organization-audit workflow is scoped to a
+GitHub.com-hosted control repository because its trusted source is the public
+`dceoy/segh` repository. It fails explicitly on GHES instead of reusing a GHES
+token across hosts. GHES Actions deployments must adapt the workflow to a
+protected same-host source mirror or an equivalently verified release artifact;
+this does not change the CLI's GHES inventory support.

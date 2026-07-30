@@ -4,24 +4,37 @@
 
 Copy `.github/workflows/organization-audit.yml` and
 `config/organization.yaml` into a private control repository, edit the
-organization configuration there, and configure:
+organization configuration there, and create
+`config/segh-source-commit` containing exactly one lowercase, full commit SHA.
+Choose that SHA only after the reviewed segh release has merged to protected
+`main`; do not use a pull-request head or merge commit. Configure:
 
 - `SEGH_READ_APP_ID`
 - `SEGH_READ_APP_PRIVATE_KEY`
 
 The workflow checks out the operator-owned control repository under
 `_control`, then checks out the public segh source under `_segh` at the
-immutable commit pinned in the workflow. Update that pin only through a
-reviewed control-repository change. The App-token action creates a short-lived
-token for the organization. `GH_TOKEN` and the action's non-secret
-installation ID reach `segh`; the App private key stays scoped to the token
-step. The job inventories native-control coverage, evaluates policy from
-`_control/config/organization.yaml`, writes a deterministic report, and
-retains the evidence. It does not clone or scan organization repositories.
+immutable commit pinned by the control repository. Before building, it rejects
+non-SHA values and uses Git ancestry to require that the commit is reachable
+from `dceoy/segh`'s protected `main`. Update the pin only through a reviewed
+control-repository change. The App-token action creates a short-lived token for
+the organization. `GH_TOKEN` and the action's non-secret installation ID reach
+`segh`; the App private key stays scoped to the token step. The job inventories
+native-control coverage, evaluates policy from
+`_control/config/organization.yaml`, writes a deterministic report, and retains
+the evidence. It does not clone or scan organization repositories.
 
 The workflow deliberately refuses to run from a public control repository
 because organization inventory and exceptions can be sensitive. Add a schedule
 only after copying it to the private control repository.
+
+The supplied cross-repository workflow supports private GitHub.com-hosted
+control repositories only. It fails before acquiring the external source on
+GHES rather than sending a GHES token to GitHub.com or silently resolving
+`dceoy/segh` against the wrong host. GHES operators can still run the `segh` CLI
+against their configured server; for Actions automation, maintain a reviewed
+same-host source mirror (or equivalently verified release artifact) and adapt
+both source acquisition and reachability validation to that protected source.
 
 ## Central pull-request scanning
 
