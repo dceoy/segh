@@ -184,6 +184,44 @@ func TestValidateScalarRejectsLenientRFC3339Forms(t *testing.T) {
 	}
 }
 
+func TestValidateScalarRejectsUnrepresentableRFC3339Forms(t *testing.T) {
+	// RFC 3339 permits a case-insensitive "T"/"Z" and a leap second, but the
+	// "expires" value decodes into a *time.Time, which time.Parse parses
+	// case-sensitively and which cannot represent a leap second at all,
+	// erroring with "second out of range". Accepting these here would let
+	// them pass the schema's format check only to fail later, with a worse
+	// error, at the typed-config decode.
+	schema := map[string]any{"type": "string", "format": "date-time"}
+	for name, value := range map[string]string{
+		"lowercase T and Z": "2026-01-01t00:00:00z",
+		"leap second":       "2016-12-31T23:59:60Z",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateScalar(schema, value, "configuration.example"); err == nil {
+				t.Fatalf("validateScalar(%q) = nil, want an error: this cannot decode into a time.Time", value)
+			}
+		})
+	}
+}
+
+func TestValidateScalarRejectsInvalidCalendarDate(t *testing.T) {
+	schema := map[string]any{"type": "string", "format": "date-time"}
+	for name, value := range map[string]string{
+		"February 30th":                "2026-02-30T00:00:00Z",
+		"April 31st":                   "2026-04-31T00:00:00Z",
+		"February 29th, non-leap year": "2023-02-29T00:00:00Z",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateScalar(schema, value, "configuration.example"); err == nil {
+				t.Fatalf("validateScalar(%q) = nil, want an error: this calendar date does not exist", value)
+			}
+		})
+	}
+	if err := validateScalar(schema, "2024-02-29T00:00:00Z", "configuration.example"); err != nil {
+		t.Fatalf("validateScalar() = %v, want no error for a valid leap-year date", err)
+	}
+}
+
 func TestValidateEnforcesConstraintsAlongsideRef(t *testing.T) {
 	root := map[string]any{
 		"$defs": map[string]any{

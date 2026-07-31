@@ -373,14 +373,21 @@ func (v *schemaValidator) validateArray(schema map[string]any, value any, locati
 	return nil
 }
 
-// rfc3339Pattern enforces the RFC 3339 date-time grammar strictly. Go's
-// time.Parse(time.RFC3339, ...) is more permissive than the grammar it is
-// named after: it accepts an out-of-range zone-offset hour or minute (for
-// example "+24:00" or "+00:60") and a comma fractional-second separator.
-// Matching this pattern first rejects those before time.Parse ever sees them.
+// rfc3339Pattern enforces a deliberately narrower profile than raw RFC 3339,
+// chosen to match exactly what decodes into the *time.Time the "expires"
+// value ultimately becomes: it rejects an out-of-range zone-offset hour or
+// minute (for example "+24:00" or "+00:60") and a comma fractional-second
+// separator, which time.Parse(time.RFC3339, ...) wrongly accepts; and, since
+// Go's time.Time has no representation for a leap second and time.Parse
+// rejects one ("second out of range") while also being case-sensitive about
+// "T"/"Z", this pattern requires uppercase "T"/"Z" and disallows a leap
+// second (":60") outright rather than accepting a grammar the value can
+// never actually round-trip through. Loosening this to accept the full RFC
+// 3339 profile would let a value pass the schema's format check here only to
+// fail later, with a worse error, at the typed-config decode.
 var rfc3339Pattern = regexp.MustCompile(
 	`^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])` +
-		`T(?:[01]\d|2[0-3]):[0-5]\d:(?:[0-5]\d|60)(?:\.\d+)?` +
+		`T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?` +
 		`(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`,
 )
 

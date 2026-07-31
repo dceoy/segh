@@ -359,6 +359,8 @@ func TestLoadRejectsLenientRFC3339FormsInUnquotedSuppressionExpiry(t *testing.T)
 		"unquoted out-of-range offset hour":   "2026-01-01T00:00:00+24:00",
 		"unquoted comma fractional separator": "2026-01-01T00:00:00,000Z",
 		"quoted out-of-range offset minute":   `"2026-01-01T00:00:00+00:60"`,
+		"quoted lowercase T and Z":            `"2026-01-01t00:00:00z"`,
+		"quoted leap second":                  `"2016-12-31T23:59:60Z"`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			configPath := filepath.Join(t.TempDir(), "segh.yaml")
@@ -387,5 +389,31 @@ func TestLoadAcceptsUnquotedValidSuppressionExpiry(t *testing.T) {
 	if len(cfg.Suppressions) != 1 || cfg.Suppressions[0].Expires == nil ||
 		!cfg.Suppressions[0].Expires.Equal(time.Date(2026, 6, 15, 12, 30, 0, 0, time.UTC)) {
 		t.Fatalf("unexpected decoded suppression: %#v", cfg.Suppressions)
+	}
+}
+
+func TestLoadAcceptsSuppressionExpiryWithFractionAndOffset(t *testing.T) {
+	// Confirms that every RFC 3339 form the schema's format check accepts
+	// also decodes cleanly into the *time.Time the value ultimately becomes,
+	// not just the plain "Z"-suffixed, fraction-free form the other tests use.
+	for name, expires := range map[string]string{
+		"fractional second with non-Z offset": `"2026-01-01T00:00:00.5+05:30"`,
+		"fractional second beyond nanosecond": `"2026-01-01T00:00:00.1234567890123Z"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "segh.yaml")
+			data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n" +
+				"suppressions:\n  - policy: p1\n    owner: someone\n    rationale: testing\n    expires: " + expires + "\n"
+			if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(configPath)
+			if err != nil {
+				t.Fatalf("Load() = %v, want no error for a valid RFC 3339 date-time", err)
+			}
+			if len(cfg.Suppressions) != 1 || cfg.Suppressions[0].Expires == nil {
+				t.Fatalf("unexpected decoded suppression: %#v", cfg.Suppressions)
+			}
+		})
 	}
 }
