@@ -156,12 +156,11 @@ func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
 		return apiErrorFromResponse(response, c.token)
 	}
 	if out == nil {
-		size, err := io.Copy(io.Discard, io.LimitReader(response.Body, c.responseLimit+1))
-		if err != nil {
+		// Status-only probes never materialize the body, so the decode-size
+		// limit below (which guards data buffered for json.Unmarshal) does not
+		// apply here; draining to io.Discard holds no memory regardless of size.
+		if _, err := io.Copy(io.Discard, response.Body); err != nil {
 			return fmt.Errorf("read GitHub API response: %w", err)
-		}
-		if size > c.responseLimit {
-			return fmt.Errorf("GitHub API response exceeds %d bytes", c.responseLimit)
 		}
 		return nil
 	}

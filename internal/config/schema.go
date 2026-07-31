@@ -234,7 +234,9 @@ func (v *schemaValidator) validate(schema map[string]any, value any, location st
 		if err != nil {
 			return err
 		}
-		return v.validate(resolved, value, location)
+		if err := v.validate(resolved, value, location); err != nil {
+			return err
+		}
 	}
 	if disallowed, ok := schema["not"].(map[string]any); ok && v.validate(disallowed, value, location) == nil {
 		return fmt.Errorf("%s matches a disallowed value", location)

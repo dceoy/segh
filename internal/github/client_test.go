@@ -67,12 +67,23 @@ func TestAPIBaseURLSupportsGitHubAndEnterpriseHosts(t *testing.T) {
 	}
 }
 
-func TestClientSuppressesAndBoundsUnusedResponseBodies(t *testing.T) {
+func TestClientSuppressesUnusedResponseBodiesWithoutSizeLimit(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(writer, strings.Repeat("x", 17))
 	}), "github.com")
 	client.responseLimit = 16
-	err := client.Get(context.Background(), "/large", nil)
+	if err := client.Get(context.Background(), "/large", nil); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestClientBoundsDecodedResponseBodies(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(writer, strings.Repeat("x", 17))
+	}), "github.com")
+	client.responseLimit = 16
+	var out []byte
+	err := client.Get(context.Background(), "/large", &out)
 	if err == nil || !strings.Contains(err.Error(), "exceeds 16 bytes") {
 		t.Fatalf("err = %v", err)
 	}

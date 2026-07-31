@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestAuditSchemaSupportRejectsUnsupportedKeyword(t *testing.T) {
 	schema := map[string]any{
@@ -85,5 +88,21 @@ func TestAuditSchemaSupportAcceptsTheEmbeddedSchema(t *testing.T) {
 	}
 	if err := auditSchemaSupport(schema); err != nil {
 		t.Fatalf("embedded configuration schema must pass its own support audit: %v", err)
+	}
+}
+
+func TestValidateEnforcesConstraintsAlongsideRef(t *testing.T) {
+	root := map[string]any{
+		"$defs": map[string]any{
+			"stringArray": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+	}
+	schema := map[string]any{"$ref": "#/$defs/stringArray", "minItems": json.Number("1")}
+	validator := &schemaValidator{root: root}
+	if err := validator.validate(schema, []any{}, "configuration.example"); err == nil {
+		t.Fatal("want an error: minItems alongside $ref must still be enforced against the resolved target")
+	}
+	if err := validator.validate(schema, []any{"x"}, "configuration.example"); err != nil {
+		t.Fatalf("validate() = %v, want no error for a value satisfying both $ref and minItems", err)
 	}
 }
