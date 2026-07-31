@@ -44,6 +44,13 @@ var supportedSchemaKeywords = map[string]bool{
 	"minimum": true, "maximum": true, "anyOf": true,
 }
 
+// supportedSchemaFormats lists every "format" value validateScalar actually
+// enforces. auditSchemaSupport fails closed on any other format so a future
+// schema branch cannot silently gain an unenforced format constraint.
+var supportedSchemaFormats = map[string]bool{
+	"date-time": true,
+}
+
 // auditSchemaSupport walks every schema node reachable through properties,
 // $defs, items, not, anyOf, additionalProperties, and $ref, independent of
 // any configuration instance. schemaValidator implements only a subset of
@@ -182,8 +189,12 @@ func auditSchemaNode(root, schema map[string]any, refChain map[string]bool) erro
 		}
 	}
 	if format, present := schema["format"]; present {
-		if _, ok := format.(string); !ok {
+		text, ok := format.(string)
+		if !ok {
 			return fmt.Errorf(`schema keyword "format" must be a string`)
+		}
+		if !supportedSchemaFormats[text] {
+			return fmt.Errorf("schema format %q is not supported", text)
 		}
 	}
 	if minimum, present := schema["minimum"]; present {
@@ -362,6 +373,17 @@ func (v *schemaValidator) validateArray(schema map[string]any, value any, locati
 	return nil
 }
 
+// rfc3339Pattern enforces the RFC 3339 date-time grammar strictly. Go's
+// time.Parse(time.RFC3339, ...) is more permissive than the grammar it is
+// named after: it accepts an out-of-range zone-offset hour or minute (for
+// example "+24:00" or "+00:60") and a comma fractional-second separator.
+// Matching this pattern first rejects those before time.Parse ever sees them.
+var rfc3339Pattern = regexp.MustCompile(
+	`^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])` +
+		`T(?:[01]\d|2[0-3]):[0-5]\d:(?:[0-5]\d|60)(?:\.\d+)?` +
+		`(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`,
+)
+
 func validateScalar(schema map[string]any, value any, location string) error {
 	switch typed := value.(type) {
 	case string:
@@ -378,6 +400,9 @@ func validateScalar(schema map[string]any, value any, location string) error {
 			}
 		}
 		if format, _ := schema["format"].(string); format == "date-time" {
+			if !rfc3339Pattern.MatchString(typed) {
+				return fmt.Errorf("%s must be an RFC 3339 date-time", location)
+			}
 			if _, err := time.Parse(time.RFC3339, typed); err != nil {
 				return fmt.Errorf("%s must be an RFC 3339 date-time", location)
 			}

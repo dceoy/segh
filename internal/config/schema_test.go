@@ -144,6 +144,18 @@ func TestAuditSchemaSupportAllowsAnnotationKeywords(t *testing.T) {
 	}
 }
 
+func TestAuditSchemaSupportRejectsUnsupportedFormatInUnexercisedBranch(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"rarely_set": map[string]any{"type": "string", "format": "email"},
+		},
+	}
+	if err := auditSchemaSupport(schema); err == nil {
+		t.Fatal("want an error for a format value validateScalar does not enforce, even under a property no instance exercises")
+	}
+}
+
 func TestAuditSchemaSupportAcceptsTheEmbeddedSchema(t *testing.T) {
 	schema, err := loadSchema()
 	if err != nil {
@@ -151,6 +163,24 @@ func TestAuditSchemaSupportAcceptsTheEmbeddedSchema(t *testing.T) {
 	}
 	if err := auditSchemaSupport(schema); err != nil {
 		t.Fatalf("embedded configuration schema must pass its own support audit: %v", err)
+	}
+}
+
+func TestValidateScalarRejectsLenientRFC3339Forms(t *testing.T) {
+	schema := map[string]any{"type": "string", "format": "date-time"}
+	for name, value := range map[string]string{
+		"out-of-range offset minute": "2026-01-01T00:00:00+00:60",
+		"out-of-range offset hour":   "2026-01-01T00:00:00+24:00",
+		"comma fractional separator": "2026-01-01T00:00:00,000Z",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateScalar(schema, value, "configuration.example"); err == nil {
+				t.Fatalf("validateScalar(%q) = nil, want an error: time.Parse(time.RFC3339, ...) accepts this even though it is not valid RFC 3339", value)
+			}
+		})
+	}
+	if err := validateScalar(schema, "2026-01-01T00:00:00.5+05:30", "configuration.example"); err != nil {
+		t.Fatalf("validateScalar() = %v, want no error for a valid RFC 3339 date-time", err)
 	}
 }
 

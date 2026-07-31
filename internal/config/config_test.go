@@ -345,3 +345,47 @@ func TestSchemaSuppressionRepositoryPatternMatchesRuntimeValidation(t *testing.T
 	}
 
 }
+
+func TestLoadRejectsLenientRFC3339FormsInUnquotedSuppressionExpiry(t *testing.T) {
+	// Without demoteTimestampScalars, YAML's default resolver decodes an
+	// unquoted timestamp-looking scalar straight into a time.Time before the
+	// schema-validation document is built, so an out-of-range offset or a
+	// comma fractional separator never reaches the schema's format check as
+	// the literal text the operator wrote.
+	base := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n" +
+		"suppressions:\n  - policy: p1\n    owner: someone\n    rationale: testing\n    expires: "
+	for name, expires := range map[string]string{
+		"unquoted out-of-range offset minute": "2026-01-01T00:00:00+00:60",
+		"unquoted out-of-range offset hour":   "2026-01-01T00:00:00+24:00",
+		"unquoted comma fractional separator": "2026-01-01T00:00:00,000Z",
+		"quoted out-of-range offset minute":   `"2026-01-01T00:00:00+00:60"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "segh.yaml")
+			if err := os.WriteFile(configPath, []byte(base+expires+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(configPath); err == nil ||
+				!strings.Contains(err.Error(), "expires must be an RFC 3339 date-time") {
+				t.Fatalf("Load() = %v, want an RFC 3339 date-time error", err)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsUnquotedValidSuppressionExpiry(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "segh.yaml")
+	data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n" +
+		"suppressions:\n  - policy: p1\n    owner: someone\n    rationale: testing\n    expires: 2026-06-15T12:30:00Z\n"
+	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Suppressions) != 1 || cfg.Suppressions[0].Expires == nil ||
+		!cfg.Suppressions[0].Expires.Equal(time.Date(2026, 6, 15, 12, 30, 0, 0, time.UTC)) {
+		t.Fatalf("unexpected decoded suppression: %#v", cfg.Suppressions)
+	}
+}

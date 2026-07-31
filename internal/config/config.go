@@ -99,15 +99,20 @@ func Load(configPath string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
-	var document any
+	var root yaml.Node
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	if err := dec.Decode(&document); err != nil {
+	if err := dec.Decode(&root); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
-	var trailing any
+	var trailing yaml.Node
 	if err := dec.Decode(&trailing); err == nil {
 		return Config{}, fmt.Errorf("decode config: multiple YAML documents are not allowed")
 	} else if !errors.Is(err, io.EOF) {
+		return Config{}, fmt.Errorf("decode config: %w", err)
+	}
+	demoteTimestampScalars(&root)
+	var document any
+	if err := root.Decode(&document); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	if err := validateConfigDocument(document); err != nil {
@@ -120,6 +125,22 @@ func Load(configPath string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// demoteTimestampScalars retags every "!!timestamp" scalar reachable from
+// node (including through anchors and aliases) as a plain string. YAML's
+// default resolver would otherwise decode a timestamp-looking scalar
+// straight into a time.Time before the schema-validation document is built,
+// silently accepting or reinterpreting an out-of-range offset or
+// non-standard separator instead of leaving the literal text for the
+// schema's RFC 3339 format check to reject.
+func demoteTimestampScalars(node *yaml.Node) {
+	if node.Kind == yaml.ScalarNode && node.Tag == "!!timestamp" {
+		node.Tag = "!!str"
+	}
+	for _, child := range node.Content {
+		demoteTimestampScalars(child)
+	}
 }
 
 func (c Config) validateSemantics() error {
