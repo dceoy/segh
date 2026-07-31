@@ -146,10 +146,7 @@ func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
 	request.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &APIError{Message: sanitizeAPIMessage(err.Error(), c.token)}
+		return c.transportError(ctx, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
@@ -160,13 +157,13 @@ func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
 		// limit below (which guards data buffered for json.Unmarshal) does not
 		// apply here; draining to io.Discard holds no memory regardless of size.
 		if _, err := io.Copy(io.Discard, response.Body); err != nil {
-			return fmt.Errorf("read GitHub API response: %w", err)
+			return c.transportError(ctx, fmt.Errorf("read GitHub API response: %w", err))
 		}
 		return nil
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, c.responseLimit+1))
 	if err != nil {
-		return fmt.Errorf("read GitHub API response: %w", err)
+		return c.transportError(ctx, fmt.Errorf("read GitHub API response: %w", err))
 	}
 	if int64(len(data)) > c.responseLimit {
 		return fmt.Errorf("GitHub API response exceeds %d bytes", c.responseLimit)
@@ -178,6 +175,18 @@ func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
 		return fmt.Errorf("decode GitHub API response: %w", err)
 	}
 	return nil
+}
+
+// transportError wraps a transport-level failure (connection establishment
+// or response-body read) as a retryable, status-0 APIError, mirroring how
+// the removed gh api path surfaced a command failure. It returns the bare
+// context error instead when the failure is actually a context
+// cancellation/timeout, which must not be retried.
+func (c *Client) transportError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return &APIError{Message: sanitizeAPIMessage(err.Error(), c.token)}
 }
 
 func apiErrorFromResponse(response *http.Response, token string) error {

@@ -68,6 +68,69 @@ func TestAuditSchemaSupportWalksDefsItemsNotAnyOfAndAdditionalProperties(t *test
 	}
 }
 
+func TestAuditSchemaSupportRejectsUnresolvedRefInUnexercisedBranch(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"rarely_set": map[string]any{"$ref": "#/$defs/missing"},
+		},
+		"$defs": map[string]any{
+			"present": map[string]any{"type": "string"},
+		},
+	}
+	if err := auditSchemaSupport(schema); err == nil {
+		t.Fatal("want an error for a $ref that does not resolve, even under a property no instance exercises")
+	}
+}
+
+func TestAuditSchemaSupportRejectsExternalRef(t *testing.T) {
+	schema := map[string]any{"$ref": "https://example.test/other.schema.json#/def"}
+	if err := auditSchemaSupport(schema); err == nil {
+		t.Fatal("want an error for a non-local schema reference")
+	}
+}
+
+func TestAuditSchemaSupportRejectsRefCycle(t *testing.T) {
+	schema := map[string]any{
+		"$defs": map[string]any{
+			"a": map[string]any{"$ref": "#/$defs/b"},
+			"b": map[string]any{"$ref": "#/$defs/a"},
+		},
+	}
+	if err := auditSchemaSupport(schema); err == nil {
+		t.Fatal("want an error for a $ref cycle that would recurse forever on an unchanged value")
+	}
+}
+
+func TestAuditSchemaSupportRejectsRefCycleThroughProperties(t *testing.T) {
+	schema := map[string]any{
+		"$ref": "#/$defs/node",
+		"$defs": map[string]any{
+			"node": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"child": map[string]any{"$ref": "#/$defs/node"}},
+			},
+		},
+	}
+	if err := auditSchemaSupport(schema); err == nil {
+		t.Fatal("want an error: this audit has no instance to bound recursion, so a self-referential schema reached through properties must still be rejected as a cycle")
+	}
+}
+
+func TestAuditSchemaSupportAllowsSharedDefsReferencedFromSiblingProperties(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"a": map[string]any{"$ref": "#/$defs/dur"},
+			"b": map[string]any{"$ref": "#/$defs/dur"},
+		},
+		"$defs": map[string]any{"dur": map[string]any{"type": "string"}},
+	}
+	if err := auditSchemaSupport(schema); err != nil {
+		t.Fatalf("reusing the same $defs entry from independent sibling properties must not be treated as a cycle: %v", err)
+	}
+}
+
 func TestAuditSchemaSupportAllowsAnnotationKeywords(t *testing.T) {
 	schema := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",

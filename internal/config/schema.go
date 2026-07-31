@@ -45,22 +45,51 @@ var supportedSchemaKeywords = map[string]bool{
 }
 
 // auditSchemaSupport walks every schema node reachable through properties,
-// $defs, items, not, anyOf, and additionalProperties, independent of any
-// configuration instance. schemaValidator implements only a subset of JSON
-// Schema, so this fails closed at load time when the embedded schema uses a
-// keyword, or a keyword shape, it does not enforce. Without this audit, a
-// future schema change could add a constraint that validate silently
-// ignores only for instances that happen to exercise the affected branch,
-// letting the published schema and runtime validation quietly diverge.
+// $defs, items, not, anyOf, additionalProperties, and $ref, independent of
+// any configuration instance. schemaValidator implements only a subset of
+// JSON Schema, so this fails closed at load time when the embedded schema
+// uses a keyword, or a keyword shape, it does not enforce. Without this
+// audit, a future schema change could add a constraint that validate
+// silently ignores only for instances that happen to exercise the affected
+// branch, letting the published schema and runtime validation quietly
+// diverge.
 func auditSchemaSupport(schema map[string]any) error {
+	return auditSchemaNode(schema, schema, nil)
+}
+
+// auditSchemaNode audits schema against root. refChain holds every $ref
+// pointer already followed along the current traversal path, from the root
+// down to schema, and is threaded through every recursive descent (not only
+// direct $ref hops). Unlike schemaValidator.validate, this walk has no
+// configuration instance to bound its recursion, so any schema whose
+// references form a cycle - reachable through $ref alone or through
+// properties/items/anyOf - would otherwise recurse forever; revisiting a
+// pointer already on the path is therefore always rejected.
+func auditSchemaNode(root, schema map[string]any, refChain map[string]bool) error {
 	for keyword := range schema {
 		if !supportedSchemaKeywords[keyword] {
 			return fmt.Errorf("schema keyword %q is not supported", keyword)
 		}
 	}
 	if ref, present := schema["$ref"]; present {
-		if _, ok := ref.(string); !ok {
+		refString, ok := ref.(string)
+		if !ok {
 			return fmt.Errorf(`schema keyword "$ref" must be a string`)
+		}
+		if refChain[refString] {
+			return fmt.Errorf("schema reference %q forms a cycle", refString)
+		}
+		resolved, err := resolveSchemaRef(root, refString)
+		if err != nil {
+			return err
+		}
+		chain := make(map[string]bool, len(refChain)+1)
+		for seen := range refChain {
+			chain[seen] = true
+		}
+		chain[refString] = true
+		if err := auditSchemaNode(root, resolved, chain); err != nil {
+			return err
 		}
 	}
 	if typ, present := schema["type"]; present {
@@ -73,7 +102,7 @@ func auditSchemaSupport(schema map[string]any) error {
 		if !ok {
 			return fmt.Errorf(`schema keyword "not" must be an object`)
 		}
-		if err := auditSchemaSupport(object); err != nil {
+		if err := auditSchemaNode(root, object, refChain); err != nil {
 			return err
 		}
 	}
@@ -92,7 +121,7 @@ func auditSchemaSupport(schema map[string]any) error {
 			if !ok {
 				return fmt.Errorf("schema property %q must be an object", name)
 			}
-			if err := auditSchemaSupport(propertySchema); err != nil {
+			if err := auditSchemaNode(root, propertySchema, refChain); err != nil {
 				return err
 			}
 		}
@@ -101,7 +130,7 @@ func auditSchemaSupport(schema map[string]any) error {
 		switch typed := additional.(type) {
 		case bool:
 		case map[string]any:
-			if err := auditSchemaSupport(typed); err != nil {
+			if err := auditSchemaNode(root, typed, refChain); err != nil {
 				return err
 			}
 		default:
@@ -124,7 +153,7 @@ func auditSchemaSupport(schema map[string]any) error {
 		if !ok {
 			return fmt.Errorf(`schema keyword "items" must be an object`)
 		}
-		if err := auditSchemaSupport(object); err != nil {
+		if err := auditSchemaNode(root, object, refChain); err != nil {
 			return err
 		}
 	}
@@ -177,7 +206,7 @@ func auditSchemaSupport(schema map[string]any) error {
 			if !ok {
 				return fmt.Errorf(`schema keyword "anyOf" must contain only objects`)
 			}
-			if err := auditSchemaSupport(alternative); err != nil {
+			if err := auditSchemaNode(root, alternative, refChain); err != nil {
 				return err
 			}
 		}
@@ -192,7 +221,7 @@ func auditSchemaSupport(schema map[string]any) error {
 			if !ok {
 				return fmt.Errorf("schema definition %q must be an object", name)
 			}
-			if err := auditSchemaSupport(definition); err != nil {
+			if err := auditSchemaNode(root, definition, refChain); err != nil {
 				return err
 			}
 		}
@@ -369,10 +398,18 @@ func validateScalar(schema map[string]any, value any, location string) error {
 }
 
 func (v *schemaValidator) resolve(ref string) (map[string]any, error) {
+	return resolveSchemaRef(v.root, ref)
+}
+
+// resolveSchemaRef resolves a JSON Pointer $ref against root. It rejects
+// external and non-pointer forms and any pointer that does not lead to an
+// existing object node, so both schemaValidator and auditSchemaSupport
+// share the same fail-closed notion of what a supported reference is.
+func resolveSchemaRef(root map[string]any, ref string) (map[string]any, error) {
 	if !strings.HasPrefix(ref, "#/") {
 		return nil, fmt.Errorf("unsupported schema reference %q", ref)
 	}
-	var current any = v.root
+	var current any = root
 	for _, segment := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
 		segment = strings.ReplaceAll(strings.ReplaceAll(segment, "~1", "/"), "~0", "~")
 		object, ok := current.(map[string]any)

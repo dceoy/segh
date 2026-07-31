@@ -130,6 +130,89 @@ func TestClientRetriesTransientErrors(t *testing.T) {
 	}
 }
 
+func TestClientRetriesBodyReadFailureForDecodedResponse(t *testing.T) {
+	var attempts atomic.Int32
+	client := &Client{
+		httpClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			if attempts.Add(1) == 1 {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       &partialThenErrorBody{data: []byte(`{"o`)},
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			}, nil
+		})},
+		baseURL:       "https://api.github.test",
+		hostname:      "github.com",
+		token:         "test-token",
+		responseLimit: maxResponseBytes,
+		wait:          func(context.Context, time.Duration) error { return nil },
+	}
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.Get(context.Background(), "/flaky-body", &response); err != nil {
+		t.Fatal(err)
+	}
+	if attempts.Load() != 2 || !response.OK {
+		t.Fatalf("attempts = %d, response = %#v", attempts.Load(), response)
+	}
+}
+
+func TestClientRetriesBodyReadFailureForStatusOnlyProbe(t *testing.T) {
+	var attempts atomic.Int32
+	client := &Client{
+		httpClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			if attempts.Add(1) == 1 {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       &partialThenErrorBody{data: []byte("partial")},
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		})},
+		baseURL:       "https://api.github.test",
+		hostname:      "github.com",
+		token:         "test-token",
+		responseLimit: maxResponseBytes,
+		wait:          func(context.Context, time.Duration) error { return nil },
+	}
+	if err := client.Get(context.Background(), "/flaky-probe", nil); err != nil {
+		t.Fatal(err)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts = %d", attempts.Load())
+	}
+}
+
+// partialThenErrorBody simulates a connection reset after some bytes have
+// already been delivered: the first Read returns data with no error, and
+// every subsequent Read fails, so callers cannot mistake it for io.EOF.
+type partialThenErrorBody struct {
+	data []byte
+	sent bool
+}
+
+func (r *partialThenErrorBody) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		return copy(p, r.data), nil
+	}
+	return 0, errors.New("connection reset by peer")
+}
+
+func (r *partialThenErrorBody) Close() error { return nil }
+
 func TestClientDoesNotRetryPermanentErrors(t *testing.T) {
 	var requests atomic.Int32
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
