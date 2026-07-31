@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -170,6 +171,62 @@ func TestCustomPropertiesFetchesEveryPage(t *testing.T) {
 	}
 	if len(observations) != 101 || !reflect.DeepEqual(pages, []string{"1", "2"}) {
 		t.Fatalf("observations = %d, pages = %#v", len(observations), pages)
+	}
+}
+
+func TestCustomPropertiesFailsClosedWhenAggregatePaginatedResponseExceedsByteBudget(t *testing.T) {
+	repositories := make([]apiRepository, 150)
+	page1 := make([]customPropertyRepository, 100)
+	for i := range repositories {
+		repositories[i] = apiRepository{ID: int64(i + 1), FullName: fmt.Sprintf("org/repo-%d", i+1)}
+	}
+	for i := range page1 {
+		page1[i] = customPropertyRepository{RepositoryID: int64(i + 1), RepositoryFullName: fmt.Sprintf("org/repo-%d", i+1)}
+	}
+	page2 := make([]customPropertyRepository, 50)
+	for i := range page2 {
+		page2[i] = customPropertyRepository{
+			RepositoryID: int64(i + 101), RepositoryFullName: fmt.Sprintf("org/repo-%d", i+101),
+		}
+	}
+	page1Body, err := json.Marshal(page1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page2Body, err := json.Marshal(page2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var pages []string
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		page := request.URL.Query().Get("page")
+		pages = append(pages, page)
+		switch page {
+		case "1":
+			_, _ = writer.Write(page1Body)
+		case "2":
+			_, _ = writer.Write(page2Body)
+		default:
+			t.Errorf("unexpected page %q", page)
+		}
+	})
+	// The budget covers the first page alone but not both pages combined,
+	// proving the bound is carried across the pagination loop rather than
+	// reset for each page independently.
+	service.customPropertiesByteBudget = int64(len(page1Body)) + int64(len(page2Body)) - 1
+
+	observations, err := service.customProperties(context.Background(), repositories)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") || !strings.Contains(err.Error(), "aggregate") {
+		t.Fatalf("err = %v, want an aggregate byte-budget error", err)
+	}
+	if !reflect.DeepEqual(pages, []string{"1", "2"}) {
+		t.Fatalf("pages fetched = %#v, want both pages requested before failing", pages)
+	}
+	for _, observation := range observations {
+		if observation.State == model.Available {
+			t.Fatalf("observations = %#v, want unavailable state after aggregate overflow", observations)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -18,6 +19,11 @@ type InventoryService struct {
 	cfg            config.Config
 	client         API
 	installationID int64
+
+	// customPropertiesByteBudget bounds the aggregate size of a paginated
+	// custom-properties response, mirroring the per-page Client.Get limit
+	// so that many small pages cannot bypass the response-size ceiling.
+	customPropertiesByteBudget int64
 
 	permissionMu  sync.Mutex
 	permissionErr *APIError
@@ -46,7 +52,10 @@ type apiInstallation struct {
 }
 
 func NewInventoryService(cfg config.Config, client API, installationID int64) *InventoryService {
-	return &InventoryService{cfg: cfg, client: client, installationID: installationID}
+	return &InventoryService{
+		cfg: cfg, client: client, installationID: installationID,
+		customPropertiesByteBudget: maxResponseBytes,
+	}
 }
 
 // notePermissionFailure records the first 401/403 encountered while collecting
@@ -327,6 +336,7 @@ func (s *InventoryService) customProperties(
 	ctx context.Context, repos []apiRepository,
 ) (map[int64]model.Observed[map[string]any], error) {
 	var response []customPropertyRepository
+	remainingBytes := s.customPropertiesByteBudget
 	for page := 1; ; page++ {
 		var batch []customPropertyRepository
 		apiPath := fmt.Sprintf(
@@ -334,6 +344,18 @@ func (s *InventoryService) customProperties(
 			pathEscape(s.cfg.Organization), page,
 		)
 		if err := s.client.Get(ctx, apiPath, &batch); err != nil {
+			return unavailableCustomProperties(repos, err), err
+		}
+		encoded, err := json.Marshal(batch)
+		if err != nil {
+			return unavailableCustomProperties(repos, err), err
+		}
+		remainingBytes -= int64(len(encoded))
+		if remainingBytes < 0 {
+			err := fmt.Errorf(
+				"custom-property paginated response exceeds %d bytes in aggregate",
+				s.customPropertiesByteBudget,
+			)
 			return unavailableCustomProperties(repos, err), err
 		}
 		response = append(response, batch...)

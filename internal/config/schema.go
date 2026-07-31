@@ -22,8 +22,183 @@ var loadSchema = sync.OnceValues(func() (map[string]any, error) {
 	if err := decoder.Decode(&schema); err != nil {
 		return nil, fmt.Errorf("decode embedded configuration schema: %w", err)
 	}
+	if err := auditSchemaSupport(schema); err != nil {
+		return nil, fmt.Errorf("embedded configuration schema uses an unsupported construct: %w", err)
+	}
 	return schema, nil
 })
+
+// supportedSchemaKeywords lists every JSON Schema keyword schemaValidator
+// understands, plus the draft 2020-12 annotation keywords that never
+// constrain an instance and so are always safe to ignore.
+var supportedSchemaKeywords = map[string]bool{
+	"$schema": true, "$id": true, "$defs": true,
+	"title": true, "description": true, "$comment": true,
+	"default": true, "examples": true, "deprecated": true,
+	"readOnly": true, "writeOnly": true,
+
+	"$ref": true, "not": true, "type": true, "const": true, "enum": true,
+	"properties": true, "additionalProperties": true, "required": true,
+	"items": true, "minItems": true, "uniqueItems": true,
+	"minLength": true, "pattern": true, "format": true,
+	"minimum": true, "maximum": true, "anyOf": true,
+}
+
+// auditSchemaSupport walks every schema node reachable through properties,
+// $defs, items, not, anyOf, and additionalProperties, independent of any
+// configuration instance. schemaValidator implements only a subset of JSON
+// Schema, so this fails closed at load time when the embedded schema uses a
+// keyword, or a keyword shape, it does not enforce. Without this audit, a
+// future schema change could add a constraint that validate silently
+// ignores only for instances that happen to exercise the affected branch,
+// letting the published schema and runtime validation quietly diverge.
+func auditSchemaSupport(schema map[string]any) error {
+	for keyword := range schema {
+		if !supportedSchemaKeywords[keyword] {
+			return fmt.Errorf("schema keyword %q is not supported", keyword)
+		}
+	}
+	if ref, present := schema["$ref"]; present {
+		if _, ok := ref.(string); !ok {
+			return fmt.Errorf(`schema keyword "$ref" must be a string`)
+		}
+	}
+	if typ, present := schema["type"]; present {
+		if _, ok := typ.(string); !ok {
+			return fmt.Errorf(`schema keyword "type" must be a string`)
+		}
+	}
+	if not, present := schema["not"]; present {
+		object, ok := not.(map[string]any)
+		if !ok {
+			return fmt.Errorf(`schema keyword "not" must be an object`)
+		}
+		if err := auditSchemaSupport(object); err != nil {
+			return err
+		}
+	}
+	if enum, present := schema["enum"]; present {
+		if _, ok := enum.([]any); !ok {
+			return fmt.Errorf(`schema keyword "enum" must be an array`)
+		}
+	}
+	if properties, present := schema["properties"]; present {
+		object, ok := properties.(map[string]any)
+		if !ok {
+			return fmt.Errorf(`schema keyword "properties" must be an object`)
+		}
+		for name, raw := range object {
+			propertySchema, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("schema property %q must be an object", name)
+			}
+			if err := auditSchemaSupport(propertySchema); err != nil {
+				return err
+			}
+		}
+	}
+	if additional, present := schema["additionalProperties"]; present {
+		switch typed := additional.(type) {
+		case bool:
+		case map[string]any:
+			if err := auditSchemaSupport(typed); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf(`schema keyword "additionalProperties" must be a boolean or an object`)
+		}
+	}
+	if required, present := schema["required"]; present {
+		items, ok := required.([]any)
+		if !ok {
+			return fmt.Errorf(`schema keyword "required" must be an array`)
+		}
+		for _, item := range items {
+			if _, ok := item.(string); !ok {
+				return fmt.Errorf(`schema keyword "required" must contain only strings`)
+			}
+		}
+	}
+	if items, present := schema["items"]; present {
+		object, ok := items.(map[string]any)
+		if !ok {
+			return fmt.Errorf(`schema keyword "items" must be an object`)
+		}
+		if err := auditSchemaSupport(object); err != nil {
+			return err
+		}
+	}
+	if minItems, present := schema["minItems"]; present {
+		if _, ok := integerKeyword(minItems); !ok {
+			return fmt.Errorf(`schema keyword "minItems" must be an integer`)
+		}
+	}
+	if uniqueItems, present := schema["uniqueItems"]; present {
+		if _, ok := uniqueItems.(bool); !ok {
+			return fmt.Errorf(`schema keyword "uniqueItems" must be a boolean`)
+		}
+	}
+	if minLength, present := schema["minLength"]; present {
+		if _, ok := integerKeyword(minLength); !ok {
+			return fmt.Errorf(`schema keyword "minLength" must be an integer`)
+		}
+	}
+	if pattern, present := schema["pattern"]; present {
+		text, ok := pattern.(string)
+		if !ok {
+			return fmt.Errorf(`schema keyword "pattern" must be a string`)
+		}
+		if _, err := regexp.Compile(text); err != nil {
+			return fmt.Errorf("compile schema pattern: %w", err)
+		}
+	}
+	if format, present := schema["format"]; present {
+		if _, ok := format.(string); !ok {
+			return fmt.Errorf(`schema keyword "format" must be a string`)
+		}
+	}
+	if minimum, present := schema["minimum"]; present {
+		if _, ok := numberKeyword(minimum); !ok {
+			return fmt.Errorf(`schema keyword "minimum" must be numeric`)
+		}
+	}
+	if maximum, present := schema["maximum"]; present {
+		if _, ok := numberKeyword(maximum); !ok {
+			return fmt.Errorf(`schema keyword "maximum" must be numeric`)
+		}
+	}
+	if anyOf, present := schema["anyOf"]; present {
+		alternatives, ok := anyOf.([]any)
+		if !ok {
+			return fmt.Errorf(`schema keyword "anyOf" must be an array`)
+		}
+		for _, raw := range alternatives {
+			alternative, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf(`schema keyword "anyOf" must contain only objects`)
+			}
+			if err := auditSchemaSupport(alternative); err != nil {
+				return err
+			}
+		}
+	}
+	if defs, present := schema["$defs"]; present {
+		object, ok := defs.(map[string]any)
+		if !ok {
+			return fmt.Errorf(`schema keyword "$defs" must be an object`)
+		}
+		for name, raw := range object {
+			definition, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("schema definition %q must be an object", name)
+			}
+			if err := auditSchemaSupport(definition); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 func validateConfigDocument(document any) error {
 	data, err := json.Marshal(document)
