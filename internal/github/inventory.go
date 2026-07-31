@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -18,6 +19,11 @@ type InventoryService struct {
 	cfg            config.Config
 	client         API
 	installationID int64
+
+	// customPropertiesByteBudget bounds the aggregate size of a paginated
+	// custom-properties response, mirroring the per-page Client.Get limit
+	// so that many small pages cannot bypass the response-size ceiling.
+	customPropertiesByteBudget int64
 
 	permissionMu  sync.Mutex
 	permissionErr *APIError
@@ -46,7 +52,10 @@ type apiInstallation struct {
 }
 
 func NewInventoryService(cfg config.Config, client API, installationID int64) *InventoryService {
-	return &InventoryService{cfg: cfg, client: client, installationID: installationID}
+	return &InventoryService{
+		cfg: cfg, client: client, installationID: installationID,
+		customPropertiesByteBudget: maxResponseBytes,
+	}
 }
 
 // notePermissionFailure records the first 401/403 encountered while collecting
@@ -327,9 +336,36 @@ func (s *InventoryService) customProperties(
 	ctx context.Context, repos []apiRepository,
 ) (map[int64]model.Observed[map[string]any], error) {
 	var response []customPropertyRepository
-	apiPath := fmt.Sprintf("/orgs/%s/properties/values?per_page=100", pathEscape(s.cfg.Organization))
-	if err := s.client.GetAll(ctx, apiPath, &response); err != nil {
-		return unavailableCustomProperties(repos, err), err
+	remainingBytes := s.customPropertiesByteBudget
+	for page := 1; ; page++ {
+		var batch []customPropertyRepository
+		apiPath := fmt.Sprintf(
+			"/orgs/%s/properties/values?per_page=100&page=%d",
+			pathEscape(s.cfg.Organization), page,
+		)
+		if err := s.client.Get(ctx, apiPath, &batch); err != nil {
+			return unavailableCustomProperties(repos, err), err
+		}
+		encoded, err := json.Marshal(batch)
+		if err != nil {
+			return unavailableCustomProperties(repos, err), err
+		}
+		remainingBytes -= int64(len(encoded))
+		if remainingBytes < 0 {
+			err := fmt.Errorf(
+				"custom-property paginated response exceeds %d bytes in aggregate",
+				s.customPropertiesByteBudget,
+			)
+			return unavailableCustomProperties(repos, err), err
+		}
+		response = append(response, batch...)
+		if len(response) > len(repos) {
+			err := fmt.Errorf("custom-property response contains more repositories than organization enumeration")
+			return unavailableCustomProperties(repos, err), err
+		}
+		if len(batch) < 100 || len(response) == len(repos) {
+			break
+		}
 	}
 	byID, err := repositoryIndex(repos)
 	if err != nil {
@@ -472,32 +508,39 @@ func repositoryFromAPI(raw apiRepository) model.Repository {
 }
 
 func (s *InventoryService) collectActionsControls(ctx context.Context, base string, repo *model.Repository) {
-	var actions struct {
+	actions := observe(s, "actions_permissions", func() (struct {
 		Enabled            bool   `json:"enabled"`
 		AllowedActions     string `json:"allowed_actions"`
 		SHAPinningRequired *bool  `json:"sha_pinning_required"`
-	}
-	if err := s.client.Get(ctx, base+"/actions/permissions", &actions); err != nil {
-		s.notePermissionFailure(err)
-		state, reason := ErrorState(err)
-		repo.ActionsEnabled = model.Observed[bool]{State: model.Availability(state), Source: "actions_permissions", Reason: reason}
-		repo.AllowedActions = model.Observed[string]{State: model.Availability(state), Source: "actions_permissions", Reason: reason}
-		repo.SHAPinningEnforced = model.Observed[bool]{State: model.Availability(state), Source: "actions_permissions", Reason: reason}
+	}, error) {
+		var response struct {
+			Enabled            bool   `json:"enabled"`
+			AllowedActions     string `json:"allowed_actions"`
+			SHAPinningRequired *bool  `json:"sha_pinning_required"`
+		}
+		err := s.client.Get(ctx, base+"/actions/permissions", &response)
+		return response, err
+	})
+	if actions.State != model.Available {
+		repo.ActionsEnabled = model.Observed[bool]{State: actions.State, Source: actions.Source, Reason: actions.Reason}
+		repo.AllowedActions = model.Observed[string]{State: actions.State, Source: actions.Source, Reason: actions.Reason}
+		repo.SHAPinningEnforced = model.Observed[bool]{State: actions.State, Source: actions.Source, Reason: actions.Reason}
 	} else {
-		repo.ActionsEnabled = model.Observed[bool]{State: model.Available, Value: actions.Enabled, Source: "actions_permissions"}
-		repo.AllowedActions = model.Observed[string]{State: model.Available, Value: actions.AllowedActions, Source: "actions_permissions"}
-		if actions.SHAPinningRequired == nil {
+		repo.ActionsEnabled = model.Observed[bool]{State: model.Available, Value: actions.Value.Enabled, Source: actions.Source}
+		repo.AllowedActions = model.Observed[string]{State: model.Available, Value: actions.Value.AllowedActions, Source: actions.Source}
+		if actions.Value.SHAPinningRequired == nil {
 			repo.SHAPinningEnforced = model.Observed[bool]{State: model.Unknown, Source: "actions_permissions", Reason: "field unavailable"}
 		} else {
-			repo.SHAPinningEnforced = model.Observed[bool]{State: model.Available, Value: *actions.SHAPinningRequired, Source: "actions_permissions"}
+			repo.SHAPinningEnforced = model.Observed[bool]{
+				State: model.Available, Value: *actions.Value.SHAPinningRequired, Source: actions.Source,
+			}
 		}
 	}
 	var workflowPermissions struct {
 		DefaultWorkflowPermissions string `json:"default_workflow_permissions"`
 	}
-	repo.DefaultWorkflowPermissions = getObserved("workflow_permissions", func() (string, error) {
+	repo.DefaultWorkflowPermissions = observe(s, "workflow_permissions", func() (string, error) {
 		if err := s.client.Get(ctx, base+"/actions/permissions/workflow", &workflowPermissions); err != nil {
-			s.notePermissionFailure(err)
 			return "", err
 		}
 		return workflowPermissions.DefaultWorkflowPermissions, nil
@@ -505,9 +548,8 @@ func (s *InventoryService) collectActionsControls(ctx context.Context, base stri
 	var forkApproval struct {
 		ApprovalPolicy string `json:"approval_policy"`
 	}
-	repo.ForkPRApproval = getObserved("fork_pr_approval", func() (bool, error) {
+	repo.ForkPRApproval = observe(s, "fork_pr_approval", func() (bool, error) {
 		if err := s.client.Get(ctx, base+"/actions/permissions/fork-pr-contributor-approval", &forkApproval); err != nil {
-			s.notePermissionFailure(err)
 			return false, err
 		}
 		return forkApproval.ApprovalPolicy != "first_time_contributors_new_to_github", nil
@@ -600,11 +642,14 @@ func mergeControl(rulesErr error, ruleTypePresent bool, classic model.Observed[b
 	return model.Observed[bool]{State: model.Availability(state), Source: "rules_branches", Reason: "ruleset evaluation unavailable: " + reason}
 }
 
-func getObserved[T any](source string, getter func() (T, error)) model.Observed[T] {
-	value, err := getter()
+func observe[T any](
+	service *InventoryService, source string, fetch func() (T, error),
+) model.Observed[T] {
+	value, err := fetch()
 	if err == nil {
 		return model.Observed[T]{State: model.Available, Value: value, Source: source}
 	}
+	service.notePermissionFailure(err)
 	state, reason := ErrorState(err)
 	return model.Observed[T]{State: model.Availability(state), Source: source, Reason: reason}
 }

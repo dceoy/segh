@@ -2,12 +2,14 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dceoy/segh/internal/model"
@@ -135,6 +137,99 @@ func TestCustomPropertiesJoinOrganizationResponseByRepositoryID(t *testing.T) {
 	}
 }
 
+func TestCustomPropertiesFetchesEveryPage(t *testing.T) {
+	var pages []string
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		page := request.URL.Query().Get("page")
+		pages = append(pages, page)
+		switch page {
+		case "1":
+			items := make([]string, 100)
+			for i := range items {
+				items[i] = fmt.Sprintf(
+					`{"repository_id":%d,"repository_full_name":"org/repo-%d","properties":[]}`,
+					i+1, i+1,
+				)
+			}
+			_, _ = io.WriteString(writer, "["+strings.Join(items, ",")+"]")
+		case "2":
+			_, _ = io.WriteString(
+				writer,
+				`[{"repository_id":101,"repository_full_name":"org/repo-101","properties":[]}]`,
+			)
+		default:
+			t.Errorf("unexpected page %q", page)
+		}
+	})
+	repositories := make([]apiRepository, 101)
+	for i := range repositories {
+		repositories[i] = apiRepository{ID: int64(i + 1), FullName: fmt.Sprintf("org/repo-%d", i+1)}
+	}
+	observations, err := service.customProperties(context.Background(), repositories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 101 || !reflect.DeepEqual(pages, []string{"1", "2"}) {
+		t.Fatalf("observations = %d, pages = %#v", len(observations), pages)
+	}
+}
+
+func TestCustomPropertiesFailsClosedWhenAggregatePaginatedResponseExceedsByteBudget(t *testing.T) {
+	repositories := make([]apiRepository, 150)
+	page1 := make([]customPropertyRepository, 100)
+	for i := range repositories {
+		repositories[i] = apiRepository{ID: int64(i + 1), FullName: fmt.Sprintf("org/repo-%d", i+1)}
+	}
+	for i := range page1 {
+		page1[i] = customPropertyRepository{RepositoryID: int64(i + 1), RepositoryFullName: fmt.Sprintf("org/repo-%d", i+1)}
+	}
+	page2 := make([]customPropertyRepository, 50)
+	for i := range page2 {
+		page2[i] = customPropertyRepository{
+			RepositoryID: int64(i + 101), RepositoryFullName: fmt.Sprintf("org/repo-%d", i+101),
+		}
+	}
+	page1Body, err := json.Marshal(page1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page2Body, err := json.Marshal(page2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var pages []string
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		page := request.URL.Query().Get("page")
+		pages = append(pages, page)
+		switch page {
+		case "1":
+			_, _ = writer.Write(page1Body)
+		case "2":
+			_, _ = writer.Write(page2Body)
+		default:
+			t.Errorf("unexpected page %q", page)
+		}
+	})
+	// The budget covers the first page alone but not both pages combined,
+	// proving the bound is carried across the pagination loop rather than
+	// reset for each page independently.
+	service.customPropertiesByteBudget = int64(len(page1Body)) + int64(len(page2Body)) - 1
+
+	observations, err := service.customProperties(context.Background(), repositories)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") || !strings.Contains(err.Error(), "aggregate") {
+		t.Fatalf("err = %v, want an aggregate byte-budget error", err)
+	}
+	if !reflect.DeepEqual(pages, []string{"1", "2"}) {
+		t.Fatalf("pages fetched = %#v, want both pages requested before failing", pages)
+	}
+	for _, observation := range observations {
+		if observation.State == model.Available {
+			t.Fatalf("observations = %#v, want unavailable state after aggregate overflow", observations)
+		}
+	}
+}
+
 func TestCustomPropertiesFailClosedOnIncompleteOrInconsistentOrganizationResponse(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -232,16 +327,78 @@ func TestEnrichmentUsesOnlyNinePerRepositoryRequests(t *testing.T) {
 	}
 }
 
-func TestGetObserved(t *testing.T) {
-	boolValue := getObserved("bool", func() (bool, error) { return true, nil })
-	if boolValue.State != model.Available || !boolValue.Value {
-		t.Fatalf("bool observation = %#v", boolValue)
+func TestObserveCentralizesAvailabilityAndPermissionFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantState  model.Availability
+		wantValue  bool
+		permission bool
+	}{
+		{"success", nil, model.Available, true, false},
+		{
+			"unsupported",
+			&APIError{StatusCode: http.StatusNotImplemented, Message: "unsupported"},
+			model.Unsupported,
+			false,
+			false,
+		},
+		{
+			"unknown",
+			&APIError{StatusCode: http.StatusBadRequest, Message: "bad request"},
+			model.Unknown,
+			false,
+			false,
+		},
+		{
+			"unauthorized",
+			&APIError{StatusCode: http.StatusUnauthorized, Message: "unauthorized"},
+			model.Unknown,
+			false,
+			true,
+		},
+		{
+			"forbidden",
+			&APIError{StatusCode: http.StatusForbidden, Message: "forbidden"},
+			model.Unknown,
+			false,
+			true,
+		},
 	}
-	stringValue := getObserved("string", func() (string, error) {
-		return "", &APIError{StatusCode: http.StatusNotImplemented, Message: "unsupported"}
-	})
-	if stringValue.State != model.Unsupported || stringValue.Reason != "unsupported" {
-		t.Fatalf("string observation = %#v", stringValue)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &InventoryService{}
+			observation := observe(service, "fixture", func() (bool, error) {
+				return true, test.err
+			})
+			if observation.State != test.wantState || observation.Value != test.wantValue ||
+				observation.Source != "fixture" {
+				t.Fatalf("observation = %#v", observation)
+			}
+			if got := service.permissionErr != nil; got != test.permission {
+				t.Fatalf("permission failure recorded = %v, want %v", got, test.permission)
+			}
+		})
+	}
+}
+
+func TestPermissionFailureRetainsFirstErrorDuringConcurrentCollection(t *testing.T) {
+	service := &InventoryService{}
+	first := &APIError{StatusCode: http.StatusUnauthorized, Message: "first"}
+	service.notePermissionFailure(first)
+	var workers sync.WaitGroup
+	for range 32 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			service.notePermissionFailure(
+				&APIError{StatusCode: http.StatusForbidden, Message: "later"},
+			)
+		}()
+	}
+	workers.Wait()
+	if service.permissionErr != first {
+		t.Fatalf("permissionErr = %#v, want first error %#v", service.permissionErr, first)
 	}
 }
 

@@ -2,175 +2,122 @@ package github
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
-	"os"
-	"path/filepath"
+	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestClientUsesHostnameAndAPIVersionHeaderPerRequest(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "gh")
-	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$GH_TEST_ARGS\"\nprintf '%s' '[{\"id\":1,\"full_name\":\"org/repo\"}]'\n"
-	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
+func TestClientSendsAuthenticatedVersionedRequest(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.RequestURI() != "/orgs/org/repos?per_page=100&page=1" {
+			t.Errorf("request URI = %q", request.URL.RequestURI())
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Errorf("Authorization = %q", got)
+		}
+		if got := request.Header.Get("X-GitHub-Api-Version"); got != githubAPIVersion {
+			t.Errorf("X-GitHub-Api-Version = %q", got)
+		}
+		_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo"}]`)
+	}), "github.example")
+	var repositories []apiRepository
+	if err := client.Get(
+		context.Background(), "/orgs/org/repos?per_page=100&page=1", &repositories,
+	); err != nil {
 		t.Fatal(err)
 	}
-	// #nosec G302 -- this temporary test fixture must be executable.
-	if err := os.Chmod(script, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	argsPath := filepath.Join(dir, "args")
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GH_TOKEN", "test-token")
-	t.Setenv("GH_HOST", "GitHub.Example")
-	t.Setenv("GH_TEST_ARGS", argsPath)
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var page []apiRepository
-	if err := client.Get(context.Background(), "/orgs/org/repos?per_page=100&page=1", &page); err != nil {
-		t.Fatal(err)
-	}
-	args, err := os.ReadFile(argsPath) // #nosec G304 -- argsPath is created inside this test's unique temporary directory.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(
-		string(args),
-		"api --hostname github.example --method GET --header X-GitHub-Api-Version: 2022-11-28 /orgs/org/repos?per_page=100&page=1",
-	) {
-		t.Fatalf("args = %q", args)
-	}
-	if client.Hostname() != "github.example" {
-		t.Fatalf("hostname = %q", client.Hostname())
-	}
-	if len(page) != 1 {
-		t.Fatalf("page = %#v", page)
+	if client.Hostname() != "github.example" || len(repositories) != 1 {
+		t.Fatalf("hostname = %q, repositories = %#v", client.Hostname(), repositories)
 	}
 }
 
-func TestClientUsesGitHubCLIPaginationForOrganizationCollections(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "gh")
-	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$GH_TEST_ARGS\"\nprintf '%s' '[[{\"repository_id\":1}]]'\n"
-	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
+func TestAPIBaseURLSupportsGitHubAndEnterpriseHosts(t *testing.T) {
+	tests := []struct {
+		host string
+		want string
+	}{
+		{"github.com", "https://api.github.com"},
+		{"octocorp.ghe.com", "https://api.octocorp.ghe.com"},
+		{"api.octocorp.ghe.com", "https://api.octocorp.ghe.com"},
+		{"github.example", "https://github.example/api/v3"},
+		{"github.example:8443", "https://github.example:8443/api/v3"},
+		{"[2001:db8::1]", "https://[2001:db8::1]/api/v3"},
 	}
-	// #nosec G302 -- this temporary test fixture must be executable.
-	if err := os.Chmod(script, 0o700); err != nil {
-		t.Fatal(err)
+	for _, test := range tests {
+		t.Run(test.host, func(t *testing.T) {
+			got, err := apiBaseURL(test.host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("apiBaseURL() = %q, want %q", got, test.want)
+			}
+		})
 	}
-	argsPath := filepath.Join(dir, "args")
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GH_TOKEN", "test-token")
-	t.Setenv("GH_HOST", "")
-	t.Setenv("GH_TEST_ARGS", argsPath)
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var values []customPropertyRepository
-	if err := client.GetAll(context.Background(), "/orgs/org/properties/values?per_page=100", &values); err != nil {
-		t.Fatal(err)
-	}
-	args, err := os.ReadFile(argsPath) // #nosec G304 -- argsPath is created inside this test's unique temporary directory.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(args), "--paginate --slurp /orgs/org/properties/values?per_page=100") {
-		t.Fatalf("args = %q", args)
-	}
-	if client.Hostname() != "github.com" || len(values) != 1 {
-		t.Fatalf("hostname = %q, values = %#v", client.Hostname(), values)
+	for _, invalid := range []string{"https://github.example", "github.example/path", "user@github.example"} {
+		if _, err := apiBaseURL(invalid); err == nil {
+			t.Errorf("apiBaseURL(%q) succeeded", invalid)
+		}
 	}
 }
 
-func TestClientSuppressesUnusedResponseBodies(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "gh")
-	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$GH_TEST_ARGS\"\nprintf '%s' '{\"unused\":\"response\"}'\n"
-	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// #nosec G302 -- this temporary test fixture must be executable.
-	if err := os.Chmod(script, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	argsPath := filepath.Join(dir, "args")
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GH_TOKEN", "test-token")
-	t.Setenv("GH_TEST_ARGS", argsPath)
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := client.Get(context.Background(), "/repos/org/repo/dependency-graph/sbom", nil); err != nil {
-		t.Fatal(err)
-	}
-	args, err := os.ReadFile(argsPath) // #nosec G304 -- argsPath is inside this test's temporary directory.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(args), "--silent /repos/org/repo/dependency-graph/sbom") {
-		t.Fatalf("args = %q", args)
+func TestClientSuppressesUnusedResponseBodiesWithoutSizeLimit(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(writer, strings.Repeat("x", 17))
+	}), "github.com")
+	client.responseLimit = 16
+	if err := client.Get(context.Background(), "/large", nil); err != nil {
+		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestClientMapsGitHubCLIHTTPError(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "gh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' 'gh: Not Found (HTTP 404)' >&2\nexit 1\n"), 0o600); err != nil {
-		t.Fatal(err)
+func TestClientBoundsDecodedResponseBodies(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(writer, strings.Repeat("x", 17))
+	}), "github.com")
+	client.responseLimit = 16
+	var out []byte
+	err := client.Get(context.Background(), "/large", &out)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 16 bytes") {
+		t.Fatalf("err = %v", err)
 	}
-	// #nosec G302 -- this temporary test fixture must be executable.
-	if err := os.Chmod(script, 0o700); err != nil {
-		t.Fatal(err)
+}
+
+func TestClientMapsAndSanitizesHTTPError(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(writer, `{"message":"missing test-token"}`)
+	}), "github.com")
+	err := client.Get(context.Background(), "/missing", &struct{}{})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
+		t.Fatalf("err = %v", err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GH_TOKEN", "test-token")
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
+	if strings.Contains(err.Error(), "test-token") || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("error was not sanitized: %v", err)
 	}
-	err = client.Get(context.Background(), "/missing", &struct{}{})
 	state, _ := ErrorState(err)
 	if state != "unsupported" {
-		t.Fatalf("err = %v, state = %s", err, state)
+		t.Fatalf("state = %q", state)
 	}
 }
 
-func TestClientRetriesTransientGitHubCLIError(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "gh")
-	body := `#!/bin/sh
-count=0
-test ! -f "$GH_TEST_COUNT" || count=$(cat "$GH_TEST_COUNT")
-count=$((count + 1))
-printf '%s' "$count" > "$GH_TEST_COUNT"
-if test "$count" -eq 1; then
-  printf '%s' 'gh: Service Unavailable (HTTP 503)' >&2
-  exit 1
-fi
-printf '%s' '{"ok":true}'
-`
-	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// #nosec G302 -- this temporary test fixture must be executable.
-	if err := os.Chmod(script, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	countPath := filepath.Join(dir, "count")
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GH_TOKEN", "test-token")
-	t.Setenv("GH_TEST_COUNT", countPath)
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestClientRetriesTransientErrors(t *testing.T) {
+	var requests atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(writer, `{"message":"temporarily unavailable"}`)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"ok":true}`)
+	}), "github.com")
 	client.wait = func(context.Context, time.Duration) error { return nil }
 	var response struct {
 		OK bool `json:"ok"`
@@ -178,58 +125,113 @@ printf '%s' '{"ok":true}'
 	if err := client.Get(context.Background(), "/transient", &response); err != nil {
 		t.Fatal(err)
 	}
-	count, err := os.ReadFile(countPath) // #nosec G304 -- countPath is created inside this test's unique temporary directory.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(count) != "2" || !response.OK {
-		t.Fatalf("attempts = %q, response = %#v", count, response)
+	if requests.Load() != 2 || !response.OK {
+		t.Fatalf("requests = %d, response = %#v", requests.Load(), response)
 	}
 }
 
-func TestClientDoesNotRetryPermanentGitHubCLIError(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "gh")
-	body := `#!/bin/sh
-count=0
-test ! -f "$GH_TEST_COUNT" || count=$(cat "$GH_TEST_COUNT")
-count=$((count + 1))
-printf '%s' "$count" > "$GH_TEST_COUNT"
-printf '%s' 'gh: Unauthorized (HTTP 401)' >&2
-exit 1
-`
-	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
+func TestClientRetriesBodyReadFailureForDecodedResponse(t *testing.T) {
+	var attempts atomic.Int32
+	client := &Client{
+		httpClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			if attempts.Add(1) == 1 {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       &partialThenErrorBody{data: []byte(`{"o`)},
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			}, nil
+		})},
+		baseURL:       "https://api.github.test",
+		hostname:      "github.com",
+		token:         "test-token",
+		responseLimit: maxResponseBytes,
+		wait:          func(context.Context, time.Duration) error { return nil },
+	}
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.Get(context.Background(), "/flaky-body", &response); err != nil {
 		t.Fatal(err)
 	}
-	// #nosec G302 -- this temporary test fixture must be executable.
-	if err := os.Chmod(script, 0o700); err != nil {
+	if attempts.Load() != 2 || !response.OK {
+		t.Fatalf("attempts = %d, response = %#v", attempts.Load(), response)
+	}
+}
+
+func TestClientRetriesBodyReadFailureForStatusOnlyProbe(t *testing.T) {
+	var attempts atomic.Int32
+	client := &Client{
+		httpClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			if attempts.Add(1) == 1 {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       &partialThenErrorBody{data: []byte("partial")},
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		})},
+		baseURL:       "https://api.github.test",
+		hostname:      "github.com",
+		token:         "test-token",
+		responseLimit: maxResponseBytes,
+		wait:          func(context.Context, time.Duration) error { return nil },
+	}
+	if err := client.Get(context.Background(), "/flaky-probe", nil); err != nil {
 		t.Fatal(err)
 	}
-	countPath := filepath.Join(dir, "count")
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GH_TOKEN", "test-token")
-	t.Setenv("GH_TEST_COUNT", countPath)
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts = %d", attempts.Load())
 	}
+}
+
+// partialThenErrorBody simulates a connection reset after some bytes have
+// already been delivered: the first Read returns data with no error, and
+// every subsequent Read fails, so callers cannot mistake it for io.EOF.
+type partialThenErrorBody struct {
+	data []byte
+	sent bool
+}
+
+func (r *partialThenErrorBody) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		return copy(p, r.data), nil
+	}
+	return 0, errors.New("connection reset by peer")
+}
+
+func (r *partialThenErrorBody) Close() error { return nil }
+
+func TestClientDoesNotRetryPermanentErrors(t *testing.T) {
+	var requests atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		writer.WriteHeader(http.StatusUnauthorized)
+	}), "github.com")
 	client.wait = func(context.Context, time.Duration) error {
-		t.Fatal("permanent failures must not wait for a retry")
+		t.Fatal("permanent failures must not wait")
 		return nil
 	}
 	if err := client.Get(context.Background(), "/permanent", &struct{}{}); err == nil {
 		t.Fatal("expected API error")
 	}
-	count, err := os.ReadFile(countPath) // #nosec G304 -- countPath is created inside this test's unique temporary directory.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(count) != "1" {
-		t.Fatalf("attempts = %q, want 1", count)
+	if requests.Load() != 1 {
+		t.Fatalf("requests = %d", requests.Load())
 	}
 }
 
-func TestRetryDelayUsesRateLimitFloor(t *testing.T) {
+func TestRetryDelayUsesRateLimitFloorAndServerHint(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -241,14 +243,16 @@ func TestRetryDelayUsesRateLimitFloor(t *testing.T) {
 			want: retryBaseDelay,
 		},
 		{
-			name: "too many requests",
-			err:  &APIError{StatusCode: http.StatusTooManyRequests},
+			name: "rate limit floor",
+			err:  &APIError{StatusCode: http.StatusTooManyRequests, rateLimit: true},
 			want: rateLimitRetryDelay,
 		},
 		{
-			name: "secondary rate limit",
-			err:  &APIError{StatusCode: http.StatusForbidden, Message: "secondary rate limit"},
-			want: rateLimitRetryDelay,
+			name: "server retry hint",
+			err: &APIError{
+				StatusCode: http.StatusForbidden, rateLimit: true, retryAfter: 2 * rateLimitRetryDelay,
+			},
+			want: 2 * rateLimitRetryDelay,
 		},
 	}
 	for _, test := range tests {
@@ -260,6 +264,17 @@ func TestRetryDelayUsesRateLimitFloor(t *testing.T) {
 	}
 }
 
+func TestClientHonorsContextCancellation(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("canceled request reached the server")
+	}), "github.com")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := client.Get(ctx, "/canceled", &struct{}{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestClientRequiresExternalToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	if _, err := NewClient(); err == nil {
@@ -267,19 +282,54 @@ func TestClientRequiresExternalToken(t *testing.T) {
 	}
 }
 
-func TestReplaceEnvironmentOverridesEnterpriseToken(t *testing.T) {
-	environment := replaceEnvironment(
-		[]string{"PATH=/bin", "GH_ENTERPRISE_TOKEN=stale", "OTHER=value"},
-		"GH_ENTERPRISE_TOKEN",
-		"current",
-	)
-	var matches []string
-	for _, item := range environment {
-		if strings.HasPrefix(item, "GH_ENTERPRISE_TOKEN=") {
-			matches = append(matches, item)
-		}
+func newTestClient(t *testing.T, handler http.Handler, hostname string) *Client {
+	t.Helper()
+	return &Client{
+		httpClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if err := request.Context().Err(); err != nil {
+				return nil, err
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			return recorder.Result(), nil
+		})},
+		baseURL:       "https://api.github.test",
+		hostname:      hostname,
+		token:         "test-token",
+		responseLimit: maxResponseBytes,
+		wait:          waitForRetry,
 	}
-	if len(matches) != 1 || matches[0] != "GH_ENTERPRISE_TOKEN=current" {
-		t.Fatalf("enterprise token entries = %#v", matches)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestResponseRetryDelay(t *testing.T) {
+	reset := time.Now().Add(10 * time.Minute).Unix()
+	response := &http.Response{Header: http.Header{"X-Ratelimit-Reset": {time.Unix(reset, 0).Format(time.RFC3339)}}}
+	if got := responseRetryDelay(response); got != 0 {
+		t.Fatalf("invalid reset delay = %s", got)
+	}
+	response.Header.Set("Retry-After", "12")
+	if got := responseRetryDelay(response); got != 12*time.Second {
+		t.Fatalf("Retry-After delay = %s", got)
+	}
+}
+
+func TestAPIErrorClassification(t *testing.T) {
+	tests := map[int]string{
+		http.StatusNotFound:       "unsupported",
+		http.StatusGone:           "unsupported",
+		http.StatusNotImplemented: "unsupported",
+		http.StatusForbidden:      "unknown",
+	}
+	for status, want := range tests {
+		state, _ := ErrorState(&APIError{StatusCode: status, Message: "fixture"})
+		if !reflect.DeepEqual(state, want) {
+			t.Errorf("status %d state = %q, want %q", status, state, want)
+		}
 	}
 }

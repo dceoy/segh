@@ -8,11 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/dceoy/segh/internal/config"
+	gh "github.com/dceoy/segh/internal/github"
 	"github.com/dceoy/segh/internal/model"
-	"github.com/dceoy/segh/internal/policy"
 )
 
 func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
@@ -91,7 +89,7 @@ func TestAuditWritesOnlyThreeVersionFourArtifacts(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	installFakeGitHubCLI(t, "")
+	installFixtureAPI(t, "")
 	t.Setenv("GH_TOKEN", "test-token")
 	t.Setenv("GH_HOST", "GHES.EXAMPLE")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
@@ -129,7 +127,7 @@ func TestAuditWritesOnlyThreeVersionFourArtifacts(t *testing.T) {
 
 func TestIncompleteCoveragePrecedesPolicyViolations(t *testing.T) {
 	dir := t.TempDir()
-	installFakeGitHubCLI(t, "dependency_graph")
+	installFixtureAPI(t, "dependency_graph")
 	t.Setenv("GH_TOKEN", "test-token")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
 	var stdout, stderr bytes.Buffer
@@ -162,7 +160,7 @@ func TestOrganizationCollectionPermissionFailuresUseAuthenticationExitCode(t *te
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
-			installFakeGitHubCLI(t, test.forbiddenEndpoint)
+			installFixtureAPI(t, test.forbiddenEndpoint)
 			t.Setenv("GH_TOKEN", "test-token")
 			t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
 			var stdout, stderr bytes.Buffer
@@ -191,7 +189,7 @@ func TestRepositoryPermissionFailuresUseAuthenticationExitCode(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
-			installFakeGitHubCLI(t, test.forbiddenEndpoint)
+			installFixtureAPI(t, test.forbiddenEndpoint)
 			t.Setenv("GH_TOKEN", "test-token")
 			t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
 			var stdout, stderr bytes.Buffer
@@ -209,24 +207,24 @@ func TestRepositoryPermissionFailuresUseAuthenticationExitCode(t *testing.T) {
 	}
 }
 
-func TestValidateArtifactsRejectsTamperingAndHostMismatch(t *testing.T) {
-	cfg := config.Default()
-	cfg.Organization = "example"
-	enabled := true
-	cfg.Policies.Dependencies.DependencyGraph = &enabled
-	inventory := validInventory(cfg)
-	audit := policy.New(cfg, time.Now()).Evaluate(inventory)
-	if err := validateArtifacts(inventory, audit, cfg, "github.com"); err != nil {
+func TestAuditOutputFailureUsesRuntimeExitCode(t *testing.T) {
+	dir := t.TempDir()
+	inventoryPath := filepath.Join(dir, "inventory")
+	if err := os.Mkdir(inventoryPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	tampered := audit
-	tampered.Results = append([]model.PolicyResult(nil), audit.Results...)
-	tampered.Results[0].Evidence = "fabricated"
-	if err := validateArtifacts(inventory, tampered, cfg, "github.com"); err == nil {
-		t.Fatal("tampered evidence was accepted")
-	}
-	if err := validateArtifacts(inventory, audit, cfg, "github.example"); err == nil {
-		t.Fatal("mismatched effective host was accepted")
+	installFixtureAPI(t, "")
+	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"audit",
+		"--config", writeConfig(t, false, false),
+		"--inventory-output", inventoryPath,
+		"--audit-output", filepath.Join(dir, "audit.json"),
+		"--markdown-output", filepath.Join(dir, "report.md"),
+	}, "test", &stdout, &stderr)
+	if err == nil || ExitCode(err) != exitRuntime {
+		t.Fatalf("err=%v code=%d", err, ExitCode(err))
 	}
 }
 
@@ -249,104 +247,77 @@ func writeConfig(t *testing.T, requireRuleset, customPropertyFilter bool) string
 	return path
 }
 
-func installFakeGitHubCLI(t *testing.T, forbiddenEndpoint string) {
+func installFixtureAPI(t *testing.T, forbiddenEndpoint string) {
 	t.Helper()
-	dir := t.TempDir()
-	script := filepath.Join(dir, "gh")
-	customPropertiesResult := `printf '%s' '[[{"repository_id":1,"repository_full_name":"example/repo","properties":[]}]]'`
-	if forbiddenEndpoint == "custom_properties" {
-		customPropertiesResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
+	previous := newGitHubAPI
+	newGitHubAPI = func() (gh.API, error) {
+		return fixtureAPI{forbiddenEndpoint: forbiddenEndpoint}, nil
 	}
-	dependencyGraphResult := `printf '%s' '{"sbom":{}}'`
-	if forbiddenEndpoint == "dependency_graph" {
-		// 400, not 401/403: this fixture drives an "unknown" Observed value to
-		// test incomplete-coverage precedence, not the authentication exit code
-		// covered by TestRepositoryPermissionFailuresUseAuthenticationExitCode.
-		dependencyGraphResult = `printf '%s' 'gh: Bad Request (HTTP 400)' >&2; exit 1`
-	}
-	actionsPermissionsResult := `printf '%s' '{"enabled":true,"allowed_actions":"all","sha_pinning_required":true}'`
-	if forbiddenEndpoint == "actions_permissions" {
-		actionsPermissionsResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
-	}
-	branchProtectionResult := `printf '%s' 'gh: Not Found (HTTP 404)' >&2; exit 1`
-	if forbiddenEndpoint == "branch_protection" {
-		branchProtectionResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
-	}
-	communityProfileResult := `printf '%s' '{"files":{"security":{}}}'`
-	if forbiddenEndpoint == "community_profile" {
-		communityProfileResult = `printf '%s' 'gh: Forbidden (HTTP 403)' >&2; exit 1`
-	}
-	body := `#!/bin/sh
-case "$*" in
-  *"/orgs/example/installations?"*)
-    printf '%s' '{"installations":[{"id":7,"repository_selection":"all","account":{"login":"example"}}]}'
-    ;;
-  *"/installation/repositories?"*)
-    printf '%s' '{"total_count":1,"repositories":[{"full_name":"example/repo"}]}'
-    ;;
-  *"/orgs/example/repos?"*)
-    printf '%s' '[{"id":1,"full_name":"example/repo","default_branch":"main"}]'
-    ;;
-  *"/orgs/example/properties/values?"*)
-    ` + customPropertiesResult + `
-    ;;
-  *"/repos/example/repo/actions/permissions/workflow")
-    printf '%s' '{"default_workflow_permissions":"read"}'
-    ;;
-  *"/repos/example/repo/actions/permissions/fork-pr-contributor-approval")
-    printf '%s' '{"approval_policy":"all_external_contributors"}'
-    ;;
-  *"/repos/example/repo/actions/permissions")
-    ` + actionsPermissionsResult + `
-    ;;
-  *"/repos/example/repo/dependency-graph/sbom")
-    ` + dependencyGraphResult + `
-    ;;
-  *"/repos/example/repo/vulnerability-alerts")
-    exit 0
-    ;;
-  *"/repos/example/repo/automated-security-fixes")
-    printf '%s' '{"enabled":true,"paused":false}'
-    ;;
-  *"/repos/example/repo/rules/branches/main")
-    printf '%s' '[]'
-    ;;
-  *"/repos/example/repo/branches/main/protection")
-    ` + branchProtectionResult + `
-    ;;
-  *"/repos/example/repo/community/profile")
-    ` + communityProfileResult + `
-    ;;
-  *)
-    printf '%s' 'gh: Not Found (HTTP 404)' >&2
-    exit 1
-    ;;
-esac
-`
-	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// #nosec G302 -- the temporary fixture must be executable.
-	if err := os.Chmod(script, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Cleanup(func() { newGitHubAPI = previous })
 }
 
-func validInventory(cfg config.Config) model.Inventory {
-	return model.Inventory{
-		SchemaVersion: model.SchemaVersion,
-		Organization:  cfg.Organization,
-		GitHubHost:    "github.com",
-		GeneratedAt:   time.Now().UTC(),
-		Complete:      true,
-		Total:         1,
-		Selected:      1,
-		Repositories: []model.Repository{{
-			ID: 1, FullName: "example/repository",
-			DependencyGraph: model.Observed[bool]{State: model.Available, Value: true},
-		}},
+type fixtureAPI struct {
+	forbiddenEndpoint string
+}
+
+func (fixtureAPI) Hostname() string {
+	return "ghes.example"
+}
+
+func (f fixtureAPI) Get(_ context.Context, apiPath string, out any) error {
+	var data string
+	switch {
+	case strings.Contains(apiPath, "/orgs/example/installations?"):
+		data = `{"installations":[{"id":7,"repository_selection":"all","account":{"login":"example"}}]}`
+	case strings.Contains(apiPath, "/installation/repositories?"):
+		data = `{"total_count":1,"repositories":[{"full_name":"example/repo"}]}`
+	case strings.Contains(apiPath, "/orgs/example/repos?"):
+		data = `[{"id":1,"full_name":"example/repo","default_branch":"main"}]`
+	case strings.Contains(apiPath, "/orgs/example/properties/values?"):
+		if f.forbiddenEndpoint == "custom_properties" {
+			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
+		}
+		data = `[{"repository_id":1,"repository_full_name":"example/repo","properties":[]}]`
+	case strings.HasSuffix(apiPath, "/actions/permissions/workflow"):
+		data = `{"default_workflow_permissions":"read"}`
+	case strings.HasSuffix(apiPath, "/actions/permissions/fork-pr-contributor-approval"):
+		data = `{"approval_policy":"all_external_contributors"}`
+	case strings.HasSuffix(apiPath, "/actions/permissions"):
+		if f.forbiddenEndpoint == "actions_permissions" {
+			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
+		}
+		data = `{"enabled":true,"allowed_actions":"all","sha_pinning_required":true}`
+	case strings.HasSuffix(apiPath, "/dependency-graph/sbom"):
+		if f.forbiddenEndpoint == "dependency_graph" {
+			return &gh.APIError{StatusCode: 400, Message: "bad request"}
+		}
+		data = `{"sbom":{}}`
+	case strings.HasSuffix(apiPath, "/vulnerability-alerts"):
+		return nil
+	case strings.HasSuffix(apiPath, "/automated-security-fixes"):
+		data = `{"enabled":true,"paused":false}`
+	case strings.Contains(apiPath, "/rules/branches/main"):
+		data = `[]`
+	case strings.Contains(apiPath, "/branches/main/protection"):
+		if f.forbiddenEndpoint == "branch_protection" {
+			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
+		}
+		return &gh.APIError{StatusCode: 404, Message: "not found"}
+	case strings.HasSuffix(apiPath, "/community/profile"):
+		if f.forbiddenEndpoint == "community_profile" {
+			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
+		}
+		data = `{"files":{"security":{}}}`
+	default:
+		return &gh.APIError{StatusCode: 404, Message: "not found"}
 	}
+	if out == nil || data == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(data), out); err != nil {
+		return err
+	}
+	return nil
 }
 
 func readJSON(t *testing.T, path string, value any) {

@@ -5,43 +5,44 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
-	"regexp"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
-// Sixty-four MiB bounds a response, including a flattened paginated
-// organization collection, so untrusted API data cannot exhaust memory.
 const (
 	maxResponseBytes    = 64 << 20
+	maxErrorBytes       = 64 << 10
 	maxAPIAttempts      = 4
 	retryBaseDelay      = time.Second
 	rateLimitRetryDelay = time.Minute
 	githubAPIVersion    = "2022-11-28"
 )
 
-var httpStatusPattern = regexp.MustCompile(`(?i)\bHTTP ([0-9]{3})\b`)
-var rateLimitPattern = regexp.MustCompile(`(?i)(rate limit|retry[- ]after|abuse detection)`)
-
 type API interface {
 	Get(context.Context, string, any) error
-	GetAll(context.Context, string, any) error
 	Hostname() string
 }
 
 type Client struct {
-	executable string
-	hostname   string
-	wait       func(context.Context, time.Duration) error
+	httpClient    *http.Client
+	baseURL       string
+	hostname      string
+	token         string
+	responseLimit int64
+	wait          func(context.Context, time.Duration) error
 }
 
 type APIError struct {
 	StatusCode int
 	Message    string
+	rateLimit  bool
+	retryAfter time.Duration
 }
 
 func (e *APIError) Error() string {
@@ -52,22 +53,47 @@ func (e *APIError) Error() string {
 }
 
 func NewClient() (*Client, error) {
-	if os.Getenv("GH_TOKEN") == "" {
+	token := os.Getenv("GH_TOKEN")
+	if token == "" {
 		return nil, fmt.Errorf("GH_TOKEN is required")
 	}
-	executable, err := exec.LookPath("gh")
+	hostname := effectiveHostname()
+	baseURL, err := apiBaseURL(hostname)
 	if err != nil {
-		return nil, fmt.Errorf("GitHub CLI is required: %w", err)
+		return nil, err
 	}
-	return &Client{executable: executable, hostname: effectiveHostname(), wait: waitForRetry}, nil
+	httpClient := &http.Client{
+		Transport: http.DefaultTransport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	return &Client{
+		httpClient:    httpClient,
+		baseURL:       baseURL,
+		hostname:      hostname,
+		token:         token,
+		responseLimit: maxResponseBytes,
+		wait:          waitForRetry,
+	}, nil
 }
 
 func (c *Client) Get(ctx context.Context, apiPath string, out any) error {
-	return c.get(ctx, apiPath, out, false)
-}
-
-func (c *Client) GetAll(ctx context.Context, apiPath string, out any) error {
-	return c.get(ctx, apiPath, out, true)
+	if !strings.HasPrefix(apiPath, "/") || strings.HasPrefix(apiPath, "//") {
+		return fmt.Errorf("API path must be absolute and host-relative")
+	}
+	if _, err := url.ParseRequestURI(apiPath); err != nil {
+		return fmt.Errorf("invalid API path: %w", err)
+	}
+	for attempt := 1; ; attempt++ {
+		err := c.runOnce(ctx, apiPath, out)
+		if err == nil || !retryableAPIError(err) || attempt == maxAPIAttempts {
+			return err
+		}
+		if err := c.wait(ctx, retryDelay(err, attempt)); err != nil {
+			return err
+		}
+	}
 }
 
 func (c *Client) Hostname() string {
@@ -82,87 +108,117 @@ func effectiveHostname() string {
 	return strings.ToLower(hostname)
 }
 
-func (c *Client) get(ctx context.Context, apiPath string, out any, paginate bool) error {
-	if !strings.HasPrefix(apiPath, "/") || strings.HasPrefix(apiPath, "//") {
-		return fmt.Errorf("API path must be absolute and host-relative")
+func apiBaseURL(hostname string) (string, error) {
+	parsed, err := url.Parse("https://" + hostname)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Path != "" ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("GH_HOST must be a hostname, optionally with a port")
 	}
-	for attempt := 1; ; attempt++ {
-		err := c.runOnce(ctx, apiPath, out, paginate)
-		if err == nil || !retryableAPIError(err) || attempt == maxAPIAttempts {
-			return err
+	host := parsed.Hostname()
+	port := parsed.Port()
+	switch {
+	case host == "github.com":
+		host = "api.github.com"
+	case strings.HasSuffix(host, ".ghe.com"):
+		host = "api." + strings.TrimPrefix(host, "api.")
+	default:
+		if port != "" {
+			host = net.JoinHostPort(host, port)
+		} else if strings.Contains(host, ":") {
+			host = "[" + host + "]"
 		}
-		delay := retryDelay(err, attempt)
-		if err := c.wait(ctx, delay); err != nil {
-			return err
+		return "https://" + host + "/api/v3", nil
+	}
+	if port != "" {
+		host = net.JoinHostPort(host, port)
+	}
+	return "https://" + host, nil
+}
+
+func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+apiPath, nil)
+	if err != nil {
+		return fmt.Errorf("build GitHub API request: %w", err)
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("User-Agent", "segh")
+	request.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return c.transportError(ctx, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return apiErrorFromResponse(response, c.token)
+	}
+	if out == nil {
+		// Status-only probes never materialize the body, so the decode-size
+		// limit below (which guards data buffered for json.Unmarshal) does not
+		// apply here; draining to io.Discard holds no memory regardless of size.
+		if _, err := io.Copy(io.Discard, response.Body); err != nil {
+			return c.transportError(ctx, fmt.Errorf("read GitHub API response: %w", err))
 		}
+		return nil
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, c.responseLimit+1))
+	if err != nil {
+		return c.transportError(ctx, fmt.Errorf("read GitHub API response: %w", err))
+	}
+	if int64(len(data)) > c.responseLimit {
+		return fmt.Errorf("GitHub API response exceeds %d bytes", c.responseLimit)
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return fmt.Errorf("decode GitHub API response: %w", err)
+	}
+	return nil
+}
+
+// transportError wraps a transport-level failure (connection establishment
+// or response-body read) as a retryable, status-0 APIError, mirroring how
+// the removed gh api path surfaced a command failure. It returns the bare
+// context error instead when the failure is actually a context
+// cancellation/timeout, which must not be retried.
+func (c *Client) transportError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return &APIError{Message: sanitizeAPIMessage(err.Error(), c.token)}
+}
+
+func apiErrorFromResponse(response *http.Response, token string) error {
+	data, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBytes))
+	message := strings.TrimSpace(string(data))
+	var body struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(data, &body) == nil && body.Message != "" {
+		message = body.Message
+	}
+	message = sanitizeAPIMessage(message, token)
+	rateLimited := response.StatusCode == http.StatusTooManyRequests ||
+		response.Header.Get("X-RateLimit-Remaining") == "0" ||
+		strings.Contains(strings.ToLower(message), "rate limit") ||
+		strings.Contains(strings.ToLower(message), "abuse detection")
+	return &APIError{
+		StatusCode: response.StatusCode,
+		Message:    message,
+		rateLimit:  rateLimited,
+		retryAfter: responseRetryDelay(response),
 	}
 }
 
-func (c *Client) runOnce(ctx context.Context, apiPath string, out any, paginate bool) error {
-	args := []string{
-		"api",
-		"--hostname", c.hostname,
-		"--method", http.MethodGet,
-		"--header", "X-GitHub-Api-Version: " + githubAPIVersion,
+func responseRetryDelay(response *http.Response) time.Duration {
+	if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
 	}
-	if out == nil {
-		// Probe calls need only the HTTP status. In particular, dependency-graph
-		// availability is checked through the SBOM endpoint; suppressing its body
-		// avoids retaining an otherwise unused organization-scale document.
-		args = append(args, "--silent")
+	if reset, err := strconv.ParseInt(response.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+		return max(0, time.Until(time.Unix(reset, 0)))
 	}
-	if paginate {
-		args = append(args, "--paginate", "--slurp")
-	}
-	args = append(args, apiPath)
-	cmd := exec.CommandContext(ctx, c.executable, args...) // #nosec G204 -- executable is resolved with LookPath and arguments never pass through a shell.
-	cmd.Env = os.Environ()
-	if c.hostname != "github.com" && !strings.HasSuffix(c.hostname, ".ghe.com") {
-		// gh uses GH_ENTERPRISE_TOKEN for custom hosts. Keep GH_TOKEN as segh's
-		// single external credential contract and translate it only for this child.
-		cmd.Env = replaceEnvironment(cmd.Env, "GH_ENTERPRISE_TOKEN", os.Getenv("GH_TOKEN"))
-	}
-	stdout := newBoundedBuffer(maxResponseBytes)
-	stderr := newBoundedBuffer(64 << 10)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	err := cmd.Run()
-	if stdout.exceeded {
-		return fmt.Errorf("GitHub API response exceeds %d bytes", maxResponseBytes)
-	}
-	if err != nil {
-		if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return ctx.Err()
-		}
-		message := sanitizeCLIError(stderr.String())
-		status := 0
-		if matches := httpStatusPattern.FindAllStringSubmatch(message, -1); len(matches) > 0 {
-			_, _ = fmt.Sscanf(matches[len(matches)-1][1], "%d", &status)
-		}
-		return &APIError{StatusCode: status, Message: message}
-	}
-	if out == nil || len(stdout.Bytes()) == 0 {
-		return nil
-	}
-	data := stdout.Bytes()
-	if paginate {
-		var pages [][]json.RawMessage
-		if err := json.Unmarshal(data, &pages); err != nil {
-			return fmt.Errorf("decode paginated GitHub CLI response: %w", err)
-		}
-		items := make([]json.RawMessage, 0)
-		for _, page := range pages {
-			items = append(items, page...)
-		}
-		data, err = json.Marshal(items)
-		if err != nil {
-			return fmt.Errorf("flatten paginated GitHub CLI response: %w", err)
-		}
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("decode GitHub CLI response: %w", err)
-	}
-	return nil
+	return 0
 }
 
 func retryableAPIError(err error) bool {
@@ -172,15 +228,14 @@ func retryableAPIError(err error) bool {
 	}
 	return apiErr.StatusCode == 0 || apiErr.StatusCode == http.StatusRequestTimeout ||
 		apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500 ||
-		apiErr.StatusCode == http.StatusForbidden && rateLimitPattern.MatchString(apiErr.Message)
+		apiErr.StatusCode == http.StatusForbidden && apiErr.rateLimit
 }
 
 func retryDelay(err error, attempt int) time.Duration {
 	delay := retryBaseDelay << (attempt - 1)
 	var apiErr *APIError
-	if errors.As(err, &apiErr) &&
-		(apiErr.StatusCode == http.StatusTooManyRequests || rateLimitPattern.MatchString(apiErr.Message)) {
-		return max(delay, rateLimitRetryDelay)
+	if errors.As(err, &apiErr) && apiErr.rateLimit {
+		return max(delay, rateLimitRetryDelay, apiErr.retryAfter)
 	}
 	return delay
 }
@@ -196,29 +251,18 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func sanitizeCLIError(message string) string {
+func sanitizeAPIMessage(message, token string) string {
 	message = strings.TrimSpace(message)
-	if token := os.Getenv("GH_TOKEN"); token != "" {
+	if token != "" {
 		message = strings.ReplaceAll(message, token, "[REDACTED]")
 	}
 	if message == "" {
-		message = "gh api exited unsuccessfully"
+		message = "request failed"
 	}
 	if len(message) > 512 {
 		message = message[:512]
 	}
 	return message
-}
-
-func replaceEnvironment(environment []string, key, value string) []string {
-	prefix := key + "="
-	result := make([]string, 0, len(environment)+1)
-	for _, item := range environment {
-		if !strings.HasPrefix(item, prefix) {
-			result = append(result, item)
-		}
-	}
-	return append(result, prefix+value)
 }
 
 func ErrorState(err error) (state string, reason string) {
@@ -232,38 +276,4 @@ func ErrorState(err error) (state string, reason string) {
 	default:
 		return "unknown", apiErr.Message
 	}
-}
-
-type boundedBuffer struct {
-	mu       sync.Mutex
-	data     []byte
-	limit    int
-	exceeded bool
-}
-
-func newBoundedBuffer(limit int) *boundedBuffer {
-	return &boundedBuffer{data: make([]byte, 0, min(limit, 4096)), limit: limit}
-}
-
-func (b *boundedBuffer) Write(data []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	remaining := b.limit - len(b.data)
-	if remaining > 0 {
-		b.data = append(b.data, data[:min(remaining, len(data))]...)
-	}
-	if len(data) > remaining {
-		b.exceeded = true
-	}
-	return len(data), nil
-}
-
-func (b *boundedBuffer) Bytes() []byte {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.data
-}
-
-func (b *boundedBuffer) String() string {
-	return string(b.Bytes())
 }

@@ -14,7 +14,7 @@ import (
 )
 
 type testAPIClient struct {
-	baseURL string
+	handler http.Handler
 }
 
 func (c testAPIClient) Hostname() string {
@@ -22,14 +22,13 @@ func (c testAPIClient) Hostname() string {
 }
 
 func (c testAPIClient) Get(ctx context.Context, apiPath string, out any) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+apiPath, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://github.test"+apiPath, nil)
 	if err != nil {
 		return err
 	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return err
-	}
+	recorder := httptest.NewRecorder()
+	c.handler.ServeHTTP(recorder, request)
+	response := recorder.Result()
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
@@ -45,17 +44,11 @@ func (c testAPIClient) Get(ctx context.Context, apiPath string, out any) error {
 	return nil
 }
 
-func (c testAPIClient) GetAll(ctx context.Context, apiPath string, out any) error {
-	return c.Get(ctx, apiPath, out)
-}
-
 func newInventoryTestService(t *testing.T, handler http.HandlerFunc) *InventoryService {
 	t.Helper()
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
 	cfg := config.Default()
 	cfg.Organization = "org"
-	return NewInventoryService(cfg, testAPIClient{baseURL: server.URL}, 1)
+	return NewInventoryService(cfg, testAPIClient{handler: handler}, 1)
 }
 
 func enrichForTest(service *InventoryService, repo apiRepository) model.Repository {
