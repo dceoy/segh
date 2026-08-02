@@ -168,6 +168,9 @@ func Summarize(manifest model.SourceScanManifest, resultsDirectory string, now t
 		Repositories: []model.RepositoryScanStatus{}, Errors: append([]model.RunError(nil), manifest.Errors...),
 	}
 	if manifest.SchemaVersion != model.SourceScanSchemaVersion || manifest.Organization == "" {
+		summary.Complete = false
+		summary.Counts.Errors++
+		summary.Errors = append(summary.Errors, model.RunError{Component: "source_scan_summary", Kind: "invalid_manifest", Message: "scan manifest identity is invalid"})
 		return summary, fmt.Errorf("scan manifest identity is invalid")
 	}
 	expected := make(map[int64]model.SourceScanRepository, len(manifest.Repositories))
@@ -179,6 +182,9 @@ func Summarize(manifest model.SourceScanManifest, resultsDirectory string, now t
 			repository.FullName != repository.Owner+"/"+repository.Name || repository.DefaultBranch == "" ||
 			(repository.Scheduled && !isFullSHA(repository.CommitSHA)) ||
 			(!repository.Scheduled && repository.CommitSHA != "" && !isFullSHA(repository.CommitSHA)) {
+			summary.Complete = false
+			summary.Counts.Errors++
+			summary.Errors = append(summary.Errors, model.RunError{Repository: repository.FullName, Component: "source_scan_summary", Kind: "invalid_manifest", Message: "scan manifest contains an invalid or duplicate repository identity"})
 			return summary, fmt.Errorf("scan manifest contains an invalid or duplicate repository identity")
 		}
 		selectedIDs[repository.ID] = true
@@ -230,6 +236,9 @@ func Summarize(manifest model.SourceScanManifest, resultsDirectory string, now t
 		return nil
 	})
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		summary.Complete = false
+		summary.Counts.Errors++
+		summary.Errors = append(summary.Errors, model.RunError{Component: "source_scan_summary", Kind: "read_evidence", Message: err.Error()})
 		return summary, fmt.Errorf("read repository scan evidence: %w", err)
 	}
 	for id, repository := range expected {

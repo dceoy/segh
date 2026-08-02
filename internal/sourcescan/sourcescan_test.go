@@ -184,6 +184,24 @@ func TestSummaryRejectsMismatchedOrMalformedStatusEvidence(t *testing.T) {
 	}
 }
 
+func TestSummaryMarksInvalidManifestIncomplete(t *testing.T) {
+	repositories := []model.SourceScanRepository{
+		resolvedRepository(1, "dup", "a"),
+		resolvedRepository(1, "dup", "a"),
+	}
+	manifest := model.SourceScanManifest{
+		SchemaVersion: model.SourceScanSchemaVersion, Organization: "example", Complete: true,
+		Repositories: repositories,
+	}
+	summary, err := Summarize(manifest, t.TempDir(), time.Now())
+	if err == nil || summary.Complete || summary.Counts.Errors != 1 || len(summary.Errors) != 1 || summary.Errors[0].Kind != "invalid_manifest" {
+		t.Fatalf("summary = %#v err = %v", summary, err)
+	}
+	if strings.Contains(Markdown(summary), "**complete**") {
+		t.Fatalf("markdown reports complete despite invalid manifest: %q", Markdown(summary))
+	}
+}
+
 func resolvedRepository(id int64, name, sha string) model.SourceScanRepository {
 	return model.SourceScanRepository{
 		ID: id, Owner: "example", Name: name, FullName: "example/" + name,
