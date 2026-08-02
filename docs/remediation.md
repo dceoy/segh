@@ -13,5 +13,11 @@ machine and human reports remain in the `pr-security-reports` artifact. A
 ruleset exception or policy suppression should be narrow, owned, justified, and
 time-bounded.
 
+Periodic findings are tied to the recorded default-branch commit in
+`scan-manifest.json`. Remediate them in a normal pull request, then confirm a
+later scheduled scan resolves and passes the corrected commit. Treat incomplete
+coverage and scanner runtime errors as operational failures, not findings to
+suppress.
+
 Changes to scanner versions, thresholds, or exclusions belong in the protected
 central `segh` repository. Target pull requests cannot supply those settings.

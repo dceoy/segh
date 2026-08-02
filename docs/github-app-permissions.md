@@ -1,7 +1,7 @@
 # GitHub App permissions
 
-The organization audit uses a read-only GitHub App installed on every
-repository in the organization.
+The organization audit and periodic source scan use a read-only GitHub App
+installed on every repository in the organization.
 
 | Permission                     | Access | Use                                                         |
 | ------------------------------ | ------ | ----------------------------------------------------------- |
@@ -23,6 +23,12 @@ use repository settings endpoints, which require Administration read. The audit
 does not enumerate Dependabot alert findings, so a Vulnerability alerts
 permission is not required by this implementation.
 
+The inventory and commit-resolution job receives the organization-wide token.
+Each repository scan job separately mints a short-lived token restricted to the
+single matrix repository with only Contents: Read and Metadata: Read, then
+checks out the recorded commit with `persist-credentials: false`. Scanner steps
+never receive the App private key.
+
 ## Installation scope
 
 Install the App on **all repositories**, not a selected subset.
@@ -37,6 +43,7 @@ repositories.
 
 ## Credential handling
 
-The App private key is scoped to the token-minting step. Only the short-lived
-token and non-secret installation ID reach `segh`. Configuration and artifacts
-never contain the key or token, and the CLI does not cache either credential.
+The App private key is scoped to token-minting steps. Only short-lived tokens
+and the non-secret installation ID reach `segh` or checkout. Configuration and
+artifacts never contain the key or token, and the CLI does not cache either
+credential.

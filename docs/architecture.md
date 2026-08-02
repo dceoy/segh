@@ -1,12 +1,18 @@
 # Architecture
 
-`segh` has two independent read-only paths.
+`segh` has three read-only paths with two evidence contracts.
 
 ```text
 Organization audit
   ├─ GitHub REST inventory
   ├─ deterministic policy evaluation
   └─ inventory.json + audit.json + report.md
+
+Periodic organization source scan
+  ├─ selected inventory repositories
+  ├─ immutable default-branch commit manifest
+  ├─ bounded repository scanner matrix
+  └─ scan-manifest.json + scan-summary.json + repository evidence
 
 Organization ruleset required workflow
   ├─ trusted segh scanner configuration
@@ -32,6 +38,15 @@ The organization audit receives a short-lived, read-only GitHub App token. It
 uses that token directly over HTTPS, bounds response sizes, retries transient
 failures, and treats unavailable evidence as `unknown` or `unsupported`, never
 as a policy pass.
+
+The periodic scan resolves each selected repository's default branch through
+the API before checkout and records the returned full commit SHA in a separate
+manifest. Each matrix job mints a new token limited to that one repository,
+checks out only the recorded SHA with credentials, LFS, and submodules disabled,
+and treats the checkout only as static input. Tracked symlinks are removed;
+submodule gitlinks and Git LFS pointers make coverage incomplete. Scanner
+configuration and binaries come only from the reviewed, protected `segh`
+revision named by the private control repository.
 
 ## Dependency evaluations
 
@@ -83,10 +98,16 @@ secret scanning, push protection, or GitHub Security Configurations.
 
 ## Determinism and failure behavior
 
-Configuration version 4 is the only accepted contract. Repository, error, and
-policy result arrays are sorted by stable identifiers. `audit.json` is the
-canonical compliance result; `inventory.json` is observation evidence; and
-`report.md` is the operator rendering.
+Configuration version 4 is the only accepted governance contract. Repository,
+error, policy, source-scan manifest, and source-scan summary arrays are sorted
+by stable identifiers. `audit.json` is the canonical compliance result;
+`inventory.json` is observation evidence; and `report.md` is the operator
+rendering.
+
+Source-scan evidence has its own schema version. Missing status files, identity
+mismatches, malformed evidence, inaccessible repositories, and unresolved
+commits fail closed without changing any governance observation or policy
+result.
 
 A failed or forbidden endpoint remains incomplete evidence. A configured policy
 over that observation becomes `unknown` or `unsupported`, and the command exits

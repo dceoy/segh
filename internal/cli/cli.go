@@ -13,9 +13,11 @@ import (
 
 	"github.com/dceoy/segh/internal/config"
 	gh "github.com/dceoy/segh/internal/github"
+	"github.com/dceoy/segh/internal/model"
 	"github.com/dceoy/segh/internal/output"
 	"github.com/dceoy/segh/internal/policy"
 	"github.com/dceoy/segh/internal/report"
+	"github.com/dceoy/segh/internal/sourcescan"
 )
 
 const (
@@ -26,9 +28,13 @@ const (
 	exitIncomplete = 4
 	exitRuntime    = 5
 
-	defaultInventoryOutput = "segh-results/inventory.json"
-	defaultAuditOutput     = "segh-results/audit.json"
-	defaultMarkdownOutput  = "segh-results/report.md"
+	defaultInventoryOutput    = "segh-results/inventory.json"
+	defaultAuditOutput        = "segh-results/audit.json"
+	defaultMarkdownOutput     = "segh-results/report.md"
+	defaultScanManifestOutput = "segh-results/scan-manifest.json"
+	defaultScanMatrixOutput   = "segh-results/scan-matrix.json"
+	defaultScanSummaryOutput  = "segh-results/scan-summary.json"
+	defaultScanMarkdownOutput = "segh-results/scan-report.md"
 )
 
 var newGitHubAPI = func() (gh.API, error) {
@@ -52,10 +58,16 @@ func Run(ctx context.Context, args []string, version string, stdout, stderr io.W
 		writef(stdout, "%s\n", version)
 		return nil
 	}
-	if args[0] != "audit" {
+	switch args[0] {
+	case "audit":
+		return runAudit(ctx, args[1:], stdout, stderr)
+	case "scan-plan":
+		return runScanPlan(ctx, args[1:], stdout, stderr)
+	case "scan-summary":
+		return runScanSummary(args[1:], stdout, stderr)
+	default:
 		return usageError(fmt.Errorf("unknown command %q", args[0]))
 	}
-	return runAudit(ctx, args[1:], stdout, stderr)
 }
 
 func ExitCode(err error) int {
@@ -142,6 +154,88 @@ func runAudit(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	return nil
 }
 
+func runScanPlan(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("segh scan-plan", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "segh.yaml", "path to strict version 4 configuration")
+	inventoryPath := flags.String("inventory", defaultInventoryOutput, "governance inventory JSON")
+	manifestPath := flags.String("manifest-output", defaultScanManifestOutput, "source scan manifest JSON")
+	matrixPath := flags.String("matrix-output", defaultScanMatrixOutput, "GitHub Actions matrix JSON")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return usageError(err)
+	}
+	if flags.NArg() != 0 || *inventoryPath == "" || *manifestPath == "" || *matrixPath == "" {
+		return usageError(fmt.Errorf("scan-plan requires non-empty paths and accepts no positional arguments"))
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return usageError(err)
+	}
+	var inventory model.Inventory
+	if err := sourcescan.ReadJSON(*inventoryPath, &inventory); err != nil {
+		return runtimeError(fmt.Errorf("read inventory: %w", err))
+	}
+	client, err := newGitHubAPI()
+	if err != nil {
+		return authError(err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Inventory.Timeout))
+	defer cancel()
+	manifest, matrix, planErr := sourcescan.NewPlanner(cfg, client).Run(ctx, inventory)
+	if err := errors.Join(output.JSON(*manifestPath, manifest), output.JSON(*matrixPath, matrix)); err != nil {
+		return runtimeError(err)
+	}
+	writef(stdout, "wrote source scan manifest and matrix to %s and %s\n", *manifestPath, *matrixPath)
+	if planErr != nil {
+		var apiErr *gh.APIError
+		if errors.As(planErr, &apiErr) && (apiErr.StatusCode == 401 || apiErr.StatusCode == 403) {
+			return authError(fmt.Errorf("source scan planning authentication or permission failure"))
+		}
+		return incompleteError(planErr)
+	}
+	return nil
+}
+
+func runScanSummary(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("segh scan-summary", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	manifestPath := flags.String("manifest", defaultScanManifestOutput, "source scan manifest JSON")
+	resultsDirectory := flags.String("results", "repository-scans", "repository scan evidence directory")
+	summaryPath := flags.String("summary-output", defaultScanSummaryOutput, "source scan summary JSON")
+	markdownPath := flags.String("markdown-output", defaultScanMarkdownOutput, "bounded source scan Markdown")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return usageError(err)
+	}
+	if flags.NArg() != 0 || *manifestPath == "" || *resultsDirectory == "" || *summaryPath == "" || *markdownPath == "" {
+		return usageError(fmt.Errorf("scan-summary requires non-empty paths and accepts no positional arguments"))
+	}
+	var manifest model.SourceScanManifest
+	if err := sourcescan.ReadJSON(*manifestPath, &manifest); err != nil {
+		return runtimeError(fmt.Errorf("read scan manifest: %w", err))
+	}
+	summary, summarizeErr := sourcescan.Summarize(manifest, *resultsDirectory, time.Now())
+	if err := errors.Join(output.JSON(*summaryPath, summary), output.Text(*markdownPath, sourcescan.Markdown(summary))); err != nil {
+		return runtimeError(err)
+	}
+	writef(stdout, "wrote source scan summary to %s and %s\n", *summaryPath, *markdownPath)
+	if summarizeErr != nil || summary.Counts.Errors > 0 {
+		return runtimeError(fmt.Errorf("source scan runtime errors found"))
+	}
+	if !summary.Complete || summary.Counts.Incomplete > 0 {
+		return incompleteError(fmt.Errorf("source scan coverage is incomplete"))
+	}
+	if summary.Counts.Findings > 0 {
+		return findingsError(fmt.Errorf("source scan findings found"))
+	}
+	return nil
+}
+
 func printHelp(out io.Writer, version string) {
 	writef(out, `segh %s - GitHub security governance audit
 
@@ -150,6 +244,8 @@ Usage:
 
 Commands:
   audit        Validate configuration, inventory controls, evaluate policy, and write evidence
+  scan-plan    Resolve selected default branches to immutable commit SHAs
+  scan-summary Validate and aggregate separate repository scan evidence
   version      Print the build version
 
 Audit options:

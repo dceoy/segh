@@ -119,3 +119,79 @@ type RunError struct {
 	Kind       string `json:"kind"`
 	Message    string `json:"message"`
 }
+
+const SourceScanSchemaVersion = 1
+
+type SourceScanManifest struct {
+	SchemaVersion int                    `json:"schema_version"`
+	Organization  string                 `json:"organization"`
+	GitHubHost    string                 `json:"github_host"`
+	GeneratedAt   time.Time              `json:"generated_at"`
+	Enabled       bool                   `json:"enabled"`
+	Complete      bool                   `json:"complete"`
+	Repositories  []SourceScanRepository `json:"repositories"`
+	Errors        []RunError             `json:"errors,omitempty"`
+}
+
+type SourceScanRepository struct {
+	ID              int64  `json:"id"`
+	FullName        string `json:"full_name"`
+	Visibility      string `json:"visibility"`
+	DefaultBranch   string `json:"default_branch"`
+	CommitSHA       string `json:"commit_sha"`
+	SelectionReason string `json:"selection_reason"`
+}
+
+type SourceScanMatrix struct {
+	Include []SourceScanMatrixEntry `json:"include"`
+}
+
+type SourceScanMatrixEntry struct {
+	ID             int64  `json:"id"`
+	Owner          string `json:"owner"`
+	Repository     string `json:"repository"`
+	FullName       string `json:"full_name"`
+	Visibility     string `json:"visibility"`
+	DefaultBranch  string `json:"default_branch"`
+	CommitSHA      string `json:"commit_sha"`
+	TimeoutMinutes int    `json:"timeout_minutes"`
+	Concurrency    int    `json:"concurrency"`
+}
+
+type SourceScannerStatus struct {
+	Name         string `json:"name"`
+	Version      string `json:"version"`
+	ExitStatus   int    `json:"exit_status"`
+	Result       string `json:"result"`
+	FindingCount int    `json:"finding_count"`
+}
+
+type RepositoryScanStatus struct {
+	SchemaVersion int                   `json:"schema_version"`
+	RepositoryID  int64                 `json:"repository_id"`
+	Repository    string                `json:"repository"`
+	Visibility    string                `json:"visibility"`
+	DefaultBranch string                `json:"default_branch"`
+	CommitSHA     string                `json:"commit_sha"`
+	Result        string                `json:"result"`
+	Scanners      []SourceScannerStatus `json:"scanners"`
+}
+
+type SourceScanCounts struct {
+	Selected   int `json:"selected"`
+	Scanned    int `json:"scanned"`
+	Passed     int `json:"passed"`
+	Findings   int `json:"findings"`
+	Incomplete int `json:"incomplete"`
+	Errors     int `json:"errors"`
+}
+
+type SourceScanSummary struct {
+	SchemaVersion int                    `json:"schema_version"`
+	Organization  string                 `json:"organization"`
+	GeneratedAt   time.Time              `json:"generated_at"`
+	Complete      bool                   `json:"complete"`
+	Counts        SourceScanCounts       `json:"counts"`
+	Repositories  []RepositoryScanStatus `json:"repositories"`
+	Errors        []RunError             `json:"errors,omitempty"`
+}

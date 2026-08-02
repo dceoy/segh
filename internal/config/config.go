@@ -17,6 +17,7 @@ type Config struct {
 	Version      int                 `yaml:"version"`
 	Organization string              `yaml:"organization"`
 	Inventory    Inventory           `yaml:"inventory"`
+	SourceScan   SourceScan          `yaml:"source_scan"`
 	Selectors    Selectors           `yaml:"selectors"`
 	Policies     Policies            `yaml:"policies"`
 	Suppressions []model.Suppression `yaml:"suppressions"`
@@ -25,6 +26,12 @@ type Config struct {
 type Duration time.Duration
 
 type Inventory struct {
+	Concurrency int      `yaml:"concurrency"`
+	Timeout     Duration `yaml:"timeout"`
+}
+
+type SourceScan struct {
+	Enabled     bool     `yaml:"enabled"`
 	Concurrency int      `yaml:"concurrency"`
 	Timeout     Duration `yaml:"timeout"`
 }
@@ -79,6 +86,10 @@ func Default() Config {
 	return Config{
 		Version: 4,
 		Inventory: Inventory{
+			Concurrency: 4,
+			Timeout:     Duration(30 * time.Minute),
+		},
+		SourceScan: SourceScan{
 			Concurrency: 4,
 			Timeout:     Duration(30 * time.Minute),
 		},
@@ -145,6 +156,9 @@ func demoteTimestampScalars(node *yaml.Node) {
 
 func (c Config) validateSemantics() error {
 	var errs []error
+	if c.SourceScan.Enabled && time.Duration(c.SourceScan.Timeout) > 6*time.Hour {
+		errs = append(errs, fmt.Errorf("source_scan.timeout must not exceed 6h"))
+	}
 	for i, suppression := range c.Suppressions {
 		if _, err := path.Match(suppression.Repository, "owner/repository"); suppression.Repository != "" && err != nil {
 			errs = append(errs, fmt.Errorf("suppressions[%d].repository is not a valid glob", i))

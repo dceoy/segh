@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      # Some internal/workflows tests exec the pr-security gate scripts with
+      # Some internal/workflows tests exec the repository-scan gate script with
       # their working directory set to an unrelated temporary directory, to
       # exercise real scanner binaries without touching this checkout. aqua's
       # shims resolve a pinned tool version by searching upward from the

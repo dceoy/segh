@@ -1,7 +1,9 @@
 ---
-name: Organization security governance audit
+name: Organization security audit and source scan
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 0"
 permissions:
   contents: read
 concurrency:
@@ -9,6 +11,12 @@ concurrency:
   cancel-in-progress: false
 jobs:
   audit:
+    outputs:
+      scan-enabled: ${{ steps.scan-outputs.outputs.enabled }}
+      scan-matrix: ${{ steps.scan-outputs.outputs.matrix }}
+      scan-concurrency: ${{ steps.scan-outputs.outputs.concurrency }}
+      scan-targets: ${{ steps.scan-outputs.outputs.targets }}
+      source-commit: ${{ steps.source.outputs.commit }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -90,10 +98,45 @@ jobs:
         working-directory: _segh
         run: go build -trimpath -o "$GITHUB_WORKSPACE/bin/segh" ./cmd/segh
       - name: Audit GitHub-native governance
+        id: governance
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SEGH_GITHUB_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
         run: bin/segh audit --config _control/config/organization.yaml
+      - name: Resolve immutable source scan targets
+        id: scan-plan
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          bin/segh scan-plan \
+            --config _control/config/organization.yaml \
+            --inventory segh-results/inventory.json
+      - name: Export bounded source scan matrix
+        id: scan-outputs
+        if: always()
+        run: |
+          if [[ ! -f segh-results/scan-manifest.json || ! -f segh-results/scan-matrix.json ]]; then
+            {
+              echo 'enabled=false'
+              echo 'matrix={"include":[]}'
+              echo 'concurrency=1'
+              echo 'targets=false'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          enabled=$(jq -r '.enabled' segh-results/scan-manifest.json)
+          matrix=$(jq -c . segh-results/scan-matrix.json)
+          concurrency=$(jq -r 'if (.include | length) > 0 then .include[0].concurrency else 1 end' segh-results/scan-matrix.json)
+          targets=$(jq -r '(.include | length) > 0' segh-results/scan-matrix.json)
+          {
+            printf 'enabled=%s\n' "$enabled"
+            printf 'matrix=%s\n' "$matrix"
+            printf 'concurrency=%s\n' "$concurrency"
+            printf 'targets=%s\n' "$targets"
+          } >> "$GITHUB_OUTPUT"
       - name: Publish operator summary
         if: always()
         run: |
@@ -105,6 +148,179 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: organization-governance-report
-          path: segh-results
+          path: |
+            segh-results/inventory.json
+            segh-results/audit.json
+            segh-results/report.md
           if-no-files-found: warn
           retention-days: 14
+      - name: Retain source scan plan
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: organization-source-scan-plan
+          path: |
+            segh-results/scan-manifest.json
+            segh-results/scan-matrix.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Enforce governance and planning results
+        if: always()
+        env:
+          GOVERNANCE_RESULT: ${{ steps.governance.outcome }}
+          PLAN_RESULT: ${{ steps.scan-plan.outcome }}
+          SCAN_ENABLED: ${{ steps.scan-outputs.outputs.enabled }}
+        run: |
+          failed=0
+          if [[ "$GOVERNANCE_RESULT" != success ]]; then
+            echo "::error::Governance audit result: $GOVERNANCE_RESULT"
+            failed=1
+          fi
+          if [[ "$SCAN_ENABLED" == true && "$PLAN_RESULT" != success ]]; then
+            echo "::error::Source scan planning result: $PLAN_RESULT"
+            failed=1
+          fi
+          exit "$failed"
+
+  source-scan:
+    name: Source scan / ${{ matrix.full_name }}
+    needs: audit
+    if: always() && needs.audit.outputs.source-commit != '' && needs.audit.outputs.scan-enabled == 'true' && needs.audit.outputs.scan-targets == 'true'
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.audit.outputs.scan-concurrency) }}
+      matrix: ${{ fromJSON(needs.audit.outputs.scan-matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    permissions:
+      contents: read
+    env:
+      AQUA_CONFIG: ${{ github.workspace }}/_segh/aqua.yaml
+    steps:
+      - name: Check out trusted scanner source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          repository: dceoy/segh
+          ref: ${{ needs.audit.outputs.source-commit }}
+          path: _segh
+          persist-credentials: false
+      - name: Create repository-scoped read-only App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.SEGH_READ_APP_ID }}
+          private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          repositories: ${{ matrix.repository }}
+          permission-contents: read
+          permission-metadata: read
+      - name: Derive daily Trivy database cache key
+        id: trivy-cache-key
+        run: printf 'date=%s\n' "$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: Restore public Trivy advisory databases
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/trivy/db
+            ~/.cache/trivy/java-db
+          key: trivy-db-v0.72.0-${{ runner.os }}-${{ steps.trivy-cache-key.outputs.date }}
+          restore-keys: |
+            trivy-db-v0.72.0-${{ runner.os }}-
+      - name: Check out recorded default-branch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          repository: ${{ matrix.full_name }}
+          ref: ${{ matrix.commit_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: _target
+          persist-credentials: false
+          fetch-depth: 1
+          lfs: false
+          submodules: false
+      - name: Scan repository as static input
+        uses: ./_segh/.github/actions/repository-scan
+        with:
+          artifact-name: repository-scan-${{ matrix.id }}
+          repository-id: ${{ matrix.id }}
+          repository: ${{ matrix.full_name }}
+          visibility: ${{ matrix.visibility }}
+          default-branch: ${{ matrix.default_branch }}
+          commit-sha: ${{ matrix.commit_sha }}
+
+  source-scan-summary:
+    name: Organization source scan summary
+    needs: [audit, source-scan]
+    if: always() && needs.audit.outputs.source-commit != '' && needs.audit.outputs.scan-enabled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted segh source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          repository: dceoy/segh
+          ref: ${{ needs.audit.outputs.source-commit }}
+          path: _segh
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: true
+          cache-dependency-path: _segh/go.sum
+      - name: Build trusted summarizer
+        working-directory: _segh
+        run: go build -trimpath -o "$GITHUB_WORKSPACE/bin/segh" ./cmd/segh
+      - name: Download source scan plan
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v8.0.0
+        with:
+          name: organization-source-scan-plan
+          path: segh-results
+      - name: Download repository scan evidence
+        if: needs.audit.outputs.scan-targets == 'true'
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v8.0.0
+        with:
+          pattern: repository-scan-*
+          path: repository-scans
+      - name: Aggregate source scan evidence
+        id: summarize
+        continue-on-error: true
+        run: |
+          mkdir -p repository-scans
+          bin/segh scan-summary \
+            --manifest segh-results/scan-manifest.json \
+            --results repository-scans
+      - name: Publish bounded source scan summary
+        if: always()
+        run: |
+          if [[ -f segh-results/scan-report.md ]]; then
+            cat segh-results/scan-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain complete private source scan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: organization-source-scan-evidence
+          path: |
+            segh-results/scan-manifest.json
+            segh-results/scan-summary.json
+            segh-results/scan-report.md
+            repository-scans
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Enforce aggregate source scan result
+        if: always()
+        env:
+          MATRIX_RESULT: ${{ needs.source-scan.result }}
+          SUMMARY_RESULT: ${{ steps.summarize.outcome }}
+          HAS_TARGETS: ${{ needs.audit.outputs.scan-targets }}
+        run: |
+          if [[ "$SUMMARY_RESULT" != success ]]; then
+            echo "::error::Source scan summary result: $SUMMARY_RESULT"
+            exit 1
+          fi
+          if [[ "$HAS_TARGETS" == true && "$MATRIX_RESULT" != success ]]; then
+            echo "::error::Repository source scan matrix result: $MATRIX_RESULT"
+            exit 1
+          fi

@@ -4,6 +4,7 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,12 +18,13 @@ import (
 const (
 	prSecurityWorkflowPath     = "../../.github/workflows/pr-security.yml"
 	prSecuritySelfWorkflowPath = "../../.github/workflows/pr-security-self.yml"
-	prSecurityActionPath       = "../../.github/actions/pr-security/action.yml"
-	prSecurityScriptPath       = "../../.github/actions/pr-security/scan.sh"
+	repositoryScanActionPath   = "../../.github/actions/repository-scan/action.yml"
+	repositoryScanScriptPath   = "../../.github/actions/repository-scan/scan.sh"
 )
 
 type workflowStep struct {
 	Name string         `yaml:"name"`
+	If   string         `yaml:"if"`
 	Uses string         `yaml:"uses"`
 	With map[string]any `yaml:"with"`
 	Env  map[string]any `yaml:"env"`
@@ -90,7 +92,7 @@ func TestPRSecurityWrappersInvokeSameTrustedCompositeAction(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s jobs.%s is missing the trusted scanner invocation", test.path, test.job)
 		}
-		if step.Uses != "./_segh/.github/actions/pr-security" {
+		if step.Uses != "./_segh/.github/actions/repository-scan" {
 			t.Errorf("%s jobs.%s scanner action = %q", test.path, test.job, step.Uses)
 		}
 		if len(job.Steps) != 3 {
@@ -143,6 +145,13 @@ func TestPRSecurityCheckoutRefsKeepTargetDataUntrusted(t *testing.T) {
 }
 
 func TestTrustedCompositeActionOwnsAllBlockingScannersAndArtifacts(t *testing.T) {
+	info, err := os.Stat(repositoryScanScriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatal("repository scanner script is not executable")
+	}
 	action := loadAction(t)
 	if action.Runs.Using != "composite" {
 		t.Fatalf("runs.using = %q", action.Runs.Using)
@@ -150,13 +159,14 @@ func TestTrustedCompositeActionOwnsAllBlockingScannersAndArtifacts(t *testing.T)
 	names := stepNames(action.Runs.Steps)
 	required := []string{
 		"Install checksum-verified scanners",
-		"Reject symlinks from the pull request checkout",
+		"Validate static target content",
 		"Run zizmor gate",
 		"Run actionlint and embedded ShellCheck gate",
 		"Run standalone ShellCheck gate",
 		"Run Checkov infrastructure-as-code gate",
 		"Run Trivy vulnerability gate",
 		"Run Trivy secret gate",
+		"Record repository and scanner status",
 		"Publish scanner summary",
 		"Retain scanner reports",
 		"Enforce scanner gates",
@@ -166,10 +176,14 @@ func TestTrustedCompositeActionOwnsAllBlockingScannersAndArtifacts(t *testing.T)
 			t.Errorf("composite action is missing %q", name)
 		}
 	}
-	rejectIndex := slices.Index(names, "Reject symlinks from the pull request checkout")
+	rejectIndex := slices.Index(names, "Validate static target content")
 	for _, scanner := range required[2:8] {
 		if slices.Index(names, scanner) <= rejectIndex {
 			t.Errorf("%q does not run after symlink rejection", scanner)
+		}
+		step, _ := findStep(action.Runs.Steps, scanner)
+		if !strings.Contains(step.If, "always()") || !strings.Contains(step.If, "install-scanners.outcome == 'success'") {
+			t.Errorf("%q does not continue after an earlier scanner failure: if = %q", scanner, step.If)
 		}
 	}
 	aqua, _ := findStep(action.Runs.Steps, "Install checksum-verified scanners")
@@ -178,13 +192,13 @@ func TestTrustedCompositeActionOwnsAllBlockingScannersAndArtifacts(t *testing.T)
 		t.Errorf("Aqua installation is not pinned to the trusted checkout: %#v", aqua)
 	}
 	upload, _ := findStep(action.Runs.Steps, "Retain scanner reports")
-	if upload.With["name"] != "pr-security-reports" || upload.With["path"] != "security-results" {
+	if !strings.Contains(upload.With["name"].(string), "inputs.artifact-name") || upload.With["path"] != "security-results" {
 		t.Errorf("scanner artifact contract changed: %#v", upload.With)
 	}
 }
 
 func TestTrustedScannerScriptPinsConfigurationAndThresholds(t *testing.T) {
-	script := readFile(t, prSecurityScriptPath)
+	script := readFile(t, repositoryScanScriptPath)
 	for _, want := range []string{
 		`trusted_dir="$GITHUB_WORKSPACE/_segh"`,
 		`target_dir="$GITHUB_WORKSPACE/_target"`,
@@ -200,12 +214,14 @@ func TestTrustedScannerScriptPinsConfigurationAndThresholds(t *testing.T) {
 		"--severity HIGH,CRITICAL",
 		`--secret-config "$trusted_dir/.github/security/trivy-secret.yaml"`,
 		"--severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL",
-		"zizmor.status",
-		"actionlint.status",
-		"shellcheck.status",
-		"checkov.status",
-		"trivy-vulnerability.status",
-		"trivy-secret.status",
+		`write_result content-validation`,
+		`write_result zizmor`,
+		`write_result actionlint`,
+		`write_result shellcheck`,
+		`write_result checkov`,
+		`write_result trivy-vulnerability`,
+		`write_result trivy-secret`,
+		"status.json",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("trusted scanner script is missing %q", want)
@@ -286,7 +302,7 @@ func TestSymlinkRejectionRemovesTrackedLinksBeforeScanning(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GITHUB_WORKSPACE", workspace)
-	runScanner(t, "reject-symlinks")
+	runScanner(t, "validate-content")
 	if _, err := os.Lstat(symlink); !os.IsNotExist(err) {
 		t.Errorf("tracked symlink still exists: %v", err)
 	}
@@ -296,6 +312,83 @@ func TestSymlinkRejectionRemovesTrackedLinksBeforeScanning(t *testing.T) {
 	report := readFile(t, filepath.Join(workspace, "security-results", "rejected-symlinks.txt"))
 	if !strings.Contains(report, "escape.tf") {
 		t.Errorf("rejection report = %q", report)
+	}
+}
+
+func TestContentValidationRejectsLFSPointersAndSubmoduleGitlinks(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "_target")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, target, "init", "-q")
+	lfs := "version https://git-lfs.github.com/spec/v1\noid sha256:" + strings.Repeat("a", 64) + "\nsize 10\n"
+	if err := os.WriteFile(filepath.Join(target, "large.bin"), []byte(lfs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, target, "add", "large.bin")
+	runGit(t, target, "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat("b", 40)+",vendor/module")
+	if err := os.MkdirAll(filepath.Join(workspace, "security-results"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	runScanner(t, "validate-content")
+	report := readFile(t, filepath.Join(workspace, "security-results", "content-validation.txt"))
+	for _, want := range []string{"Git LFS pointer: large.bin", "submodule gitlink: vendor/module"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("validation report is missing %q: %s", want, report)
+		}
+	}
+	if result := strings.TrimSpace(readFile(t, filepath.Join(workspace, "security-results", "content-validation.result"))); result != "incomplete" {
+		t.Fatalf("content validation result = %q", result)
+	}
+}
+
+func TestRepositoryStatusBindsEvidenceToManifestIdentity(t *testing.T) {
+	workspace := t.TempDir()
+	results := filepath.Join(workspace, "security-results")
+	if err := os.MkdirAll(results, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	scanners := []string{"content-validation", "zizmor", "actionlint", "shellcheck", "checkov", "trivy-vulnerability", "trivy-secret"}
+	for _, scanner := range scanners {
+		if err := os.WriteFile(filepath.Join(results, scanner+".status"), []byte("0\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(results, scanner+".result"), []byte("pass\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stubDir := t.TempDir()
+	for _, tool := range []string{"zizmor", "actionlint", "checkov", "trivy"} {
+		writeExecutable(t, filepath.Join(stubDir, tool), "#!/bin/sh\necho '"+tool+" 1.0'\n")
+	}
+	writeExecutable(t, filepath.Join(stubDir, "shellcheck"), "#!/bin/sh\necho ShellCheck\necho 'version: 1.0'\n")
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SEGH_SCAN_REPOSITORY_ID", "42")
+	t.Setenv("SEGH_SCAN_REPOSITORY", "example/repo")
+	t.Setenv("SEGH_SCAN_VISIBILITY", "private")
+	t.Setenv("SEGH_SCAN_DEFAULT_BRANCH", "main")
+	t.Setenv("SEGH_SCAN_COMMIT_SHA", strings.Repeat("a", 40))
+	runScanner(t, "status")
+	var status struct {
+		RepositoryID int    `json:"repository_id"`
+		Repository   string `json:"repository"`
+		CommitSHA    string `json:"commit_sha"`
+		Result       string `json:"result"`
+		Scanners     []any  `json:"scanners"`
+	}
+	data, err := os.ReadFile(filepath.Join(results, "status.json")) // #nosec G304 -- results is a test-owned temporary directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.RepositoryID != 42 || status.Repository != "example/repo" ||
+		status.CommitSHA != strings.Repeat("a", 40) || status.Result != "pass" || len(status.Scanners) != 7 {
+		t.Fatalf("status = %#v", status)
 	}
 }
 
@@ -340,7 +433,7 @@ func loadWorkflow(t *testing.T, path string) workflowDocument {
 func loadAction(t *testing.T) actionDocument {
 	t.Helper()
 	var action actionDocument
-	if err := yaml.Unmarshal([]byte(readFile(t, prSecurityActionPath)), &action); err != nil {
+	if err := yaml.Unmarshal([]byte(readFile(t, repositoryScanActionPath)), &action); err != nil {
 		t.Fatalf("parse action: %v", err)
 	}
 	return action
@@ -391,7 +484,7 @@ func writeExecutable(t *testing.T, path, body string) {
 
 func runScanner(t *testing.T, operation string) {
 	t.Helper()
-	command := exec.CommandContext(context.Background(), "bash", prSecurityScriptPath, operation) // #nosec G204 -- operation is a fixed test value.
+	command := exec.CommandContext(context.Background(), "bash", repositoryScanScriptPath, operation) // #nosec G204 -- operation is a fixed test value.
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("scan.sh %s: %v\n%s", operation, err, output)
 	}

@@ -61,7 +61,14 @@ jobs:
           # scanners below.
           allow-unsafe-pr-checkout: true
       - name: Run trusted scanner pipeline
-        uses: ./_segh/.github/actions/pr-security
+        uses: ./_segh/.github/actions/repository-scan
+        with:
+          artifact-name: pr-security-reports
+          repository-id: ${{ github.event.repository.id }}
+          repository: ${{ github.repository }}
+          visibility: ${{ github.event.repository.visibility }}
+          default-branch: ${{ github.event.repository.default_branch }}
+          commit-sha: ${{ github.event.pull_request.head.sha }}
   publish-self-check:
     # GITHUB_SHA for pull_request_target is the base branch's commit, not the
     # pull request's head, so the check run GitHub creates automatically for

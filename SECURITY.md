@@ -3,7 +3,8 @@
 Report suspected vulnerabilities privately through the repository's GitHub
 security-advisory interface.
 
-The central pull-request workflow treats the target checkout as untrusted data.
+The central pull-request and periodic organization workflows treat every target
+checkout as untrusted data.
 It grants only `contents: read`, disables target-provided scanner
 configuration, exclusions, external policies, and wrapper scripts, installs
 checksum-verified scanner versions, and retains reports as ordinary workflow
@@ -13,6 +14,10 @@ Install organization required workflows and rulesets only from reviewed commits
 on protected `main`. Keep the App private key in Actions secrets, install the
 read-only inventory App on every organization repository, and run organization
 audits only from a private control repository.
+
+Periodic scan artifacts can include detected secrets and sensitive repository
+paths. Keep them private, use bounded retention, and do not copy their contents
+into public issues or job summaries.
 
 Scanner gates reduce risk but do not provide pre-receive secret blocking,
 CodeQL-equivalent deep SAST, or a managed security-alert lifecycle. Rotate any

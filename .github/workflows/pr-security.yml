@@ -67,7 +67,14 @@ jobs:
           path: _target
           persist-credentials: false
       - name: Run trusted scanner pipeline
-        uses: ./_segh/.github/actions/pr-security
+        uses: ./_segh/.github/actions/repository-scan
+        with:
+          artifact-name: pr-security-reports
+          repository-id: ${{ github.event.repository.id }}
+          repository: ${{ github.repository }}
+          visibility: ${{ github.event.repository.visibility }}
+          default-branch: ${{ github.event.repository.default_branch }}
+          commit-sha: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.event.pull_request.head.sha }}
   scorecard:
     # Scorecard is evidence only. Its action has platform limitations for some
     # private repositories, so rulesets must not require this job. Gated to

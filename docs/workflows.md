@@ -2,7 +2,7 @@
 
 ## Pull-request security
 
-`.github/workflows/pr-security.yml` is the single supported merge-time security
+`.github/workflows/pr-security.yml` remains the supported merge-time security
 workflow. Install it as an organization ruleset required workflow for the
 selected private repositories, then require its stable
 `PR security / scan` check.
@@ -28,8 +28,9 @@ uploads `pr-security-reports`, writes bounded human-readable summaries, and only
 then fails the ordinary check if any scanner found a threshold violation or
 encountered an execution error.
 
-Before any gate runs, a dedicated step deletes every tracked symlink from the
-pull-request checkout and records what it removed in
+Before any gate runs, the neutral `.github/actions/repository-scan` component
+deletes every tracked symlink from the pull-request checkout and records what it
+removed in
 `rejected-symlinks.txt`, with a `::warning::` annotation per path. `git
 ls-files` and directory-walking scanners alike would otherwise resolve a
 pull-request-controlled symlink to a path outside `_target` (for example
@@ -164,7 +165,7 @@ fee. `segh` downloads their unmodified CLI release artifacts at workflow runtime
 and does not vendor modified ShellCheck source or binaries. Running ShellCheck
 as an analyzer does not make the target repository's source GPL-covered.
 
-## Organization audit
+## Organization audit and periodic source scan
 
 `.github/workflows/organization-audit.yml` runs from a private control
 repository.
@@ -175,12 +176,48 @@ repository.
 3. Add the App ID as `SEGH_READ_APP_ID` and private key as
    `SEGH_READ_APP_PRIVATE_KEY`.
 4. Store the version 4 policy in `config/organization.yaml`.
-5. Run `Organization security governance audit`.
+5. Set `source_scan.enabled`, `source_scan.concurrency`, and
+   `source_scan.timeout` in the protected organization configuration.
+6. Run `Organization security audit and source scan`, or let its weekly schedule
+   trigger it.
 
 The workflow verifies the pinned source is reachable from protected `main`,
-mints a short-lived App token, requires a private control repository, runs one
-`segh audit`, adds `report.md` to the job summary, and retains all three evidence
-artifacts.
+mints a short-lived App token, requires a private control repository, and runs
+`segh audit`. If source scanning is enabled, `segh scan-plan` reuses the
+authoritative selected inventory and resolves each default branch to a full
+commit SHA. A `fail-fast: false` matrix scans those commits with configured,
+bounded concurrency and per-repository timeout. Each worker mints a new
+single-repository Contents/Metadata read token and checks out with credentials,
+LFS, and submodules disabled.
+
+Workers cache only Trivy's public vulnerability and Java advisory databases
+under a daily, scanner-versioned key. Repository scan-cache entries and target
+content are not shared. An older database may seed the daily cache, but Trivy's
+normal update remains enabled before scanning.
+
+The scanner never runs a repository script, dependency installation, package
+lifecycle hook, Terraform initialization, LFS hook, or submodule command.
+Tracked symlinks are removed before scanning. LFS pointers and submodule
+gitlinks are retained as incomplete-coverage evidence and fail the aggregate
+result after all scanners run.
+
+Governance artifacts remain exactly `inventory.json`, `audit.json`, and
+`report.md`. Source scan planning, per-repository reports, `scan-summary.json`,
+and the bounded `scan-report.md` are separate private artifacts retained for 14
+days on success and failure.
+
+### PR-gate migration status
+
+The reusable `Repository security / scan` implementation exists in
+`dceoy/gha-for-devops` at commit
+`1413c89221edd788de6dcbcb30f7e6973615048f`, but its direct
+`pull_request`/`merge_group` activation is still tracked by
+`dceoy/gha-for-devops#867`. Keep the local PR wrappers and self-check publisher
+required until that activation is merged, pinned in the organization ruleset,
+and verified on clean, failing, fork, and merge-queue revisions. Only then
+remove `.github/workflows/pr-security.yml`,
+`.github/workflows/pr-security-self.yml`, the dedicated publisher App, and the
+`self-scan-publisher` environment; doing so earlier creates an enforcement gap.
 
 ## Rollout verification
 

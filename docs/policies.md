@@ -3,6 +3,14 @@
 Version 4 policy sections are independent. A field is evaluated only when it is
 present in configuration.
 
+`source_scan` is operational configuration rather than a governance policy. It
+enables scheduled static scanning and bounds matrix concurrency and each
+repository's timeout. Repository inclusion remains controlled by the existing
+`selectors`: archived repositories and forks are excluded by default, and must
+be admitted through an explicit selector change. Target repositories cannot
+override scanner enablement, versions, thresholds, configuration, or accepted
+exclusions.
+
 | Policy ID                                  | Observation                                    |
 | ------------------------------------------ | ---------------------------------------------- |
 | `actions.enabled`                          | GitHub Actions enabled state                   |
