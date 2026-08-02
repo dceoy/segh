@@ -48,7 +48,12 @@ func (p *Planner) Run(ctx context.Context, inventory model.Inventory) (model.Sou
 	}
 	if inventory.SchemaVersion != model.SchemaVersion || inventory.Organization != p.cfg.Organization ||
 		inventory.GitHubHost == "" || inventory.GitHubHost != p.client.Hostname() {
-		return manifest, fmt.Errorf("inventory identity does not match the configuration")
+		err := fmt.Errorf("inventory identity does not match the configuration")
+		manifest.Complete = false
+		manifest.Errors = append(manifest.Errors, model.RunError{
+			Component: "source_scan_plan", Kind: "invalid_inventory", Message: err.Error(),
+		})
+		return manifest, err
 	}
 	if !p.cfg.SourceScan.Enabled {
 		return manifest, nil

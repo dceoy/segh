@@ -110,6 +110,19 @@ func TestDisabledPlannerMakesExplicitEmptyManifest(t *testing.T) {
 	}
 }
 
+func TestPlannerMarksMismatchedInventoryIdentityIncomplete(t *testing.T) {
+	cfg := config.Default()
+	cfg.Organization = "example"
+	cfg.SourceScan.Enabled = true
+	manifest, err := NewPlanner(cfg, fakeAPI{}).Run(context.Background(), model.Inventory{
+		SchemaVersion: model.SchemaVersion, Organization: "other-org", GitHubHost: "github.com", Complete: true,
+	})
+	if err == nil || manifest.Complete || len(manifest.Repositories) != 0 ||
+		len(manifest.Errors) != 1 || manifest.Errors[0].Kind != "invalid_inventory" {
+		t.Fatalf("manifest = %#v err = %v", manifest, err)
+	}
+}
+
 func TestPlannerFailsClosedAtGitHubMatrixLimit(t *testing.T) {
 	cfg := config.Default()
 	cfg.Organization = "example"

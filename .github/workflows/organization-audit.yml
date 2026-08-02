@@ -295,7 +295,20 @@ jobs:
                 break
               fi
               status=$(<"$status_file")
-              if [[ ! "$status" =~ ^[0-9]+$ ]] || ((status > 1)); then
+              if [[ ! "$status" =~ ^[0-9]+$ ]]; then
+                result=error
+                break
+              fi
+              # Pinned Zizmor v1.28.0 encodes the highest finding severity in
+              # its exit code (0 none, 11 informational .. 14 high) instead
+              # of the plain 0/1 pass-or-findings convention every other
+              # scanner here uses; treat 11-14 as findings, not a failure.
+              if [[ "$scanner" == zizmor ]]; then
+                if ((status != 0 && (status < 11 || status > 14))); then
+                  result=error
+                  break
+                fi
+              elif ((status > 1)); then
                 result=error
                 break
               fi
@@ -306,7 +319,7 @@ jobs:
                 result=error
                 break
               fi
-              if ((status == 1)); then
+              if ((status != 0)); then
                 result=findings
               fi
             done
