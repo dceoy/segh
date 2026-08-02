@@ -16,6 +16,10 @@ jobs:
       scan-targets: ${{ steps.scan-outputs.outputs.targets }}
       source-commit: ${{ steps.source.outputs.commit }}
     runs-on: ubuntu-24.04
+    # Budgeted for two sequential inventory.timeout-bounded phases (segh
+    # audit, then segh scan-plan) plus checkout/build/evidence-retention
+    # overhead. inventory.timeout is capped at 30m by config validation, so
+    # the worst case (2 * 30m + overhead) stays within this limit.
     timeout-minutes: 75
     steps:
       - name: Check out control repository
@@ -284,7 +288,18 @@ jobs:
             if [[ ! "$preflight" =~ ^[0-9]+$ ]]; then
               result=error
             elif ((preflight != 0)); then
-              result=incomplete
+              # The pinned upstream scanner redirects "git ls-files" straight
+              # into tracked-files.index, so the file exists (empty) even
+              # when entering or enumerating the checkout fails outright;
+              # only a genuine content problem (a rejected symlink, LFS
+              # pointer, or submodule) leaves a populated index alongside a
+              # non-zero preflight status. An empty index means preflight
+              # failed operationally, not that the content was incomplete.
+              if [[ -s "$results/tracked-files.index" ]]; then
+                result=incomplete
+              else
+                result=error
+              fi
             fi
           fi
           if [[ "$result" == pass ]]; then
@@ -316,6 +331,28 @@ jobs:
                 || ! jq -e . "$results/$scanner.json" > /dev/null 2>&1 \
                 || [[ ! -f "$results/$scanner.txt" || ! -s "$results/$scanner.txt" ]] \
                 || [[ ! -f "$results/$scanner.log" ]]; then
+                result=error
+                break
+              fi
+              # The pinned upstream scanner uses plain exit status 1 for both
+              # ordinary findings and runtime paths where the scanner never
+              # actually evaluated the target (e.g. unable to extract
+              # composite-action shell blocks, or unable to read a tracked
+              # file). Those runtime paths carry a JSON object with result
+              # "not-run", or, for actionlint (JSON Lines-to-array
+              # conversion failure) and shellcheck (an unreadable tracked
+              # file) specifically, leave the skip-evidence empty array "[]"
+              # in place instead of a real finding payload; a genuine
+              # finding from either is always a non-empty array
+              # (actionlint) or a findings object (shellcheck's json1).
+              # Either anomalous shape must classify as an error, not a
+              # clean findings verdict.
+              evidence_result=$(jq -r 'if type == "object" then (.result // "") else "" end' "$results/$scanner.json")
+              evidence_is_empty_array=false
+              if [[ "$scanner" == actionlint || "$scanner" == shellcheck ]]; then
+                evidence_is_empty_array=$(jq -r 'if type == "array" and length == 0 then "true" else "false" end' "$results/$scanner.json")
+              fi
+              if [[ "$evidence_result" == not-run || ( "$status" != 0 && "$evidence_is_empty_array" == true ) ]]; then
                 result=error
                 break
               fi
