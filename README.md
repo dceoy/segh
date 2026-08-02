@@ -56,10 +56,13 @@ and `5` runtime failure.
 
 ## Pull-request gate
 
-Merge-time enforcement is owned by the trusted `Repository security` workflow
-in [`dceoy/gha-for-devops`](https://github.com/dceoy/gha-for-devops), rather
-than duplicated in this repository. `segh` consumes the same reviewed scanner
-implementation for periodic organization scans.
+Keep the existing `PR security / scan` required workflow active until the
+trusted `Repository security` replacement in
+[`dceoy/gha-for-devops`](https://github.com/dceoy/gha-for-devops) has direct
+pull-request and merge-group triggers and its organization-ruleset rollout is
+verified. `segh` already uses the reviewed upstream scanner for periodic
+organization scans; remove the local PR workflow only in the follow-up
+migration.
 
 ## Organization audit and periodic source scan
 

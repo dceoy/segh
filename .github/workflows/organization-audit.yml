@@ -175,14 +175,13 @@ jobs:
         env:
           GOVERNANCE_RESULT: ${{ steps.governance.outcome }}
           PLAN_RESULT: ${{ steps.scan-plan.outcome }}
-          SCAN_ENABLED: ${{ steps.scan-outputs.outputs.enabled }}
         run: |
           failed=0
           if [[ "$GOVERNANCE_RESULT" != success ]]; then
             echo "::error::Governance audit result: $GOVERNANCE_RESULT"
             failed=1
           fi
-          if [[ "$SCAN_ENABLED" == true && "$PLAN_RESULT" != success ]]; then
+          if [[ "$PLAN_RESULT" != success ]]; then
             echo "::error::Source scan planning result: $PLAN_RESULT"
             failed=1
           fi

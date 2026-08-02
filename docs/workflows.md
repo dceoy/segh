@@ -64,7 +64,9 @@ success and failure.
 
 ## Pull-request security
 
-Merge-time repository scanning is owned by the `Repository security` workflow
-in `dceoy/gha-for-devops`; `segh` does not maintain a second PR scanner or
-self-check publisher. Pin organization rulesets to a reviewed upstream commit
-and follow that repository's rollout and required-check documentation.
+The existing `PR security / scan` required workflow remains active while the
+`Repository security` migration in `dceoy/gha-for-devops` is incomplete. Do
+not remove the local workflow or self-check publisher until the upstream direct
+pull-request and merge-group path is active and its organization-ruleset
+replacement has been verified. Pin the replacement to a reviewed upstream
+commit and complete that rollout before removing the local path in a follow-up.
