@@ -102,12 +102,22 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SEGH_GITHUB_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
         run: bin/segh audit --config _control/config/organization.yaml
+      - name: Refresh read-only GitHub App token before source scan planning
+        id: scan-plan-token
+        if: always()
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.SEGH_READ_APP_ID }}
+          private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}   # zizmor: ignore[github-app]
+          permission-contents: read
+          permission-metadata: read
       - name: Resolve immutable source scan targets
         id: scan-plan
         if: always()
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.scan-plan-token.outputs.token }}
         run: |
           bin/segh scan-plan \
             --config _control/config/organization.yaml \
