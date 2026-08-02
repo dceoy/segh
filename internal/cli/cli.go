@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -188,11 +189,61 @@ func runScanPlan(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 	writef(stdout, "wrote source scan manifest to %s\n", *manifestPath)
 	if planErr != nil {
-		var apiErr *gh.APIError
-		if errors.As(planErr, &apiErr) && (apiErr.StatusCode == 401 || apiErr.StatusCode == 403) {
+		switch classifyPlanFailure(planErr) {
+		case exitAuth:
 			return authError(fmt.Errorf("source scan planning authentication or permission failure"))
+		case exitRuntime:
+			return runtimeError(planErr)
+		default:
+			return incompleteError(planErr)
 		}
-		return incompleteError(planErr)
+	}
+	return nil
+}
+
+// classifyPlanFailure inspects every *gh.APIError reachable anywhere in
+// planErr's error tree (which may join one failure per repository whose
+// commit resolution failed) and picks the most specific applicable exit
+// class: an authentication/permission failure on any repository takes
+// precedence, a repository-not-found or unprocessable-ref failure is an
+// unresolved coverage gap, and anything else backed by a GitHub API error
+// (5xx, a transport failure, or a malformed response, all surfaced as a
+// status-0 APIError) is a planner runtime failure. When the tree carries no
+// APIError at all (for example, an overall planning timeout or a bounded
+// matrix-size truncation with no individual commit-resolution failures),
+// the failure is reported as unresolved coverage, matching prior behavior.
+func classifyPlanFailure(err error) int {
+	apiErrs := collectAPIErrors(err)
+	for _, apiErr := range apiErrs {
+		if apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden {
+			return exitAuth
+		}
+	}
+	for _, apiErr := range apiErrs {
+		if apiErr.StatusCode != http.StatusNotFound && apiErr.StatusCode != http.StatusUnprocessableEntity {
+			return exitRuntime
+		}
+	}
+	return exitIncomplete
+}
+
+// collectAPIErrors walks err (descending through any errors.Join tree) and
+// returns every *gh.APIError found. A branch that carries no APIError
+// (a plain sentinel message, for instance) contributes nothing.
+func collectAPIErrors(err error) []*gh.APIError {
+	if err == nil {
+		return nil
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var apiErrs []*gh.APIError
+		for _, sub := range joined.Unwrap() {
+			apiErrs = append(apiErrs, collectAPIErrors(sub)...)
+		}
+		return apiErrs
+	}
+	var apiErr *gh.APIError
+	if errors.As(err, &apiErr) {
+		return []*gh.APIError{apiErr}
 	}
 	return nil
 }
