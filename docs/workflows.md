@@ -13,8 +13,10 @@ repository.
 4. Store the version 4 policy in `config/organization.yaml`.
 5. Configure `source_scan.enabled`, `source_scan.concurrency`, and
    `source_scan.timeout`.
-6. Run `Organization security audit and source scan`, or use its weekly
-   schedule.
+6. Add a weekly `schedule` trigger to the control repository's copy of the
+   workflow (the checked-in `segh` template is dispatch-only, since its
+   prerequisites only exist in the private control repository), or run
+   `Organization security audit and source scan` manually.
 
 The audit job verifies that the pinned `segh` source is reachable from protected
 `main`, mints a short-lived App token, requires a private control repository,

@@ -2,8 +2,6 @@
 name: Organization security audit and source scan
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "17 3 * * 0"
 permissions:
   contents: read
 concurrency:
