@@ -32,7 +32,6 @@ const (
 	defaultAuditOutput        = "segh-results/audit.json"
 	defaultMarkdownOutput     = "segh-results/report.md"
 	defaultScanManifestOutput = "segh-results/scan-manifest.json"
-	defaultScanMatrixOutput   = "segh-results/scan-matrix.json"
 	defaultScanSummaryOutput  = "segh-results/scan-summary.json"
 	defaultScanMarkdownOutput = "segh-results/scan-report.md"
 )
@@ -160,14 +159,13 @@ func runScanPlan(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	configPath := flags.String("config", "segh.yaml", "path to strict version 4 configuration")
 	inventoryPath := flags.String("inventory", defaultInventoryOutput, "governance inventory JSON")
 	manifestPath := flags.String("manifest-output", defaultScanManifestOutput, "source scan manifest JSON")
-	matrixPath := flags.String("matrix-output", defaultScanMatrixOutput, "GitHub Actions matrix JSON")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return usageError(err)
 	}
-	if flags.NArg() != 0 || *inventoryPath == "" || *manifestPath == "" || *matrixPath == "" {
+	if flags.NArg() != 0 || *inventoryPath == "" || *manifestPath == "" {
 		return usageError(fmt.Errorf("scan-plan requires non-empty paths and accepts no positional arguments"))
 	}
 	cfg, err := config.Load(*configPath)
@@ -184,11 +182,11 @@ func runScanPlan(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Inventory.Timeout))
 	defer cancel()
-	manifest, matrix, planErr := sourcescan.NewPlanner(cfg, client).Run(ctx, inventory)
-	if err := errors.Join(output.JSON(*manifestPath, manifest), output.JSON(*matrixPath, matrix)); err != nil {
+	manifest, planErr := sourcescan.NewPlanner(cfg, client).Run(ctx, inventory)
+	if err := output.JSON(*manifestPath, manifest); err != nil {
 		return runtimeError(err)
 	}
-	writef(stdout, "wrote source scan manifest and matrix to %s and %s\n", *manifestPath, *matrixPath)
+	writef(stdout, "wrote source scan manifest to %s\n", *manifestPath)
 	if planErr != nil {
 		var apiErr *gh.APIError
 		if errors.As(planErr, &apiErr) && (apiErr.StatusCode == 401 || apiErr.StatusCode == 403) {

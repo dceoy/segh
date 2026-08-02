@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +32,7 @@ func (f fakeAPI) Get(_ context.Context, path string, out any) error {
 	return json.Unmarshal([]byte(`{"sha":"`+data+`"}`), out)
 }
 
-func TestPlannerResolvesAndSortsImmutableCommits(t *testing.T) {
+func TestPlannerResolvesSortsAndSchedulesImmutableCommits(t *testing.T) {
 	cfg := config.Default()
 	cfg.Organization = "example"
 	cfg.SourceScan.Enabled = true
@@ -45,59 +44,69 @@ func TestPlannerResolvesAndSortsImmutableCommits(t *testing.T) {
 	}}
 	planner := NewPlanner(cfg, client)
 	planner.now = func() time.Time { return time.Unix(10, 0) }
-	inventory := model.Inventory{
+	manifest, err := planner.Run(context.Background(), model.Inventory{
 		SchemaVersion: model.SchemaVersion, Organization: "example", GitHubHost: "github.com", Complete: true,
 		Repositories: []model.Repository{
 			{ID: 2, FullName: "example/zeta", Visibility: "private", DefaultBranch: "main"},
 			{ID: 1, FullName: "example/alpha", Visibility: "public", DefaultBranch: "release"},
 		},
-	}
-	manifest, matrix, err := planner.Run(context.Background(), inventory)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manifest.Complete || len(manifest.Errors) != 0 || manifest.GeneratedAt != time.Unix(10, 0).UTC() {
+	if !manifest.Complete || manifest.Concurrency != 2 || manifest.TimeoutMinutes != 2 ||
+		manifest.GeneratedAt != time.Unix(10, 0).UTC() {
 		t.Fatalf("manifest = %#v", manifest)
 	}
-	wantNames := []string{"example/alpha", "example/zeta"}
-	gotNames := []string{manifest.Repositories[0].FullName, manifest.Repositories[1].FullName}
-	if !reflect.DeepEqual(gotNames, wantNames) {
-		t.Fatalf("repository order = %v, want %v", gotNames, wantNames)
-	}
-	if matrix.Include[0].CommitSHA != strings.Repeat("a", 40) || matrix.Include[0].TimeoutMinutes != 2 ||
-		matrix.Include[0].Concurrency != 2 || matrix.Include[0].Owner != "example" || matrix.Include[0].Repository != "alpha" {
-		t.Fatalf("matrix = %#v", matrix)
+	alpha := manifest.Repositories[0]
+	if alpha.FullName != "example/alpha" || alpha.Owner != "example" || alpha.Name != "alpha" ||
+		alpha.CommitSHA != strings.Repeat("a", 40) || !alpha.Scheduled {
+		t.Fatalf("first repository = %#v", alpha)
 	}
 }
 
-func TestPlannerKeepsResolvedRepositoriesWhenCoverageIsIncomplete(t *testing.T) {
+func TestPlannerPreservesFailedCommitResolutionAsIncompleteSelection(t *testing.T) {
 	cfg := config.Default()
 	cfg.Organization = "example"
 	cfg.SourceScan.Enabled = true
 	client := fakeAPI{commits: map[string]string{
 		"/repos/example/good/commits/main": strings.Repeat("a", 40),
 	}}
-	inventory := model.Inventory{
-		SchemaVersion: model.SchemaVersion, Organization: "example", GitHubHost: "github.com", Complete: false,
+	manifest, err := NewPlanner(cfg, client).Run(context.Background(), model.Inventory{
+		SchemaVersion: model.SchemaVersion, Organization: "example", GitHubHost: "github.com", Complete: true,
 		Repositories: []model.Repository{
 			{ID: 1, FullName: "example/good", DefaultBranch: "main"},
 			{ID: 2, FullName: "example/missing", DefaultBranch: "main"},
 		},
+	})
+	if err == nil || manifest.Complete || len(manifest.Repositories) != 2 || len(manifest.Errors) != 1 {
+		t.Fatalf("manifest=%#v err=%v", manifest, err)
 	}
-	manifest, matrix, err := NewPlanner(cfg, client).Run(context.Background(), inventory)
-	if err == nil || manifest.Complete || len(matrix.Include) != 1 || len(manifest.Errors) != 2 {
-		t.Fatalf("manifest=%#v matrix=%#v err=%v", manifest, matrix, err)
+	missing := manifest.Repositories[1]
+	if missing.FullName != "example/missing" || missing.CommitSHA != "" || missing.Scheduled {
+		t.Fatalf("failed selection = %#v", missing)
+	}
+
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "repository-scan-1", "status.json"), validStatus(manifest.Repositories[0], "pass"))
+	summary, summarizeErr := Summarize(manifest, dir, time.Unix(20, 0))
+	if summarizeErr != nil {
+		t.Fatal(summarizeErr)
+	}
+	want := model.SourceScanCounts{Selected: 2, Scanned: 1, Passed: 1, Incomplete: 1}
+	if summary.Counts != want || summary.Complete {
+		t.Fatalf("summary = %#v, want counts %#v", summary, want)
 	}
 }
 
 func TestDisabledPlannerMakesExplicitEmptyManifest(t *testing.T) {
 	cfg := config.Default()
 	cfg.Organization = "example"
-	manifest, matrix, err := NewPlanner(cfg, fakeAPI{}).Run(context.Background(), model.Inventory{
+	manifest, err := NewPlanner(cfg, fakeAPI{}).Run(context.Background(), model.Inventory{
 		SchemaVersion: model.SchemaVersion, Organization: "example", GitHubHost: "github.com",
 	})
-	if err != nil || manifest.Enabled || !manifest.Complete || len(matrix.Include) != 0 {
-		t.Fatalf("manifest=%#v matrix=%#v err=%v", manifest, matrix, err)
+	if err != nil || manifest.Enabled || !manifest.Complete || len(manifest.Repositories) != 0 {
+		t.Fatalf("manifest=%#v err=%v", manifest, err)
 	}
 }
 
@@ -113,29 +122,35 @@ func TestPlannerFailsClosedAtGitHubMatrixLimit(t *testing.T) {
 		inventory.Repositories = append(inventory.Repositories, model.Repository{ID: int64(index + 1), FullName: fullName, DefaultBranch: "main"})
 		client.commits["/repos/example/"+name+"/commits/main"] = fmt.Sprintf("%040x", index+1)
 	}
-	manifest, matrix, err := NewPlanner(cfg, client).Run(context.Background(), inventory)
+	manifest, err := NewPlanner(cfg, client).Run(context.Background(), inventory)
+	scheduled := 0
+	for _, repository := range manifest.Repositories {
+		if repository.Scheduled {
+			scheduled++
+		}
+	}
 	if err == nil || manifest.Complete || len(manifest.Repositories) != maxMatrixTargets+1 ||
-		len(matrix.Include) != maxMatrixTargets || manifest.Errors[0].Kind != "matrix_limit" {
-		t.Fatalf("manifest complete=%v repositories=%d errors=%#v matrix=%d err=%v", manifest.Complete, len(manifest.Repositories), manifest.Errors, len(matrix.Include), err)
+		scheduled != maxMatrixTargets || manifest.Errors[0].Kind != "matrix_limit" {
+		t.Fatalf("manifest complete=%v repositories=%d scheduled=%d errors=%#v err=%v", manifest.Complete, len(manifest.Repositories), scheduled, manifest.Errors, err)
 	}
 }
 
 func TestSummaryDistinguishesFindingsMissingAndRuntimeResults(t *testing.T) {
+	repositories := []model.SourceScanRepository{
+		resolvedRepository(1, "findings", "a"),
+		resolvedRepository(2, "missing", "b"),
+	}
 	manifest := model.SourceScanManifest{
 		SchemaVersion: model.SourceScanSchemaVersion, Organization: "example", Complete: true,
-		Repositories: []model.SourceScanRepository{
-			{ID: 1, FullName: "example/findings", Visibility: "private", DefaultBranch: "main", CommitSHA: strings.Repeat("a", 40)},
-			{ID: 2, FullName: "example/missing", Visibility: "private", DefaultBranch: "main", CommitSHA: strings.Repeat("b", 40)},
-		},
+		Repositories: repositories,
 	}
 	dir := t.TempDir()
-	status := validStatus(manifest.Repositories[0], "findings")
-	writeJSON(t, filepath.Join(dir, "repository-scan-1", "status.json"), status)
+	writeJSON(t, filepath.Join(dir, "repository-scan-1", "status.json"), validStatus(repositories[0], "findings"))
 	summary, err := Summarize(manifest, dir, time.Unix(20, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Complete || summary.Counts != (model.SourceScanCounts{Selected: 2, Scanned: 1, Findings: 1, Incomplete: 1}) || len(summary.Errors) != 1 {
+	if summary.Complete || summary.Counts != (model.SourceScanCounts{Selected: 2, Scanned: 1, Findings: 1, Incomplete: 1}) {
 		t.Fatalf("summary = %#v", summary)
 	}
 	if !strings.Contains(Markdown(summary), "| 2 | 1 | 0 | 1 | 1 | 0 |") {
@@ -144,14 +159,13 @@ func TestSummaryDistinguishesFindingsMissingAndRuntimeResults(t *testing.T) {
 }
 
 func TestSummaryRejectsMismatchedOrMalformedStatusEvidence(t *testing.T) {
-	repository := model.SourceScanRepository{ID: 1, FullName: "example/repo", Visibility: "private", DefaultBranch: "main", CommitSHA: strings.Repeat("a", 40)}
+	repository := resolvedRepository(1, "repo", "a")
 	manifest := model.SourceScanManifest{SchemaVersion: 1, Organization: "example", Complete: true, Repositories: []model.SourceScanRepository{repository}}
 	for _, test := range []struct {
 		name   string
 		mutate func(*model.RepositoryScanStatus)
 	}{
 		{"commit", func(status *model.RepositoryScanStatus) { status.CommitSHA = strings.Repeat("b", 40) }},
-		{"scanner", func(status *model.RepositoryScanStatus) { status.Scanners[0].Name = "unknown" }},
 		{"result", func(status *model.RepositoryScanStatus) { status.Result = "success" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -170,29 +184,18 @@ func TestSummaryRejectsMismatchedOrMalformedStatusEvidence(t *testing.T) {
 	}
 }
 
+func resolvedRepository(id int64, name, sha string) model.SourceScanRepository {
+	return model.SourceScanRepository{
+		ID: id, Owner: "example", Name: name, FullName: "example/" + name,
+		DefaultBranch: "main", CommitSHA: strings.Repeat(sha, 40), Scheduled: true,
+	}
+}
+
 func validStatus(repository model.SourceScanRepository, result string) model.RepositoryScanStatus {
-	names := []string{"content-validation", "zizmor", "actionlint", "shellcheck", "checkov", "trivy-vulnerability", "trivy-secret"}
-	status := model.RepositoryScanStatus{
+	return model.RepositoryScanStatus{
 		SchemaVersion: 1, RepositoryID: repository.ID, Repository: repository.FullName,
-		Visibility: repository.Visibility, DefaultBranch: repository.DefaultBranch,
-		CommitSHA: repository.CommitSHA, Result: result,
+		DefaultBranch: repository.DefaultBranch, CommitSHA: repository.CommitSHA, Result: result,
 	}
-	for _, name := range names {
-		status.Scanners = append(status.Scanners, model.SourceScannerStatus{Name: name, Version: "1.0", Result: "pass"})
-	}
-	switch result {
-	case "findings":
-		status.Scanners[1].Result = "findings"
-		status.Scanners[1].ExitStatus = 1
-		status.Scanners[1].FindingCount = 1
-	case "incomplete":
-		status.Scanners[0].Result = "incomplete"
-		status.Scanners[0].ExitStatus = 1
-	case "error":
-		status.Scanners[1].Result = "error"
-		status.Scanners[1].ExitStatus = 2
-	}
-	return status
 }
 
 func writeJSON(t *testing.T, path string, value any) {

@@ -1,10 +1,8 @@
 # segh
 
-`segh` audits GitHub Enterprise organization governance, periodically scans
-selected default-branch commits, and supplies a central read-only pull-request
-security workflow. It is designed for private
-repositories without GitHub Code Security or GitHub Secret Protection
-licenses.
+`segh` audits GitHub Enterprise organization governance and periodically scans
+selected default-branch commits. It is designed for private repositories
+without GitHub Code Security or GitHub Secret Protection licenses.
 
 The supported baseline is:
 
@@ -58,24 +56,10 @@ and `5` runtime failure.
 
 ## Pull-request gate
 
-Install `.github/workflows/pr-security.yml` as an organization ruleset required
-workflow for selected repositories. Target repositories do not install a local
-publisher or grant a write-capable token.
-
-The stable `PR security / scan` check fails when:
-
-- zizmor reports a medium-or-higher, high-confidence finding or cannot strictly
-  collect the workflow files;
-- actionlint reports an invalid workflow or an embedded ShellCheck diagnostic;
-- ShellCheck reports a diagnostic in a standalone tracked shell script;
-- Checkov reports a failed centrally enabled infrastructure-as-code check;
-- Trivy finds a high or critical dependency vulnerability; or
-- Trivy finds a secret at any severity.
-
-The workflow runs all scanners before enforcing the combined result, so reports
-remain available when the check fails. Configuration, thresholds, and ignore
-behavior are fixed in the trusted `segh` workflow rather than read from the
-pull-request checkout. See [docs/workflows.md](docs/workflows.md).
+Merge-time enforcement is owned by the trusted `Repository security` workflow
+in [`dceoy/gha-for-devops`](https://github.com/dceoy/gha-for-devops), rather
+than duplicated in this repository. `segh` consumes the same reviewed scanner
+implementation for periodic organization scans.
 
 ## Organization audit and periodic source scan
 
@@ -84,9 +68,10 @@ rulesets, branch protection, custom properties, dependency graph, Dependabot
 coverage, and repository metadata. It does not clone repositories or run
 scanners during governance collection. When `source_scan.enabled` is true, the
 scheduled control workflow reuses that selected inventory, records every
-default branch's exact commit SHA, and scans each checkout with the same trusted
-static-analysis policy. Repository scripts, package installers, submodules, Git
-LFS objects, and Terraform providers are never executed or initialized.
+default branch's exact commit SHA, and scans each checkout with the pinned
+`gha-for-devops` static-analysis policy. Repository scripts, package installers,
+submodules, Git LFS objects, and Terraform providers are never executed or
+initialized.
 
 Source scanning writes separate `scan-manifest.json`, `scan-summary.json`, and
 per-repository evidence. Findings, incomplete content or checkout coverage, and

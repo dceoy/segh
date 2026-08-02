@@ -18,7 +18,7 @@ jobs:
       scan-targets: ${{ steps.scan-outputs.outputs.targets }}
       source-commit: ${{ steps.source.outputs.commit }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - name: Check out control repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
@@ -118,7 +118,7 @@ jobs:
         id: scan-outputs
         if: always()
         run: |
-          if [[ ! -f segh-results/scan-manifest.json || ! -f segh-results/scan-matrix.json ]]; then
+          if [[ ! -f segh-results/scan-manifest.json ]]; then
             {
               echo 'enabled=false'
               echo 'matrix={"include":[]}'
@@ -128,9 +128,16 @@ jobs:
             exit 0
           fi
           enabled=$(jq -r '.enabled' segh-results/scan-manifest.json)
-          matrix=$(jq -c . segh-results/scan-matrix.json)
-          concurrency=$(jq -r 'if (.include | length) > 0 then .include[0].concurrency else 1 end' segh-results/scan-matrix.json)
-          targets=$(jq -r '(.include | length) > 0' segh-results/scan-matrix.json)
+          matrix=$(jq -c '
+            .timeout_minutes as $timeout
+            | {include: [.repositories[]
+                | select(.scheduled)
+                | {id, owner, repository: .name, full_name,
+                   default_branch, commit_sha,
+                   timeout_minutes: $timeout}]}
+          ' segh-results/scan-manifest.json)
+          concurrency=$(jq -r '.concurrency' segh-results/scan-manifest.json)
+          targets=$(jq -r '[.repositories[] | select(.scheduled)] | length > 0' segh-results/scan-manifest.json)
           {
             printf 'enabled=%s\n' "$enabled"
             printf 'matrix=%s\n' "$matrix"
@@ -161,7 +168,6 @@ jobs:
           name: organization-source-scan-plan
           path: |
             segh-results/scan-manifest.json
-            segh-results/scan-matrix.json
           if-no-files-found: warn
           retention-days: 14
       - name: Enforce governance and planning results
@@ -195,14 +201,14 @@ jobs:
     permissions:
       contents: read
     env:
-      AQUA_CONFIG: ${{ github.workspace }}/_segh/aqua.yaml
+      AQUA_CONFIG: ${{ github.workspace }}/_trusted/aqua.yaml
     steps:
-      - name: Check out trusted scanner source
+      - name: Check out pinned upstream scanner
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
-          repository: dceoy/segh
-          ref: ${{ needs.audit.outputs.source-commit }}
-          path: _segh
+          repository: dceoy/gha-for-devops
+          ref: 1413c89221edd788de6dcbcb30f7e6973615048f
+          path: _trusted
           persist-credentials: false
       - name: Create repository-scoped read-only App token
         id: app-token
@@ -237,15 +243,83 @@ jobs:
           fetch-depth: 1
           lfs: false
           submodules: false
-      - name: Scan repository as static input
-        uses: ./_segh/.github/actions/repository-scan
+      - name: Install checksum-verified scanners
+        id: install-scanners
+        continue-on-error: true
+        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e  # v4.0.5
         with:
-          artifact-name: repository-scan-${{ matrix.id }}
-          repository-id: ${{ matrix.id }}
-          repository: ${{ matrix.full_name }}
-          visibility: ${{ matrix.visibility }}
-          default-branch: ${{ matrix.default_branch }}
-          commit-sha: ${{ matrix.commit_sha }}
+          aqua_version: v2.62.1
+          working_directory: _trusted
+      - name: Run pinned upstream scanner
+        if: steps.install-scanners.outcome == 'success'
+        run: |
+          scanner=_trusted/.github/actions/repository-security-scan/scan.sh
+          "$scanner" prepare
+          "$scanner" preflight
+          for operation in zizmor actionlint shellcheck checkov trivy-vulnerability trivy-secret; do
+            "$scanner" "$operation"
+          done
+          "$scanner" summary
+      - name: Bind scanner evidence to the planned repository identity
+        if: always()
+        env:
+          REPOSITORY_ID: ${{ matrix.id }}
+          REPOSITORY: ${{ matrix.full_name }}
+          DEFAULT_BRANCH: ${{ matrix.default_branch }}
+          COMMIT_SHA: ${{ matrix.commit_sha }}
+        run: |
+          results=security-results
+          mkdir -p "$results"
+          result=pass
+          if [[ ! -f "$results/preflight.status" ]]; then
+            result=error
+          else
+            preflight=$(<"$results/preflight.status")
+            if [[ ! "$preflight" =~ ^[0-9]+$ ]]; then
+              result=error
+            elif ((preflight != 0)); then
+              result=incomplete
+            fi
+          fi
+          if [[ "$result" == pass ]]; then
+            for scanner in zizmor actionlint shellcheck checkov trivy-vulnerability trivy-secret; do
+              status_file="$results/$scanner.status"
+              if [[ ! -f "$status_file" ]]; then
+                result=error
+                break
+              fi
+              status=$(<"$status_file")
+              if [[ ! "$status" =~ ^[0-9]+$ ]] || ((status > 1)); then
+                result=error
+                break
+              fi
+              if ((status == 1)); then
+                result=findings
+              fi
+            done
+          fi
+          jq -n \
+            --argjson schema_version 1 \
+            --argjson repository_id "$REPOSITORY_ID" \
+            --arg repository "$REPOSITORY" \
+            --arg default_branch "$DEFAULT_BRANCH" \
+            --arg commit_sha "$COMMIT_SHA" \
+            --arg result "$result" \
+            '{schema_version: $schema_version, repository_id: $repository_id,
+              repository: $repository, default_branch: $default_branch,
+              commit_sha: $commit_sha, result: $result}' \
+            > "$results/status.json"
+      - name: Retain repository scan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: repository-scan-${{ matrix.id }}
+          path: security-results
+          if-no-files-found: error
+          retention-days: 14
+      - name: Enforce scanner result
+        if: always()
+        run: _trusted/.github/actions/repository-security-scan/scan.sh enforce
 
   source-scan-summary:
     name: Organization source scan summary

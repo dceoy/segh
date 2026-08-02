@@ -17,17 +17,6 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      # Some internal/workflows tests exec the repository-scan gate script with
-      # their working directory set to an unrelated temporary directory, to
-      # exercise real scanner binaries without touching this checkout. aqua's
-      # shims resolve a pinned tool version by searching upward from the
-      # invoking process's working directory for an aqua.yaml, independent
-      # of PATH order, so without this they silently fall back to whatever
-      # same-named binary happens to be preinstalled on the runner (e.g. an
-      # older distro-packaged ShellCheck) instead of the version this
-      # repository pins.
-      AQUA_CONFIG: ${{ github.workspace }}/aqua.yaml
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1

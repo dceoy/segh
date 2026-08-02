@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dceoy/segh/internal/config"
@@ -35,23 +34,24 @@ func NewPlanner(cfg config.Config, client gh.API) *Planner {
 	return &Planner{cfg: cfg, client: client, now: time.Now}
 }
 
-func (p *Planner) Run(ctx context.Context, inventory model.Inventory) (model.SourceScanManifest, model.SourceScanMatrix, error) {
+func (p *Planner) Run(ctx context.Context, inventory model.Inventory) (model.SourceScanManifest, error) {
 	manifest := model.SourceScanManifest{
-		SchemaVersion: model.SourceScanSchemaVersion,
-		Organization:  p.cfg.Organization,
-		GitHubHost:    p.client.Hostname(),
-		GeneratedAt:   p.now().UTC(),
-		Enabled:       p.cfg.SourceScan.Enabled,
-		Complete:      true,
-		Repositories:  []model.SourceScanRepository{},
+		SchemaVersion:  model.SourceScanSchemaVersion,
+		Organization:   p.cfg.Organization,
+		GitHubHost:     p.client.Hostname(),
+		GeneratedAt:    p.now().UTC(),
+		Enabled:        p.cfg.SourceScan.Enabled,
+		Complete:       true,
+		Concurrency:    p.cfg.SourceScan.Concurrency,
+		TimeoutMinutes: int((time.Duration(p.cfg.SourceScan.Timeout) + time.Minute - 1) / time.Minute),
+		Repositories:   []model.SourceScanRepository{},
 	}
-	matrix := model.SourceScanMatrix{Include: []model.SourceScanMatrixEntry{}}
 	if inventory.SchemaVersion != model.SchemaVersion || inventory.Organization != p.cfg.Organization ||
 		inventory.GitHubHost == "" || inventory.GitHubHost != p.client.Hostname() {
-		return manifest, matrix, fmt.Errorf("inventory identity does not match the configuration")
+		return manifest, fmt.Errorf("inventory identity does not match the configuration")
 	}
 	if !p.cfg.SourceScan.Enabled {
-		return manifest, matrix, nil
+		return manifest, nil
 	}
 	if !inventory.Complete {
 		manifest.Complete = false
@@ -61,52 +61,20 @@ func (p *Planner) Run(ctx context.Context, inventory model.Inventory) (model.Sou
 		})
 	}
 
-	type result struct {
-		repository model.SourceScanRepository
-		err        error
-	}
-	jobs := make(chan model.Repository)
-	results := make(chan result, len(inventory.Repositories))
-	var workers sync.WaitGroup
-	for range p.cfg.SourceScan.Concurrency {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for repository := range jobs {
-				resolved, err := p.resolve(ctx, repository)
-				results <- result{repository: resolved, err: err}
-			}
-		}()
-	}
-	go func() {
-		defer close(results)
-		for _, repository := range inventory.Repositories {
-			select {
-			case jobs <- repository:
-			case <-ctx.Done():
-				close(jobs)
-				workers.Wait()
-				return
-			}
-		}
-		close(jobs)
-		workers.Wait()
-	}()
-
 	var resolutionErrors []error
-	for resolved := range results {
-		if resolved.err != nil {
-			resolutionErrors = append(resolutionErrors, resolved.err)
+	for _, repository := range inventory.Repositories {
+		resolved, err := p.resolve(ctx, repository)
+		manifest.Repositories = append(manifest.Repositories, resolved)
+		if err != nil {
+			resolutionErrors = append(resolutionErrors, err)
 			manifest.Complete = false
 			manifest.Errors = append(manifest.Errors, model.RunError{
-				Repository: resolved.repository.FullName,
+				Repository: resolved.FullName,
 				Component:  "source_scan_plan",
 				Kind:       "commit_resolution",
-				Message:    resolved.err.Error(),
+				Message:    err.Error(),
 			})
-			continue
 		}
-		manifest.Repositories = append(manifest.Repositories, resolved.repository)
 	}
 	if ctx.Err() != nil {
 		manifest.Complete = false
@@ -127,15 +95,22 @@ func (p *Planner) Run(ctx context.Context, inventory model.Inventory) (model.Sou
 		}
 		return left.Message < right.Message
 	})
-	timeoutMinutes := int((time.Duration(p.cfg.SourceScan.Timeout) + time.Minute - 1) / time.Minute)
-	matrixRepositories := manifest.Repositories
-	if len(matrixRepositories) > maxMatrixTargets {
+	resolvedRepositories := 0
+	for index := range manifest.Repositories {
+		if manifest.Repositories[index].CommitSHA == "" {
+			continue
+		}
+		resolvedRepositories++
+		if resolvedRepositories <= maxMatrixTargets {
+			manifest.Repositories[index].Scheduled = true
+		}
+	}
+	if resolvedRepositories > maxMatrixTargets {
 		manifest.Complete = false
 		manifest.Errors = append(manifest.Errors, model.RunError{
 			Component: "source_scan_plan", Kind: "matrix_limit",
-			Message: fmt.Sprintf("%d selected repositories exceed the bounded matrix limit of %d", len(matrixRepositories), maxMatrixTargets),
+			Message: fmt.Sprintf("%d resolved repositories exceed the bounded matrix limit of %d", resolvedRepositories, maxMatrixTargets),
 		})
-		matrixRepositories = matrixRepositories[:maxMatrixTargets]
 		sort.Slice(manifest.Errors, func(i, j int) bool {
 			left, right := manifest.Errors[i], manifest.Errors[j]
 			if left.Repository != right.Repository {
@@ -147,30 +122,23 @@ func (p *Planner) Run(ctx context.Context, inventory model.Inventory) (model.Sou
 			return left.Message < right.Message
 		})
 	}
-	for _, repository := range matrixRepositories {
-		owner, name, _ := strings.Cut(repository.FullName, "/")
-		matrix.Include = append(matrix.Include, model.SourceScanMatrixEntry{
-			ID: repository.ID, Owner: owner, Repository: name,
-			FullName: repository.FullName, Visibility: repository.Visibility,
-			DefaultBranch: repository.DefaultBranch, CommitSHA: repository.CommitSHA,
-			TimeoutMinutes: timeoutMinutes, Concurrency: p.cfg.SourceScan.Concurrency,
-		})
-	}
 	if !manifest.Complete {
-		return manifest, matrix, errors.Join(
+		return manifest, errors.Join(
 			fmt.Errorf("source scan planning coverage is incomplete"),
 			errors.Join(resolutionErrors...),
 		)
 	}
-	return manifest, matrix, nil
+	return manifest, nil
 }
 
 func (p *Planner) resolve(ctx context.Context, repository model.Repository) (model.SourceScanRepository, error) {
 	selected := model.SourceScanRepository{
 		ID: repository.ID, FullName: repository.FullName, Visibility: repository.Visibility,
-		DefaultBranch: repository.DefaultBranch, SelectionReason: "selected by inventory selectors",
+		DefaultBranch: repository.DefaultBranch,
 	}
 	owner, name, ok := strings.Cut(repository.FullName, "/")
+	selected.Owner = owner
+	selected.Name = name
 	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
 		return selected, fmt.Errorf("repository full name is invalid")
 	}
@@ -203,14 +171,24 @@ func Summarize(manifest model.SourceScanManifest, resultsDirectory string, now t
 		return summary, fmt.Errorf("scan manifest identity is invalid")
 	}
 	expected := make(map[int64]model.SourceScanRepository, len(manifest.Repositories))
+	selectedIDs := make(map[int64]bool, len(manifest.Repositories))
 	expectedNames := make(map[string]bool, len(manifest.Repositories))
 	for _, repository := range manifest.Repositories {
-		if repository.ID <= 0 || expected[repository.ID].ID != 0 || expectedNames[repository.FullName] ||
-			repository.FullName == "" || repository.DefaultBranch == "" || !isFullSHA(repository.CommitSHA) {
+		if repository.ID <= 0 || selectedIDs[repository.ID] || expectedNames[repository.FullName] ||
+			repository.Owner == "" || repository.Name == "" ||
+			repository.FullName != repository.Owner+"/"+repository.Name || repository.DefaultBranch == "" ||
+			(repository.Scheduled && !isFullSHA(repository.CommitSHA)) ||
+			(!repository.Scheduled && repository.CommitSHA != "" && !isFullSHA(repository.CommitSHA)) {
 			return summary, fmt.Errorf("scan manifest contains an invalid or duplicate repository identity")
 		}
-		expected[repository.ID] = repository
+		selectedIDs[repository.ID] = true
 		expectedNames[repository.FullName] = true
+		if repository.Scheduled {
+			expected[repository.ID] = repository
+		} else {
+			summary.Counts.Incomplete++
+			summary.Complete = false
+		}
 	}
 	seen := make(map[int64]bool, len(expected))
 	err := filepath.WalkDir(resultsDirectory, func(path string, entry os.DirEntry, walkErr error) error {
@@ -339,55 +317,11 @@ func ReadJSON(path string, value any) error {
 
 func statusMatches(status model.RepositoryScanStatus, repository model.SourceScanRepository) bool {
 	if status.SchemaVersion != model.SourceScanSchemaVersion || status.RepositoryID != repository.ID ||
-		status.Repository != repository.FullName || status.Visibility != repository.Visibility ||
-		status.DefaultBranch != repository.DefaultBranch || status.CommitSHA != repository.CommitSHA ||
-		!isFullSHA(status.CommitSHA) || len(status.Scanners) != 7 {
+		status.Repository != repository.FullName || status.DefaultBranch != repository.DefaultBranch ||
+		status.CommitSHA != repository.CommitSHA || !isFullSHA(status.CommitSHA) {
 		return false
 	}
-	allowedResults := map[string]bool{"pass": true, "findings": true, "incomplete": true, "error": true}
-	if !allowedResults[status.Result] {
-		return false
-	}
-	expectedNames := map[string]bool{
-		"content-validation": true, "zizmor": true, "actionlint": true,
-		"shellcheck": true, "checkov": true, "trivy-vulnerability": true, "trivy-secret": true,
-	}
-	names := map[string]bool{}
-	overall := "pass"
-	for _, scanner := range status.Scanners {
-		if scanner.Name == "" || scanner.Version == "" || scanner.ExitStatus < 0 || scanner.FindingCount < 0 ||
-			!expectedNames[scanner.Name] || names[scanner.Name] ||
-			!map[string]bool{"pass": true, "skipped": true, "findings": true, "incomplete": true, "error": true}[scanner.Result] {
-			return false
-		}
-		names[scanner.Name] = true
-		switch scanner.Result {
-		case "pass", "skipped":
-			if scanner.ExitStatus != 0 {
-				return false
-			}
-		case "findings":
-			if scanner.ExitStatus == 0 || scanner.FindingCount == 0 {
-				return false
-			}
-			if overall == "pass" {
-				overall = "findings"
-			}
-		case "incomplete":
-			if scanner.ExitStatus == 0 {
-				return false
-			}
-			if overall != "error" {
-				overall = "incomplete"
-			}
-		case "error":
-			if scanner.ExitStatus == 0 {
-				return false
-			}
-			overall = "error"
-		}
-	}
-	return status.Result == overall
+	return map[string]bool{"pass": true, "findings": true, "incomplete": true, "error": true}[status.Result]
 }
 
 func isFullSHA(value string) bool {

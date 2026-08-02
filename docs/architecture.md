@@ -1,6 +1,6 @@
 # Architecture
 
-`segh` has three read-only paths with two evidence contracts.
+`segh` has two read-only paths with separate evidence contracts.
 
 ```text
 Organization audit
@@ -12,27 +12,11 @@ Periodic organization source scan
   ├─ selected inventory repositories
   ├─ immutable default-branch commit manifest
   ├─ bounded repository scanner matrix
+  ├─ pinned scanner from dceoy/gha-for-devops
   └─ scan-manifest.json + scan-summary.json + repository evidence
-
-Organization ruleset required workflow
-  ├─ trusted segh scanner configuration
-  ├─ untrusted pull-request checkout
-  ├─ zizmor + actionlint/ShellCheck + Checkov + two Trivy scans
-  └─ ordinary required check + retained JSON/text/log artifacts
 ```
 
 ## Trust boundaries
-
-The central ruleset workflow is the policy boundary. Scanner versions are
-checksum-verified through Aqua, action dependencies are pinned to full commit
-SHAs, and both workflow wrappers invoke the same composite action from the
-trusted `segh` checkout. The pull-request checkout is only scanner input. It
-cannot supply the composite action, scanner script, actionlint, ShellCheck,
-Checkov, Trivy, or zizmor configuration, exclusions, or wrapper scripts.
-
-The scanner job has only `contents: read`. It does not receive an App private
-key, installation token, publication credential, or write permission. Fork and
-Dependabot pull requests use the same unprivileged path.
 
 The organization audit receives a short-lived, read-only GitHub App token. It
 uses that token directly over HTTPS, bounds response sizes, retries transient
@@ -45,8 +29,8 @@ manifest. Each matrix job mints a new token limited to that one repository,
 checks out only the recorded SHA with credentials, LFS, and submodules disabled,
 and treats the checkout only as static input. Tracked symlinks are removed;
 submodule gitlinks and Git LFS pointers make coverage incomplete. Scanner
-configuration and binaries come only from the reviewed, protected `segh`
-revision named by the private control repository.
+configuration and binaries come only from a full, reviewed
+`dceoy/gha-for-devops` commit pinned in the workflow.
 
 ## Dependency evaluations
 

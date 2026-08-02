@@ -123,58 +123,36 @@ type RunError struct {
 const SourceScanSchemaVersion = 1
 
 type SourceScanManifest struct {
-	SchemaVersion int                    `json:"schema_version"`
-	Organization  string                 `json:"organization"`
-	GitHubHost    string                 `json:"github_host"`
-	GeneratedAt   time.Time              `json:"generated_at"`
-	Enabled       bool                   `json:"enabled"`
-	Complete      bool                   `json:"complete"`
-	Repositories  []SourceScanRepository `json:"repositories"`
-	Errors        []RunError             `json:"errors,omitempty"`
+	SchemaVersion  int                    `json:"schema_version"`
+	Organization   string                 `json:"organization"`
+	GitHubHost     string                 `json:"github_host"`
+	GeneratedAt    time.Time              `json:"generated_at"`
+	Enabled        bool                   `json:"enabled"`
+	Complete       bool                   `json:"complete"`
+	Concurrency    int                    `json:"concurrency"`
+	TimeoutMinutes int                    `json:"timeout_minutes"`
+	Repositories   []SourceScanRepository `json:"repositories"`
+	Errors         []RunError             `json:"errors,omitempty"`
 }
 
 type SourceScanRepository struct {
-	ID              int64  `json:"id"`
-	FullName        string `json:"full_name"`
-	Visibility      string `json:"visibility"`
-	DefaultBranch   string `json:"default_branch"`
-	CommitSHA       string `json:"commit_sha"`
-	SelectionReason string `json:"selection_reason"`
-}
-
-type SourceScanMatrix struct {
-	Include []SourceScanMatrixEntry `json:"include"`
-}
-
-type SourceScanMatrixEntry struct {
-	ID             int64  `json:"id"`
-	Owner          string `json:"owner"`
-	Repository     string `json:"repository"`
-	FullName       string `json:"full_name"`
-	Visibility     string `json:"visibility"`
-	DefaultBranch  string `json:"default_branch"`
-	CommitSHA      string `json:"commit_sha"`
-	TimeoutMinutes int    `json:"timeout_minutes"`
-	Concurrency    int    `json:"concurrency"`
-}
-
-type SourceScannerStatus struct {
-	Name         string `json:"name"`
-	Version      string `json:"version"`
-	ExitStatus   int    `json:"exit_status"`
-	Result       string `json:"result"`
-	FindingCount int    `json:"finding_count"`
+	ID            int64  `json:"id"`
+	Owner         string `json:"owner"`
+	Name          string `json:"name"`
+	FullName      string `json:"full_name"`
+	Visibility    string `json:"visibility"`
+	DefaultBranch string `json:"default_branch"`
+	CommitSHA     string `json:"commit_sha,omitempty"`
+	Scheduled     bool   `json:"scheduled"`
 }
 
 type RepositoryScanStatus struct {
-	SchemaVersion int                   `json:"schema_version"`
-	RepositoryID  int64                 `json:"repository_id"`
-	Repository    string                `json:"repository"`
-	Visibility    string                `json:"visibility"`
-	DefaultBranch string                `json:"default_branch"`
-	CommitSHA     string                `json:"commit_sha"`
-	Result        string                `json:"result"`
-	Scanners      []SourceScannerStatus `json:"scanners"`
+	SchemaVersion int    `json:"schema_version"`
+	RepositoryID  int64  `json:"repository_id"`
+	Repository    string `json:"repository"`
+	DefaultBranch string `json:"default_branch"`
+	CommitSHA     string `json:"commit_sha"`
+	Result        string `json:"result"`
 }
 
 type SourceScanCounts struct {

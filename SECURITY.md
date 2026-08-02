@@ -3,12 +3,11 @@
 Report suspected vulnerabilities privately through the repository's GitHub
 security-advisory interface.
 
-The central pull-request and periodic organization workflows treat every target
-checkout as untrusted data.
-It grants only `contents: read`, disables target-provided scanner
-configuration, exclusions, external policies, and wrapper scripts, installs
-checksum-verified scanner versions, and retains reports as ordinary workflow
-artifacts.
+The periodic organization workflow treats every target checkout as untrusted
+data. It grants only `contents: read`, uses the pinned trusted scanner from
+`dceoy/gha-for-devops`, disables target-provided scanner configuration and
+exclusions, installs checksum-verified scanner versions, and retains reports as
+ordinary workflow artifacts.
 
 Install organization required workflows and rulesets only from reviewed commits
 on protected `main`. Keep the App private key in Actions secrets, install the
@@ -21,4 +20,4 @@ into public issues or job summaries.
 
 Scanner gates reduce risk but do not provide pre-receive secret blocking,
 CodeQL-equivalent deep SAST, or a managed security-alert lifecycle. Rotate any
-secret committed to Git immediately even when a pull-request check catches it.
+committed secret immediately.
