@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadExample(t *testing.T) {
@@ -146,6 +148,10 @@ func TestSchemaRejectsInvalidStructuralValuesAtRuntime(t *testing.T) {
 			"excessive source scan timeout",
 			"source_scan:\n  enabled: true\n  timeout: 6h1m\npolicies:\n  repository:\n    require_ruleset: true\n",
 		},
+		{
+			"excessive inventory timeout",
+			"inventory:\n  timeout: 30m1s\npolicies:\n  repository:\n    require_ruleset: true\n",
+		},
 		{"empty policies", "policies: {}\n"},
 		{"empty policy section", "policies:\n  actions: {}\n"},
 		{
@@ -282,16 +288,22 @@ func TestSchemaDrivesRuntimeDurationValidation(t *testing.T) {
 		{strings.Repeat("1h", 17), false},
 		{"999999999999999999999999999h", false},
 	}
+	// This exercises the shared duration schema pattern only, independent
+	// of any semantic range bound placed on a specific field (such as
+	// inventory.timeout's 30m cap): it decodes straight to
+	// validateConfigDocument rather than going through Load(), so large
+	// pattern-valid durations remain schema-valid here even though Load()
+	// would separately reject them on semantic grounds.
 	for _, tc := range cases {
-		configPath := filepath.Join(t.TempDir(), "segh.yaml")
 		data := "version: 4\norganization: test\ninventory:\n  timeout: \"" + tc.raw +
 			"\"\npolicies:\n  repository:\n    require_ruleset: true\n"
-		if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
-			t.Fatal(err)
+		var document any
+		if err := yaml.Unmarshal([]byte(data), &document); err != nil {
+			t.Fatalf("%s: yaml.Unmarshal: %v", tc.raw, err)
 		}
-		_, err := Load(configPath)
+		err := validateConfigDocument(document)
 		if got := err == nil; got != tc.valid {
-			t.Errorf("%s: Load() valid = %v, want %v (err = %v)", tc.raw, got, tc.valid, err)
+			t.Errorf("%s: validateConfigDocument() valid = %v, want %v (err = %v)", tc.raw, got, tc.valid, err)
 		}
 	}
 }
