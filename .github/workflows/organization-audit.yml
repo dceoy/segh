@@ -291,6 +291,13 @@ jobs:
                 result=error
                 break
               fi
+              if [[ ! -f "$results/$scanner.json" || ! -s "$results/$scanner.json" ]] \
+                || ! jq -e . "$results/$scanner.json" > /dev/null 2>&1 \
+                || [[ ! -f "$results/$scanner.txt" || ! -s "$results/$scanner.txt" ]] \
+                || [[ ! -f "$results/$scanner.log" ]]; then
+                result=error
+                break
+              fi
               if ((status == 1)); then
                 result=findings
               fi
