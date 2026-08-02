@@ -258,7 +258,6 @@ jobs:
           for operation in zizmor actionlint shellcheck checkov trivy-vulnerability trivy-secret; do
             "$scanner" "$operation"
           done
-          "$scanner" summary
       - name: Bind scanner evidence to the planned repository identity
         if: always()
         env:
