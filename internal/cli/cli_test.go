@@ -228,6 +228,69 @@ func TestAuditOutputFailureUsesRuntimeExitCode(t *testing.T) {
 	}
 }
 
+func TestScanPlanCommitResolutionFailuresClassifyExitCode(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		forbiddenEndpoint string
+		wantCode          int
+	}{
+		// A missing/inaccessible default-branch ref is an unresolved
+		// coverage gap, not a planner malfunction.
+		{"repository not found", "", exitIncomplete},
+		// A GitHub 5xx response is a planner runtime failure, distinct from
+		// an unresolved coverage gap.
+		{"github server error", "commit_resolution_runtime", exitRuntime},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			installFixtureAPI(t, test.forbiddenEndpoint)
+			t.Setenv("GH_TOKEN", "test-token")
+			inventoryPath := filepath.Join(dir, "inventory.json")
+			writeScanPlanInventory(t, inventoryPath)
+			var stdout, stderr bytes.Buffer
+			err := Run(context.Background(), []string{
+				"scan-plan",
+				"--config", writeScanPlanConfig(t),
+				"--inventory", inventoryPath,
+				"--manifest-output", filepath.Join(dir, "scan-manifest.json"),
+			}, "test", &stdout, &stderr)
+			if err == nil || ExitCode(err) != test.wantCode {
+				t.Fatalf("err=%v code=%d, want %d", err, ExitCode(err), test.wantCode)
+			}
+		})
+	}
+}
+
+func writeScanPlanConfig(t *testing.T) string {
+	t.Helper()
+	data := "version: 4\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
+		"source_scan:\n  enabled: true\n  concurrency: 1\n  timeout: 1m\n" +
+		"policies:\n  dependencies:\n    dependency_graph: true\n"
+	path := filepath.Join(t.TempDir(), "segh.yaml")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeScanPlanInventory(t *testing.T, path string) {
+	t.Helper()
+	inventory := model.Inventory{
+		SchemaVersion: model.SchemaVersion, Organization: "example", GitHubHost: "ghes.example",
+		Complete: true,
+		Repositories: []model.Repository{
+			{ID: 1, FullName: "example/repo", Visibility: "public", DefaultBranch: "main"},
+		},
+	}
+	data, err := json.Marshal(inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeConfig(t *testing.T, requireRuleset, customPropertyFilter bool) string {
 	t.Helper()
 	repositoryPolicy := ""
@@ -308,6 +371,11 @@ func (f fixtureAPI) Get(_ context.Context, apiPath string, out any) error {
 			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
 		}
 		data = `{"files":{"security":{}}}`
+	case strings.Contains(apiPath, "/commits/"):
+		if f.forbiddenEndpoint == "commit_resolution_runtime" {
+			return &gh.APIError{StatusCode: 500, Message: "internal server error"}
+		}
+		return &gh.APIError{StatusCode: 404, Message: "not found"}
 	default:
 		return &gh.APIError{StatusCode: 404, Message: "not found"}
 	}

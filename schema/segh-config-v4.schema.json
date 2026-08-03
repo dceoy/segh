@@ -16,6 +16,15 @@
         "timeout": { "$ref": "#/$defs/duration" }
       }
     },
+    "source_scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "timeout": { "$ref": "#/$defs/duration" }
+      }
+    },
     "selectors": {
       "type": "object",
       "additionalProperties": false,

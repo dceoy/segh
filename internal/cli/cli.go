@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,9 +14,11 @@ import (
 
 	"github.com/dceoy/segh/internal/config"
 	gh "github.com/dceoy/segh/internal/github"
+	"github.com/dceoy/segh/internal/model"
 	"github.com/dceoy/segh/internal/output"
 	"github.com/dceoy/segh/internal/policy"
 	"github.com/dceoy/segh/internal/report"
+	"github.com/dceoy/segh/internal/sourcescan"
 )
 
 const (
@@ -26,9 +29,12 @@ const (
 	exitIncomplete = 4
 	exitRuntime    = 5
 
-	defaultInventoryOutput = "segh-results/inventory.json"
-	defaultAuditOutput     = "segh-results/audit.json"
-	defaultMarkdownOutput  = "segh-results/report.md"
+	defaultInventoryOutput    = "segh-results/inventory.json"
+	defaultAuditOutput        = "segh-results/audit.json"
+	defaultMarkdownOutput     = "segh-results/report.md"
+	defaultScanManifestOutput = "segh-results/scan-manifest.json"
+	defaultScanSummaryOutput  = "segh-results/scan-summary.json"
+	defaultScanMarkdownOutput = "segh-results/scan-report.md"
 )
 
 var newGitHubAPI = func() (gh.API, error) {
@@ -52,10 +58,16 @@ func Run(ctx context.Context, args []string, version string, stdout, stderr io.W
 		writef(stdout, "%s\n", version)
 		return nil
 	}
-	if args[0] != "audit" {
+	switch args[0] {
+	case "audit":
+		return runAudit(ctx, args[1:], stdout, stderr)
+	case "scan-plan":
+		return runScanPlan(ctx, args[1:], stdout, stderr)
+	case "scan-summary":
+		return runScanSummary(args[1:], stdout, stderr)
+	default:
 		return usageError(fmt.Errorf("unknown command %q", args[0]))
 	}
-	return runAudit(ctx, args[1:], stdout, stderr)
 }
 
 func ExitCode(err error) int {
@@ -142,6 +154,137 @@ func runAudit(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	return nil
 }
 
+func runScanPlan(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("segh scan-plan", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "segh.yaml", "path to strict version 4 configuration")
+	inventoryPath := flags.String("inventory", defaultInventoryOutput, "governance inventory JSON")
+	manifestPath := flags.String("manifest-output", defaultScanManifestOutput, "source scan manifest JSON")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return usageError(err)
+	}
+	if flags.NArg() != 0 || *inventoryPath == "" || *manifestPath == "" {
+		return usageError(fmt.Errorf("scan-plan requires non-empty paths and accepts no positional arguments"))
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return usageError(err)
+	}
+	var inventory model.Inventory
+	if err := sourcescan.ReadJSON(*inventoryPath, &inventory); err != nil {
+		return runtimeError(fmt.Errorf("read inventory: %w", err))
+	}
+	client, err := newGitHubAPI()
+	if err != nil {
+		return authError(err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Inventory.Timeout))
+	defer cancel()
+	manifest, planErr := sourcescan.NewPlanner(cfg, client).Run(ctx, inventory)
+	if err := output.JSON(*manifestPath, manifest); err != nil {
+		return runtimeError(err)
+	}
+	writef(stdout, "wrote source scan manifest to %s\n", *manifestPath)
+	if planErr != nil {
+		switch classifyPlanFailure(planErr) {
+		case exitAuth:
+			return authError(fmt.Errorf("source scan planning authentication or permission failure"))
+		case exitRuntime:
+			return runtimeError(planErr)
+		default:
+			return incompleteError(planErr)
+		}
+	}
+	return nil
+}
+
+// classifyPlanFailure inspects every *gh.APIError reachable anywhere in
+// planErr's error tree (which may join one failure per repository whose
+// commit resolution failed) and picks the most specific applicable exit
+// class: an authentication/permission failure on any repository takes
+// precedence, a repository-not-found or unprocessable-ref failure is an
+// unresolved coverage gap, and anything else backed by a GitHub API error
+// (5xx, a transport failure, or a malformed response, all surfaced as a
+// status-0 APIError) is a planner runtime failure. When the tree carries no
+// APIError at all (for example, an overall planning timeout or a bounded
+// matrix-size truncation with no individual commit-resolution failures),
+// the failure is reported as unresolved coverage, matching prior behavior.
+func classifyPlanFailure(err error) int {
+	apiErrs := collectAPIErrors(err)
+	for _, apiErr := range apiErrs {
+		if apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden {
+			return exitAuth
+		}
+	}
+	for _, apiErr := range apiErrs {
+		if apiErr.StatusCode != http.StatusNotFound && apiErr.StatusCode != http.StatusUnprocessableEntity {
+			return exitRuntime
+		}
+	}
+	return exitIncomplete
+}
+
+// collectAPIErrors walks err (descending through any errors.Join tree) and
+// returns every *gh.APIError found. A branch that carries no APIError
+// (a plain sentinel message, for instance) contributes nothing.
+func collectAPIErrors(err error) []*gh.APIError {
+	if err == nil {
+		return nil
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var apiErrs []*gh.APIError
+		for _, sub := range joined.Unwrap() {
+			apiErrs = append(apiErrs, collectAPIErrors(sub)...)
+		}
+		return apiErrs
+	}
+	var apiErr *gh.APIError
+	if errors.As(err, &apiErr) {
+		return []*gh.APIError{apiErr}
+	}
+	return nil
+}
+
+func runScanSummary(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("segh scan-summary", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	manifestPath := flags.String("manifest", defaultScanManifestOutput, "source scan manifest JSON")
+	resultsDirectory := flags.String("results", "repository-scans", "repository scan evidence directory")
+	summaryPath := flags.String("summary-output", defaultScanSummaryOutput, "source scan summary JSON")
+	markdownPath := flags.String("markdown-output", defaultScanMarkdownOutput, "bounded source scan Markdown")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return usageError(err)
+	}
+	if flags.NArg() != 0 || *manifestPath == "" || *resultsDirectory == "" || *summaryPath == "" || *markdownPath == "" {
+		return usageError(fmt.Errorf("scan-summary requires non-empty paths and accepts no positional arguments"))
+	}
+	var manifest model.SourceScanManifest
+	if err := sourcescan.ReadJSON(*manifestPath, &manifest); err != nil {
+		return runtimeError(fmt.Errorf("read scan manifest: %w", err))
+	}
+	summary, summarizeErr := sourcescan.Summarize(manifest, *resultsDirectory, time.Now())
+	if err := errors.Join(output.JSON(*summaryPath, summary), output.Text(*markdownPath, sourcescan.Markdown(summary))); err != nil {
+		return runtimeError(err)
+	}
+	writef(stdout, "wrote source scan summary to %s and %s\n", *summaryPath, *markdownPath)
+	if summarizeErr != nil || summary.Counts.Errors > 0 {
+		return runtimeError(fmt.Errorf("source scan runtime errors found"))
+	}
+	if !summary.Complete || summary.Counts.Incomplete > 0 {
+		return incompleteError(fmt.Errorf("source scan coverage is incomplete"))
+	}
+	if summary.Counts.Findings > 0 {
+		return findingsError(fmt.Errorf("source scan findings found"))
+	}
+	return nil
+}
+
 func printHelp(out io.Writer, version string) {
 	writef(out, `segh %s - GitHub security governance audit
 
@@ -150,6 +293,8 @@ Usage:
 
 Commands:
   audit        Validate configuration, inventory controls, evaluate policy, and write evidence
+  scan-plan    Resolve selected default branches to immutable commit SHAs
+  scan-summary Validate and aggregate separate repository scan evidence
   version      Print the build version
 
 Audit options:

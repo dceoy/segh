@@ -1,9 +1,8 @@
 # segh
 
-`segh` audits GitHub Enterprise organization governance and supplies a central,
-read-only pull-request security workflow. It is designed for private
-repositories without GitHub Code Security or GitHub Secret Protection
-licenses.
+`segh` audits GitHub Enterprise organization governance and periodically scans
+selected default-branch commits. It is designed for private repositories
+without GitHub Code Security or GitHub Secret Protection licenses.
 
 The supported baseline is:
 
@@ -45,9 +44,11 @@ rejected without aliases or migration logic.
 
 ## Commands and exit codes
 
-| Command | Purpose                                                  |
-| ------- | -------------------------------------------------------- |
-| `audit` | Validate, inventory, evaluate policy, and write evidence |
+| Command        | Purpose                                                  |
+| -------------- | -------------------------------------------------------- |
+| `audit`        | Validate, inventory, evaluate policy, and write evidence |
+| `scan-plan`    | Resolve selected repositories to immutable commits       |
+| `scan-summary` | Validate and aggregate repository scan evidence          |
 
 Exit codes are `0` success, `1` policy violations, `2` invalid configuration or
 arguments, `3` authentication or permission failure, `4` incomplete coverage,
@@ -55,31 +56,30 @@ and `5` runtime failure.
 
 ## Pull-request gate
 
-Install `.github/workflows/pr-security.yml` as an organization ruleset required
-workflow for selected repositories. Target repositories do not install a local
-publisher or grant a write-capable token.
+Keep the existing `PR security / scan` required workflow active until the
+trusted `Repository security` replacement in
+[`dceoy/gha-for-devops`](https://github.com/dceoy/gha-for-devops) has direct
+pull-request and merge-group triggers and its organization-ruleset rollout is
+verified. `segh` already uses the reviewed upstream scanner for periodic
+organization scans; remove the local PR workflow only in the follow-up
+migration.
 
-The stable `PR security / scan` check fails when:
-
-- zizmor reports a medium-or-higher, high-confidence finding or cannot strictly
-  collect the workflow files;
-- actionlint reports an invalid workflow or an embedded ShellCheck diagnostic;
-- ShellCheck reports a diagnostic in a standalone tracked shell script;
-- Checkov reports a failed centrally enabled infrastructure-as-code check;
-- Trivy finds a high or critical dependency vulnerability; or
-- Trivy finds a secret at any severity.
-
-The workflow runs all scanners before enforcing the combined result, so reports
-remain available when the check fails. Configuration, thresholds, and ignore
-behavior are fixed in the trusted `segh` workflow rather than read from the
-pull-request checkout. See [docs/workflows.md](docs/workflows.md).
-
-## Organization audit
+## Organization audit and periodic source scan
 
 The organization audit is read-only. Its GitHub App inventories Actions policy,
 rulesets, branch protection, custom properties, dependency graph, Dependabot
 coverage, and repository metadata. It does not clone repositories or run
-scanners.
+scanners during governance collection. When `source_scan.enabled` is true, the
+scheduled control workflow reuses that selected inventory, records every
+default branch's exact commit SHA, and scans each checkout with the pinned
+`gha-for-devops` static-analysis policy. Repository scripts, package installers,
+submodules, Git LFS objects, and Terraform providers are never executed or
+initialized.
+
+Source scanning writes separate `scan-manifest.json`, `scan-summary.json`, and
+per-repository evidence. Findings, incomplete content or checkout coverage, and
+scanner runtime errors remain distinct from the existing governance schemas and
+exit semantics.
 
 `GH_HOST` selects GHE.com or GitHub Enterprise Server and defaults to
 `github.com`.

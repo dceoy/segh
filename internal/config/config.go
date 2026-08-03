@@ -17,6 +17,7 @@ type Config struct {
 	Version      int                 `yaml:"version"`
 	Organization string              `yaml:"organization"`
 	Inventory    Inventory           `yaml:"inventory"`
+	SourceScan   SourceScan          `yaml:"source_scan"`
 	Selectors    Selectors           `yaml:"selectors"`
 	Policies     Policies            `yaml:"policies"`
 	Suppressions []model.Suppression `yaml:"suppressions"`
@@ -25,6 +26,12 @@ type Config struct {
 type Duration time.Duration
 
 type Inventory struct {
+	Concurrency int      `yaml:"concurrency"`
+	Timeout     Duration `yaml:"timeout"`
+}
+
+type SourceScan struct {
+	Enabled     bool     `yaml:"enabled"`
 	Concurrency int      `yaml:"concurrency"`
 	Timeout     Duration `yaml:"timeout"`
 }
@@ -79,6 +86,10 @@ func Default() Config {
 	return Config{
 		Version: 4,
 		Inventory: Inventory{
+			Concurrency: 4,
+			Timeout:     Duration(30 * time.Minute),
+		},
+		SourceScan: SourceScan{
 			Concurrency: 4,
 			Timeout:     Duration(30 * time.Minute),
 		},
@@ -145,6 +156,19 @@ func demoteTimestampScalars(node *yaml.Node) {
 
 func (c Config) validateSemantics() error {
 	var errs []error
+	// The organization-audit workflow's audit job budgets two sequential
+	// phases bounded by inventory.timeout (segh audit, then segh scan-plan)
+	// within its fixed 75-minute job timeout, alongside checkout, build,
+	// and evidence-retention steps that must still run afterward. Bounding
+	// inventory.timeout to the documented 30-minute default keeps the
+	// combined worst case within that budget; a higher value can be
+	// terminated before matrix export and artifact retention run.
+	if time.Duration(c.Inventory.Timeout) > 30*time.Minute {
+		errs = append(errs, fmt.Errorf("inventory.timeout must not exceed 30m"))
+	}
+	if c.SourceScan.Enabled && time.Duration(c.SourceScan.Timeout) > 6*time.Hour {
+		errs = append(errs, fmt.Errorf("source_scan.timeout must not exceed 6h"))
+	}
 	for i, suppression := range c.Suppressions {
 		if _, err := path.Match(suppression.Repository, "owner/repository"); suppression.Repository != "" && err != nil {
 			errs = append(errs, fmt.Errorf("suppressions[%d].repository is not a valid glob", i))

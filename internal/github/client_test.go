@@ -319,6 +319,26 @@ func TestResponseRetryDelay(t *testing.T) {
 	}
 }
 
+func TestClientRetriesMalformedResponseBodyAndSurfacesRetryableAPIError(t *testing.T) {
+	var requests atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = io.WriteString(writer, `{"ok": tru`) // truncated, invalid JSON on every attempt
+	}), "github.com")
+	client.wait = func(context.Context, time.Duration) error { return nil }
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	err := client.Get(context.Background(), "/malformed", &response)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 0 {
+		t.Fatalf("err = %v", err)
+	}
+	if requests.Load() != maxAPIAttempts {
+		t.Fatalf("requests = %d, want %d retries for a malformed response body", requests.Load(), maxAPIAttempts)
+	}
+}
+
 func TestAPIErrorClassification(t *testing.T) {
 	tests := map[int]string{
 		http.StatusNotFound:       "unsupported",

@@ -1,5 +1,5 @@
 ---
-name: Organization security governance audit
+name: Organization security audit and source scan
 on:
   workflow_dispatch:
 permissions:
@@ -9,8 +9,18 @@ concurrency:
   cancel-in-progress: false
 jobs:
   audit:
+    outputs:
+      scan-enabled: ${{ steps.scan-outputs.outputs.enabled }}
+      scan-matrix: ${{ steps.scan-outputs.outputs.matrix }}
+      scan-concurrency: ${{ steps.scan-outputs.outputs.concurrency }}
+      scan-targets: ${{ steps.scan-outputs.outputs.targets }}
+      source-commit: ${{ steps.source.outputs.commit }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Budgeted for two sequential inventory.timeout-bounded phases (segh
+    # audit, then segh scan-plan) plus checkout/build/evidence-retention
+    # overhead. inventory.timeout is capped at 30m by config validation, so
+    # the worst case (2 * 30m + overhead) stays within this limit.
+    timeout-minutes: 75
     steps:
       - name: Check out control repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
@@ -90,10 +100,62 @@ jobs:
         working-directory: _segh
         run: go build -trimpath -o "$GITHUB_WORKSPACE/bin/segh" ./cmd/segh
       - name: Audit GitHub-native governance
+        id: governance
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SEGH_GITHUB_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
         run: bin/segh audit --config _control/config/organization.yaml
+      - name: Refresh read-only GitHub App token before source scan planning
+        id: scan-plan-token
+        if: always()
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.SEGH_READ_APP_ID }}
+          private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}   # zizmor: ignore[github-app]
+          permission-contents: read
+          permission-metadata: read
+      - name: Resolve immutable source scan targets
+        id: scan-plan
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.scan-plan-token.outputs.token }}
+        run: |
+          bin/segh scan-plan \
+            --config _control/config/organization.yaml \
+            --inventory segh-results/inventory.json
+      - name: Export bounded source scan matrix
+        id: scan-outputs
+        if: always()
+        run: |
+          if [[ ! -f segh-results/scan-manifest.json ]]; then
+            {
+              echo 'enabled=false'
+              echo 'matrix={"include":[]}'
+              echo 'concurrency=1'
+              echo 'targets=false'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          enabled=$(jq -r '.enabled' segh-results/scan-manifest.json)
+          matrix=$(jq -c '
+            .timeout_minutes as $timeout
+            | {include: [.repositories[]
+                | select(.scheduled)
+                | {id, owner, repository: .name, full_name,
+                   default_branch, commit_sha,
+                   timeout_minutes: $timeout}]}
+          ' segh-results/scan-manifest.json)
+          concurrency=$(jq -r '.concurrency' segh-results/scan-manifest.json)
+          targets=$(jq -r '[.repositories[] | select(.scheduled)] | length > 0' segh-results/scan-manifest.json)
+          {
+            printf 'enabled=%s\n' "$enabled"
+            printf 'matrix=%s\n' "$matrix"
+            printf 'concurrency=%s\n' "$concurrency"
+            printf 'targets=%s\n' "$targets"
+          } >> "$GITHUB_OUTPUT"
       - name: Publish operator summary
         if: always()
         run: |
@@ -105,6 +167,297 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: organization-governance-report
-          path: segh-results
+          path: |
+            segh-results/inventory.json
+            segh-results/audit.json
+            segh-results/report.md
           if-no-files-found: warn
           retention-days: 14
+      - name: Retain source scan plan
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: organization-source-scan-plan
+          path: |
+            segh-results/scan-manifest.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Enforce governance and planning results
+        if: always()
+        env:
+          GOVERNANCE_RESULT: ${{ steps.governance.outcome }}
+          PLAN_RESULT: ${{ steps.scan-plan.outcome }}
+        run: |
+          failed=0
+          if [[ "$GOVERNANCE_RESULT" != success ]]; then
+            echo "::error::Governance audit result: $GOVERNANCE_RESULT"
+            failed=1
+          fi
+          if [[ "$PLAN_RESULT" != success ]]; then
+            echo "::error::Source scan planning result: $PLAN_RESULT"
+            failed=1
+          fi
+          exit "$failed"
+
+  source-scan:
+    name: Source scan / ${{ matrix.full_name }}
+    needs: audit
+    if: always() && needs.audit.outputs.source-commit != '' && needs.audit.outputs.scan-enabled == 'true' && needs.audit.outputs.scan-targets == 'true'
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.audit.outputs.scan-concurrency) }}
+      matrix: ${{ fromJSON(needs.audit.outputs.scan-matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    permissions:
+      contents: read
+    env:
+      AQUA_CONFIG: ${{ github.workspace }}/_trusted/aqua.yaml
+    steps:
+      - name: Check out pinned upstream scanner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          repository: dceoy/gha-for-devops
+          ref: 1413c89221edd788de6dcbcb30f7e6973615048f
+          path: _trusted
+          persist-credentials: false
+      - name: Create repository-scoped read-only App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.SEGH_READ_APP_ID }}
+          private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          repositories: ${{ matrix.repository }}
+          permission-contents: read
+          permission-metadata: read
+      - name: Derive daily Trivy database cache key
+        id: trivy-cache-key
+        run: printf 'date=%s\n' "$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: Restore public Trivy advisory databases
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/trivy/db
+            ~/.cache/trivy/java-db
+          key: trivy-db-v0.72.0-${{ runner.os }}-${{ steps.trivy-cache-key.outputs.date }}
+          restore-keys: |
+            trivy-db-v0.72.0-${{ runner.os }}-
+      - name: Check out recorded default-branch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          repository: ${{ matrix.full_name }}
+          ref: ${{ matrix.commit_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: _target
+          persist-credentials: false
+          fetch-depth: 1
+          lfs: false
+          submodules: false
+      - name: Install checksum-verified scanners
+        id: install-scanners
+        continue-on-error: true
+        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e  # v4.0.5
+        with:
+          aqua_version: v2.62.1
+          working_directory: _trusted
+      - name: Run pinned upstream scanner
+        if: steps.install-scanners.outcome == 'success'
+        run: |
+          scanner=_trusted/.github/actions/repository-security-scan/scan.sh
+          "$scanner" prepare
+          "$scanner" preflight
+          for operation in zizmor actionlint shellcheck checkov trivy-vulnerability trivy-secret; do
+            "$scanner" "$operation"
+          done
+      - name: Bind scanner evidence to the planned repository identity
+        if: always()
+        env:
+          REPOSITORY_ID: ${{ matrix.id }}
+          REPOSITORY: ${{ matrix.full_name }}
+          DEFAULT_BRANCH: ${{ matrix.default_branch }}
+          COMMIT_SHA: ${{ matrix.commit_sha }}
+        run: |
+          results=security-results
+          mkdir -p "$results"
+          result=pass
+          if [[ ! -f "$results/preflight.status" ]]; then
+            result=error
+          else
+            preflight=$(<"$results/preflight.status")
+            if [[ ! "$preflight" =~ ^[0-9]+$ ]]; then
+              result=error
+            elif ((preflight != 0)); then
+              # The pinned upstream scanner redirects "git ls-files" straight
+              # into tracked-files.index, so the file exists (empty) even
+              # when entering or enumerating the checkout fails outright;
+              # only a genuine content problem (a rejected symlink, LFS
+              # pointer, or submodule) leaves a populated index alongside a
+              # non-zero preflight status. An empty index means preflight
+              # failed operationally, not that the content was incomplete.
+              if [[ -s "$results/tracked-files.index" ]]; then
+                result=incomplete
+              else
+                result=error
+              fi
+            fi
+          fi
+          if [[ "$result" == pass ]]; then
+            for scanner in zizmor actionlint shellcheck checkov trivy-vulnerability trivy-secret; do
+              status_file="$results/$scanner.status"
+              if [[ ! -f "$status_file" ]]; then
+                result=error
+                break
+              fi
+              status=$(<"$status_file")
+              if [[ ! "$status" =~ ^[0-9]+$ ]]; then
+                result=error
+                break
+              fi
+              # Pinned Zizmor v1.28.0 encodes the highest finding severity in
+              # its exit code (0 none, 11 informational .. 14 high) instead
+              # of the plain 0/1 pass-or-findings convention every other
+              # scanner here uses; treat 11-14 as findings, not a failure.
+              if [[ "$scanner" == zizmor ]]; then
+                if ((status != 0 && (status < 11 || status > 14))); then
+                  result=error
+                  break
+                fi
+              elif ((status > 1)); then
+                result=error
+                break
+              fi
+              if [[ ! -f "$results/$scanner.json" || ! -s "$results/$scanner.json" ]] \
+                || ! jq -e . "$results/$scanner.json" > /dev/null 2>&1 \
+                || [[ ! -f "$results/$scanner.txt" || ! -s "$results/$scanner.txt" ]] \
+                || [[ ! -f "$results/$scanner.log" ]]; then
+                result=error
+                break
+              fi
+              # The pinned upstream scanner uses plain exit status 1 for both
+              # ordinary findings and runtime paths where the scanner never
+              # actually evaluated the target (e.g. unable to extract
+              # composite-action shell blocks, or unable to read a tracked
+              # file). Those runtime paths carry a JSON object with result
+              # "not-run", or, for actionlint (JSON Lines-to-array
+              # conversion failure) and shellcheck (an unreadable tracked
+              # file) specifically, leave the skip-evidence empty array "[]"
+              # in place instead of a real finding payload; a genuine
+              # finding from either is always a non-empty array
+              # (actionlint) or a findings object (shellcheck's json1).
+              # Either anomalous shape must classify as an error, not a
+              # clean findings verdict.
+              evidence_result=$(jq -r 'if type == "object" then (.result // "") else "" end' "$results/$scanner.json")
+              evidence_is_empty_array=false
+              if [[ "$scanner" == actionlint || "$scanner" == shellcheck ]]; then
+                evidence_is_empty_array=$(jq -r 'if type == "array" and length == 0 then "true" else "false" end' "$results/$scanner.json")
+              fi
+              if [[ "$evidence_result" == not-run || ( "$status" != 0 && "$evidence_is_empty_array" == true ) ]]; then
+                result=error
+                break
+              fi
+              if ((status != 0)); then
+                result=findings
+              fi
+            done
+          fi
+          jq -n \
+            --argjson schema_version 1 \
+            --argjson repository_id "$REPOSITORY_ID" \
+            --arg repository "$REPOSITORY" \
+            --arg default_branch "$DEFAULT_BRANCH" \
+            --arg commit_sha "$COMMIT_SHA" \
+            --arg result "$result" \
+            '{schema_version: $schema_version, repository_id: $repository_id,
+              repository: $repository, default_branch: $default_branch,
+              commit_sha: $commit_sha, result: $result}' \
+            > "$results/status.json"
+      - name: Retain repository scan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: repository-scan-${{ matrix.id }}
+          path: security-results
+          if-no-files-found: error
+          retention-days: 14
+      - name: Enforce scanner result
+        if: always()
+        run: _trusted/.github/actions/repository-security-scan/scan.sh enforce
+
+  source-scan-summary:
+    name: Organization source scan summary
+    needs: [audit, source-scan]
+    if: always() && needs.audit.outputs.source-commit != '' && needs.audit.outputs.scan-enabled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted segh source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          repository: dceoy/segh
+          ref: ${{ needs.audit.outputs.source-commit }}
+          path: _segh
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: true
+          cache-dependency-path: _segh/go.sum
+      - name: Build trusted summarizer
+        working-directory: _segh
+        run: go build -trimpath -o "$GITHUB_WORKSPACE/bin/segh" ./cmd/segh
+      - name: Download source scan plan
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v8.0.0
+        with:
+          name: organization-source-scan-plan
+          path: segh-results
+      - name: Download repository scan evidence
+        if: needs.audit.outputs.scan-targets == 'true'
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v8.0.0
+        with:
+          pattern: repository-scan-*
+          path: repository-scans
+      - name: Aggregate source scan evidence
+        id: summarize
+        continue-on-error: true
+        run: |
+          mkdir -p repository-scans
+          bin/segh scan-summary \
+            --manifest segh-results/scan-manifest.json \
+            --results repository-scans
+      - name: Publish bounded source scan summary
+        if: always()
+        run: |
+          if [[ -f segh-results/scan-report.md ]]; then
+            cat segh-results/scan-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain complete private source scan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: organization-source-scan-evidence
+          path: |
+            segh-results/scan-manifest.json
+            segh-results/scan-summary.json
+            segh-results/scan-report.md
+            repository-scans
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Enforce aggregate source scan result
+        if: always()
+        env:
+          MATRIX_RESULT: ${{ needs.source-scan.result }}
+          SUMMARY_RESULT: ${{ steps.summarize.outcome }}
+          HAS_TARGETS: ${{ needs.audit.outputs.scan-targets }}
+        run: |
+          if [[ "$SUMMARY_RESULT" != success ]]; then
+            echo "::error::Source scan summary result: $SUMMARY_RESULT"
+            exit 1
+          fi
+          if [[ "$HAS_TARGETS" == true && "$MATRIX_RESULT" != success ]]; then
+            echo "::error::Repository source scan matrix result: $MATRIX_RESULT"
+            exit 1
+          fi

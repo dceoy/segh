@@ -172,16 +172,17 @@ func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
 		return nil
 	}
 	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("decode GitHub API response: %w", err)
+		return c.transportError(ctx, fmt.Errorf("decode GitHub API response: %w", err))
 	}
 	return nil
 }
 
-// transportError wraps a transport-level failure (connection establishment
-// or response-body read) as a retryable, status-0 APIError, mirroring how
-// the removed gh api path surfaced a command failure. It returns the bare
-// context error instead when the failure is actually a context
-// cancellation/timeout, which must not be retried.
+// transportError wraps a transport-level failure (connection establishment,
+// response-body read, or a response body that fails to decode) as a
+// retryable, status-0 APIError, mirroring how the removed gh api path
+// surfaced a command failure. It returns the bare context error instead when
+// the failure is actually a context cancellation/timeout, which must not be
+// retried.
 func (c *Client) transportError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
