@@ -9,10 +9,10 @@ data. It grants only `contents: read`, uses the pinned trusted scanner from
 exclusions, installs checksum-verified scanner versions, and retains reports as
 ordinary workflow artifacts.
 
-Install organization required workflows and rulesets only from reviewed commits
-on protected `main`. Keep the App private key in Actions secrets, install the
-read-only inventory App on every organization repository, and run organization
-audits only from a private control repository.
+Keep the App private key in Actions secrets, install the read-only inventory App
+on every organization repository, and run organization audits only from a
+private control repository. Pull-request and merge-queue enforcement are
+outside `segh` and require an independently managed control where needed.
 
 Periodic scan artifacts can include detected secrets and sensitive repository
 paths. Keep them private, use bounded retention, and do not copy their contents
