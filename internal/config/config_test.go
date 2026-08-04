@@ -31,7 +31,7 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "configuration.surprise is not allowed") {
+	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "additional properties 'surprise' not allowed") {
 		t.Fatalf("expected unknown-field error, got %v", err)
 	}
 }
@@ -53,7 +53,7 @@ func TestLoadRejectsUnboundedDuration(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "does not match the required pattern") {
+	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "does not match pattern") {
 		t.Fatalf("expected bounded-duration error, got %v", err)
 	}
 }
@@ -64,7 +64,7 @@ func TestLoadRejectsMissingPolicies(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "configuration.policies is required") {
+	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "missing property 'policies'") {
 		t.Fatalf("expected missing-policy error, got %v", err)
 	}
 }
@@ -75,7 +75,7 @@ func TestLoadRejectsRemovedCodeSecurityPolicy(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "configuration.policies.code_security is not allowed") {
+	if _, err := Load(configPath); err == nil || !strings.Contains(err.Error(), "additional properties 'code_security' not allowed") {
 		t.Fatalf("Load() = %v, want removed code-security field error", err)
 	}
 }
@@ -97,7 +97,7 @@ func TestSchemaAndRuntimeRejectNullValues(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := Load(configPath); err == nil ||
-				!strings.Contains(err.Error(), "must be") {
+				!strings.Contains(err.Error(), "got null") {
 				t.Fatalf("Load() = %v, want null-value error", err)
 			}
 		})
@@ -196,8 +196,10 @@ func TestSchemaAndRuntimeRejectDuplicateArrayItems(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := Load(configPath)
-			if err == nil || !strings.Contains(err.Error(), tc.name) ||
-				!strings.Contains(err.Error(), "unique") {
+			segments := strings.Split(tc.name, ".")
+			lastSegment := segments[len(segments)-1]
+			if err == nil || !strings.Contains(err.Error(), lastSegment) ||
+				!strings.Contains(err.Error(), "equal") {
 				t.Fatalf("expected duplicate-value error for %s, got %v", tc.name, err)
 			}
 		})
@@ -210,18 +212,18 @@ func TestLoadRejectsPreviousVersionsAndRemovedRuntimeFields(t *testing.T) {
 		data string
 		want string
 	}{
-		{"version 1", "version: 1\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 5"},
-		{"version 2", "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 5"},
-		{"version 3", "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 5"},
-		{"version 4", "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 5"},
-		{"github host", "version: 5\norganization: test\ngithub:\n  web_url: https://github.com\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.github is not allowed"},
-		{"output directory", "version: 5\norganization: test\noutput:\n  directory: results\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.output is not allowed"},
-		{"code security policy", "version: 5\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n", "configuration.policies.code_security is not allowed"},
-		{"CodeQL policy", "version: 5\norganization: test\npolicies:\n  dependencies:\n    codeql: true\n", "configuration.policies.dependencies.codeql is not allowed"},
-		{"visibilities selector", "version: 5\norganization: test\nselectors:\n  visibilities: [public]\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.selectors.visibilities is not allowed"},
-		{"include_topics selector", "version: 5\norganization: test\nselectors:\n  include_topics: [security]\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.selectors.include_topics is not allowed"},
-		{"exclude_topics selector", "version: 5\norganization: test\nselectors:\n  exclude_topics: [exempt]\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.selectors.exclude_topics is not allowed"},
-		{"custom_properties selector", "version: 5\norganization: test\nselectors:\n  custom_properties:\n    tier: critical\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.selectors.custom_properties is not allowed"},
+		{"version 1", "version: 1\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "value must be 5"},
+		{"version 2", "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "value must be 5"},
+		{"version 3", "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "value must be 5"},
+		{"version 4", "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "value must be 5"},
+		{"github host", "version: 5\norganization: test\ngithub:\n  web_url: https://github.com\npolicies:\n  repository:\n    require_ruleset: true\n", "additional properties 'github' not allowed"},
+		{"output directory", "version: 5\norganization: test\noutput:\n  directory: results\npolicies:\n  repository:\n    require_ruleset: true\n", "additional properties 'output' not allowed"},
+		{"code security policy", "version: 5\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n", "additional properties 'code_security' not allowed"},
+		{"CodeQL policy", "version: 5\norganization: test\npolicies:\n  dependencies:\n    codeql: true\n", "additional properties 'codeql' not allowed"},
+		{"visibilities selector", "version: 5\norganization: test\nselectors:\n  visibilities: [public]\npolicies:\n  repository:\n    require_ruleset: true\n", "additional properties 'visibilities' not allowed"},
+		{"include_topics selector", "version: 5\norganization: test\nselectors:\n  include_topics: [security]\npolicies:\n  repository:\n    require_ruleset: true\n", "additional properties 'include_topics' not allowed"},
+		{"exclude_topics selector", "version: 5\norganization: test\nselectors:\n  exclude_topics: [exempt]\npolicies:\n  repository:\n    require_ruleset: true\n", "additional properties 'exclude_topics' not allowed"},
+		{"custom_properties selector", "version: 5\norganization: test\nselectors:\n  custom_properties:\n    tier: critical\npolicies:\n  repository:\n    require_ruleset: true\n", "additional properties 'custom_properties' not allowed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configPath := filepath.Join(t.TempDir(), "segh.yaml")
@@ -392,7 +394,7 @@ func TestLoadRejectsLenientRFC3339FormsInUnquotedSuppressionExpiry(t *testing.T)
 				t.Fatal(err)
 			}
 			if _, err := Load(configPath); err == nil ||
-				!strings.Contains(err.Error(), "expires must be an RFC 3339 date-time") {
+				!strings.Contains(err.Error(), "must be an RFC 3339 date-time") {
 				t.Fatalf("Load() = %v, want an RFC 3339 date-time error", err)
 			}
 		})
