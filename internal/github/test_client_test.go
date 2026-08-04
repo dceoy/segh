@@ -52,11 +52,5 @@ func newInventoryTestService(t *testing.T, handler http.HandlerFunc) *InventoryS
 }
 
 func enrichForTest(service *InventoryService, repo apiRepository) model.Repository {
-	return service.enrich(
-		context.Background(),
-		repo,
-		model.Observed[map[string]any]{
-			State: model.Available, Value: map[string]any{}, Source: "organization_properties/values",
-		},
-	)
+	return service.enrich(context.Background(), repo)
 }

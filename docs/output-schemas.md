@@ -1,6 +1,6 @@
 # Output schemas
 
-`segh audit` writes three version 4 artifacts.
+`segh audit` writes three version 5 artifacts.
 
 ## `inventory.json`
 
@@ -17,9 +17,8 @@ Observations use:
 ```
 
 `state` is `available`, `unknown`, or `unsupported`. Repository fields include
-Actions, dependency graph, Dependabot, branch governance, custom properties,
-and security-policy observations. There are no Advanced Security feature or
-configuration fields.
+Actions, dependency graph, Dependabot, branch governance, and security-policy
+observations. There are no Advanced Security feature or configuration fields.
 
 ## `audit.json`
 

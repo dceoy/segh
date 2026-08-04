@@ -10,7 +10,7 @@ repository.
 2. Install a read-only GitHub App on every repository in the organization.
 3. Add the App ID as `SEGH_READ_APP_ID` and private key as
    `SEGH_READ_APP_PRIVATE_KEY`.
-4. Store the version 4 policy in `config/organization.yaml`.
+4. Store the version 5 policy in `config/organization.yaml`.
 5. Configure `source_scan.enabled`, `source_scan.concurrency`, and
    `source_scan.timeout`.
 6. Add a weekly `schedule` trigger to the control repository's copy of the

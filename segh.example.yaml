@@ -1,4 +1,4 @@
-version: 4
+version: 5
 organization: example-org
 
 inventory:
@@ -14,10 +14,6 @@ selectors:
   exclude_archived: true
   exclude_disabled: true
   exclude_forks: true
-  visibilities: [private, internal, public]
-  include_topics: []
-  exclude_topics: [security-audit-exempt]
-  custom_properties: {}
   repositories: []
   exclude: []
 
