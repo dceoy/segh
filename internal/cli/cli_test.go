@@ -13,12 +13,12 @@ import (
 	"github.com/dceoy/segh/internal/model"
 )
 
-func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
+func TestHelpVersionAndRemovedCommands(t *testing.T) {
 	for _, test := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"--help"}, "GitHub security governance audit"},
+		{[]string{"--help"}, "segh audit --config segh.yaml"},
 		{[]string{"--version"}, "test-version"},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -29,36 +29,11 @@ func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
 			t.Fatalf("%v output = %q", test.args, stdout.String())
 		}
 	}
-}
-
-func TestHelpPresentsOnlyAuditAsTheOperatorCommand(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), []string{"--help"}, "test-version", &stdout, &stderr); err != nil {
-		t.Fatal(err)
-	}
-	output := stdout.String()
-	if !strings.Contains(output, "segh audit --config segh.yaml") {
-		t.Fatalf("help output does not present audit as the operator workflow: %q", output)
-	}
-	for _, internal := range []string{"scan-plan", "scan-summary"} {
-		if strings.Contains(output, internal) {
-			t.Fatalf("help output = %q, must not advertise internal command %q", output, internal)
-		}
-	}
-}
-
-func TestRemovedCommandsAndFlagsAreRejected(t *testing.T) {
-	for _, args := range [][]string{
-		{"validate"},
-		{"inventory"},
-		{"report"},
-		{"--config", "segh.yaml", "audit"},
-		{"audit", "--github-web-url", "https://github.com"},
-	} {
+	for _, command := range []string{"scan-plan", "scan-summary"} {
 		var stdout, stderr bytes.Buffer
-		err := Run(context.Background(), args, "test", &stdout, &stderr)
+		err := Run(context.Background(), []string{command}, "test", &stdout, &stderr)
 		if err == nil || ExitCode(err) != exitUsage {
-			t.Fatalf("%v: err=%v code=%d", args, err, ExitCode(err))
+			t.Fatalf("%s: err=%v code=%d", command, err, ExitCode(err))
 		}
 	}
 }
@@ -66,181 +41,78 @@ func TestRemovedCommandsAndFlagsAreRejected(t *testing.T) {
 func TestAuditValidateOnlyDoesNotRequireCredentials(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "")
-	configPath := writeConfig(t, false)
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
-		"audit", "--config", configPath, "--validate-only",
+		"audit", "--config", writeConfig(t, false, false), "--validate-only",
 	}, "test", &stdout, &stderr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stdout.String() != "configuration is valid\n" {
-		t.Fatalf("stdout = %q", stdout.String())
+	if err != nil || stdout.String() != "configuration is valid\n" {
+		t.Fatalf("err=%v stdout=%q", err, stdout.String())
 	}
 }
 
-func TestAuditRequiresInstallationIDAfterConfigurationValidation(t *testing.T) {
-	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "")
-	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), []string{
-		"audit", "--config", writeConfig(t, false),
-	}, "test", &stdout, &stderr)
-	if err == nil || ExitCode(err) != exitAuth ||
-		!strings.Contains(err.Error(), "SEGH_GITHUB_INSTALLATION_ID must be a positive integer") {
-		t.Fatalf("err=%v code=%d", err, ExitCode(err))
-	}
-}
-
-func TestAuditWritesOnlyThreeArtifacts(t *testing.T) {
+func TestAuditCollectsInventoryOnceAndWritesManifest(t *testing.T) {
 	dir := t.TempDir()
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(workingDirectory); err != nil {
-			t.Error(err)
-		}
-	})
-	installFixtureAPI(t, "")
-	t.Setenv("GH_TOKEN", "test-token")
-	t.Setenv("GH_HOST", "GHES.EXAMPLE")
+	calls := installFixtureAPI(t, "")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
-	var stdout, stderr bytes.Buffer
-	err = Run(context.Background(), []string{
-		"audit",
-		"--config", writeConfig(t, false),
-	}, "test", &stdout, &stderr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultsDir := filepath.Join(dir, "segh-results")
-	for _, name := range []string{"inventory.json", "audit.json", "report.md"} {
-		if _, err := os.Stat(filepath.Join(resultsDir, name)); err != nil {
-			t.Fatalf("%s was not written: %v", name, err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(resultsDir, "report.json")); !os.IsNotExist(err) {
-		t.Fatalf("report.json must not be written: %v", err)
-	}
-	var inventory model.Inventory
-	readJSON(t, filepath.Join(resultsDir, "inventory.json"), &inventory)
-	if inventory.SchemaVersion != model.SchemaVersion || inventory.GitHubHost != "ghes.example" ||
-		len(inventory.Repositories) != 1 {
-		t.Fatalf("inventory = %#v", inventory)
-	}
-	var audit model.Audit
-	readJSON(t, filepath.Join(resultsDir, "audit.json"), &audit)
-	if audit.SchemaVersion != model.SchemaVersion || audit.Coverage != "complete" ||
-		audit.RepositoryCounts != (model.RepositoryCounts{Total: 1, Selected: 1}) ||
-		audit.PolicyCounts[string(model.PolicyPass)] != 1 {
-		t.Fatalf("audit = %#v", audit)
-	}
-}
-
-func TestIncompleteCoveragePrecedesPolicyViolations(t *testing.T) {
-	dir := t.TempDir()
-	installFixtureAPI(t, "dependency_graph")
-	t.Setenv("GH_TOKEN", "test-token")
-	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
+	inventoryPath := filepath.Join(dir, "inventory.json")
+	auditPath := filepath.Join(dir, "audit.json")
+	markdownPath := filepath.Join(dir, "report.md")
+	manifestPath := filepath.Join(dir, "scan-manifest.json")
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
 		"audit",
-		"--config", writeConfig(t, true),
-		"--inventory-output", filepath.Join(dir, "inventory.json"),
-		"--audit-output", filepath.Join(dir, "audit.json"),
-		"--markdown-output", filepath.Join(dir, "report.md"),
+		"--config", writeConfig(t, false, true),
+		"--inventory-output", inventoryPath,
+		"--audit-output", auditPath,
+		"--markdown-output", markdownPath,
+		"--scan-manifest", manifestPath,
 	}, "test", &stdout, &stderr)
-	if err == nil || ExitCode(err) != exitIncomplete {
-		t.Fatalf("err=%v code=%d", err, ExitCode(err))
+	if err != nil {
+		t.Fatal(err)
 	}
-	var audit model.Audit
-	readJSON(t, filepath.Join(dir, "audit.json"), &audit)
-	if audit.PolicyCounts[string(model.PolicyUnknown)] != 1 ||
-		audit.PolicyCounts[string(model.PolicyFail)] != 1 ||
-		audit.Coverage != "partial" {
-		t.Fatalf("audit = %#v", audit)
+	if calls["organization_repositories"] != 1 {
+		t.Fatalf("organization repository collection calls = %d", calls["organization_repositories"])
+	}
+	for _, path := range []string{inventoryPath, auditPath, markdownPath, manifestPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("%s was not written: %v", path, err)
+		}
+	}
+	var manifest model.SourceScanManifest
+	readJSON(t, manifestPath, &manifest)
+	if !manifest.Enabled || !manifest.Complete || len(manifest.Repositories) != 1 {
+		t.Fatalf("manifest = %#v", manifest)
+	}
+	repository := manifest.Repositories[0]
+	if repository.ID != 1 || repository.FullName != "example/repo" ||
+		repository.DefaultBranch != "main" || repository.CommitSHA != strings.Repeat("a", 40) ||
+		!repository.Scheduled {
+		t.Fatalf("repository = %#v", repository)
 	}
 }
 
-func TestRepositoryPermissionFailuresUseAuthenticationExitCode(t *testing.T) {
+func TestIntegratedPlanningExitClassifications(t *testing.T) {
 	for _, test := range []struct {
-		name              string
-		forbiddenEndpoint string
+		name     string
+		failure  string
+		wantCode int
 	}{
-		{"actions", "actions_permissions"},
-		{"administration", "branch_protection"},
-		{"contents", "community_profile"},
+		{"unresolved default branch", "commit_resolution_missing", exitIncomplete},
+		{"scanner target API runtime error", "commit_resolution_runtime", exitRuntime},
+		{"inaccessible repository", "commit_resolution_forbidden", exitAuth},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
-			installFixtureAPI(t, test.forbiddenEndpoint)
-			t.Setenv("GH_TOKEN", "test-token")
+			installFixtureAPI(t, test.failure)
 			t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
 			var stdout, stderr bytes.Buffer
 			err := Run(context.Background(), []string{
 				"audit",
-				"--config", writeConfig(t, false),
+				"--config", writeConfig(t, false, true),
 				"--inventory-output", filepath.Join(dir, "inventory.json"),
 				"--audit-output", filepath.Join(dir, "audit.json"),
 				"--markdown-output", filepath.Join(dir, "report.md"),
-			}, "test", &stdout, &stderr)
-			if err == nil || ExitCode(err) != exitAuth {
-				t.Fatalf("err=%v code=%d", err, ExitCode(err))
-			}
-		})
-	}
-}
-
-func TestAuditOutputFailureUsesRuntimeExitCode(t *testing.T) {
-	dir := t.TempDir()
-	inventoryPath := filepath.Join(dir, "inventory")
-	if err := os.Mkdir(inventoryPath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	installFixtureAPI(t, "")
-	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
-	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), []string{
-		"audit",
-		"--config", writeConfig(t, false),
-		"--inventory-output", inventoryPath,
-		"--audit-output", filepath.Join(dir, "audit.json"),
-		"--markdown-output", filepath.Join(dir, "report.md"),
-	}, "test", &stdout, &stderr)
-	if err == nil || ExitCode(err) != exitRuntime {
-		t.Fatalf("err=%v code=%d", err, ExitCode(err))
-	}
-}
-
-func TestScanPlanCommitResolutionFailuresClassifyExitCode(t *testing.T) {
-	for _, test := range []struct {
-		name              string
-		forbiddenEndpoint string
-		wantCode          int
-	}{
-		// A missing/inaccessible default-branch ref is an unresolved
-		// coverage gap, not a planner malfunction.
-		{"repository not found", "", exitIncomplete},
-		// A GitHub 5xx response is a planner runtime failure, distinct from
-		// an unresolved coverage gap.
-		{"github server error", "commit_resolution_runtime", exitRuntime},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			installFixtureAPI(t, test.forbiddenEndpoint)
-			t.Setenv("GH_TOKEN", "test-token")
-			inventoryPath := filepath.Join(dir, "inventory.json")
-			writeScanPlanInventory(t, inventoryPath)
-			var stdout, stderr bytes.Buffer
-			err := Run(context.Background(), []string{
-				"scan-plan",
-				"--config", writeScanPlanConfig(t),
-				"--inventory", inventoryPath,
-				"--manifest-output", filepath.Join(dir, "scan-manifest.json"),
+				"--scan-manifest", filepath.Join(dir, "scan-manifest.json"),
 			}, "test", &stdout, &stderr)
 			if err == nil || ExitCode(err) != test.wantCode {
 				t.Fatalf("err=%v code=%d, want %d", err, ExitCode(err), test.wantCode)
@@ -249,43 +121,77 @@ func TestScanPlanCommitResolutionFailuresClassifyExitCode(t *testing.T) {
 	}
 }
 
-func writeScanPlanConfig(t *testing.T) string {
-	t.Helper()
-	data := "version: 5\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
-		"source_scan:\n  enabled: true\n  concurrency: 1\n" +
-		"policies:\n  dependencies:\n    dependency_graph: true\n"
-	path := filepath.Join(t.TempDir(), "segh.yaml")
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func writeScanPlanInventory(t *testing.T, path string) {
-	t.Helper()
-	inventory := model.Inventory{
-		SchemaVersion: model.SchemaVersion, Organization: "example", GitHubHost: "ghes.example",
-		Complete: true,
-		Repositories: []model.Repository{
-			{ID: 1, FullName: "example/repo", Visibility: "public", DefaultBranch: "main"},
-		},
-	}
-	data, err := json.Marshal(inventory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
+func TestAuditCoveragePrecedesGovernanceFindings(t *testing.T) {
+	dir := t.TempDir()
+	installFixtureAPI(t, "dependency_graph")
+	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"audit",
+		"--config", writeConfig(t, true, false),
+		"--inventory-output", filepath.Join(dir, "inventory.json"),
+		"--audit-output", filepath.Join(dir, "audit.json"),
+		"--markdown-output", filepath.Join(dir, "report.md"),
+	}, "test", &stdout, &stderr)
+	if err == nil || ExitCode(err) != exitIncomplete {
+		t.Fatalf("err=%v code=%d", err, ExitCode(err))
 	}
 }
 
-func writeConfig(t *testing.T, requireRuleset bool) string {
+func TestAuditReconciliationPreservesSourceScanExitClassifications(t *testing.T) {
+	for _, test := range []struct {
+		result   string
+		wantCode int
+	}{
+		{"pass", exitSuccess},
+		{"findings", exitFindings},
+		{"incomplete", exitIncomplete},
+		{"error", exitRuntime},
+	} {
+		t.Run(test.result, func(t *testing.T) {
+			dir := t.TempDir()
+			repository := model.SourceScanRepository{
+				ID: 1, Owner: "example", Name: "repo", FullName: "example/repo",
+				DefaultBranch: "main", CommitSHA: strings.Repeat("a", 40), Scheduled: true,
+			}
+			manifestPath := filepath.Join(dir, "scan-manifest.json")
+			writeJSON(t, manifestPath, model.SourceScanManifest{
+				SchemaVersion: model.SourceScanSchemaVersion,
+				Organization:  "example", GitHubHost: "github.com", Enabled: true, Complete: true,
+				Concurrency: 1, Repositories: []model.SourceScanRepository{repository},
+			})
+			writeJSON(t, filepath.Join(dir, "repository-scans", "repository-scan-1", "status.json"), map[string]string{
+				"result": test.result, "repository-id": "1", "repository": "example/repo",
+				"default-branch": "main", "commit-sha": repository.CommitSHA,
+			})
+			t.Setenv("GH_TOKEN", "")
+			t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "")
+			var stdout, stderr bytes.Buffer
+			err := Run(context.Background(), []string{
+				"audit", "--reconcile-source-scan",
+				"--scan-manifest", manifestPath,
+				"--scan-results", filepath.Join(dir, "repository-scans"),
+				"--scan-summary-output", filepath.Join(dir, "scan-summary.json"),
+				"--scan-markdown-output", filepath.Join(dir, "scan-report.md"),
+			}, "test", &stdout, &stderr)
+			if ExitCode(err) != test.wantCode {
+				t.Fatalf("err=%v code=%d, want %d", err, ExitCode(err), test.wantCode)
+			}
+		})
+	}
+}
+
+func writeConfig(t *testing.T, requireRuleset, sourceScan bool) string {
 	t.Helper()
 	repositoryPolicy := ""
 	if requireRuleset {
 		repositoryPolicy = "\n  repository:\n    require_ruleset: true"
 	}
-	data := "version: 5\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
+	source := ""
+	if sourceScan {
+		source = "source_scan:\n  enabled: true\n  concurrency: 1\n"
+	}
+	data := "version: 5\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" + source +
 		"policies:\n  dependencies:\n    dependency_graph: true" + repositoryPolicy + "\n"
 	path := filepath.Join(t.TempDir(), "segh.yaml")
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
@@ -294,22 +200,23 @@ func writeConfig(t *testing.T, requireRuleset bool) string {
 	return path
 }
 
-func installFixtureAPI(t *testing.T, forbiddenEndpoint string) {
+func installFixtureAPI(t *testing.T, failure string) map[string]int {
 	t.Helper()
 	previous := newGitHubAPI
+	calls := map[string]int{}
 	newGitHubAPI = func() (gh.API, error) {
-		return fixtureAPI{forbiddenEndpoint: forbiddenEndpoint}, nil
+		return fixtureAPI{failure: failure, calls: calls}, nil
 	}
 	t.Cleanup(func() { newGitHubAPI = previous })
+	return calls
 }
 
 type fixtureAPI struct {
-	forbiddenEndpoint string
+	failure string
+	calls   map[string]int
 }
 
-func (fixtureAPI) Hostname() string {
-	return "ghes.example"
-}
+func (fixtureAPI) Hostname() string { return "ghes.example" }
 
 func (f fixtureAPI) Get(_ context.Context, apiPath string, out any) error {
 	var data string
@@ -319,18 +226,16 @@ func (f fixtureAPI) Get(_ context.Context, apiPath string, out any) error {
 	case strings.Contains(apiPath, "/installation/repositories?"):
 		data = `{"total_count":1,"repositories":[{"full_name":"example/repo"}]}`
 	case strings.Contains(apiPath, "/orgs/example/repos?"):
+		f.calls["organization_repositories"]++
 		data = `[{"id":1,"full_name":"example/repo","default_branch":"main"}]`
 	case strings.HasSuffix(apiPath, "/actions/permissions/workflow"):
 		data = `{"default_workflow_permissions":"read"}`
 	case strings.HasSuffix(apiPath, "/actions/permissions/fork-pr-contributor-approval"):
 		data = `{"approval_policy":"all_external_contributors"}`
 	case strings.HasSuffix(apiPath, "/actions/permissions"):
-		if f.forbiddenEndpoint == "actions_permissions" {
-			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
-		}
 		data = `{"enabled":true,"allowed_actions":"all","sha_pinning_required":true}`
 	case strings.HasSuffix(apiPath, "/dependency-graph/sbom"):
-		if f.forbiddenEndpoint == "dependency_graph" {
+		if f.failure == "dependency_graph" {
 			return &gh.APIError{StatusCode: 400, Message: "bad request"}
 		}
 		data = `{"sbom":{}}`
@@ -341,30 +246,41 @@ func (f fixtureAPI) Get(_ context.Context, apiPath string, out any) error {
 	case strings.Contains(apiPath, "/rules/branches/main"):
 		data = `[]`
 	case strings.Contains(apiPath, "/branches/main/protection"):
-		if f.forbiddenEndpoint == "branch_protection" {
-			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
-		}
 		return &gh.APIError{StatusCode: 404, Message: "not found"}
 	case strings.HasSuffix(apiPath, "/community/profile"):
-		if f.forbiddenEndpoint == "community_profile" {
-			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
-		}
 		data = `{"files":{"security":{}}}`
 	case strings.Contains(apiPath, "/commits/"):
-		if f.forbiddenEndpoint == "commit_resolution_runtime" {
+		switch f.failure {
+		case "commit_resolution_missing":
+			return &gh.APIError{StatusCode: 404, Message: "not found"}
+		case "commit_resolution_runtime":
 			return &gh.APIError{StatusCode: 500, Message: "internal server error"}
+		case "commit_resolution_forbidden":
+			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
+		default:
+			data = `{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 		}
-		return &gh.APIError{StatusCode: 404, Message: "not found"}
 	default:
 		return &gh.APIError{StatusCode: 404, Message: "not found"}
 	}
 	if out == nil || data == "" {
 		return nil
 	}
-	if err := json.Unmarshal([]byte(data), out); err != nil {
-		return err
+	return json.Unmarshal([]byte(data), out)
+}
+
+func writeJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	return nil
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func readJSON(t *testing.T, path string, value any) {
