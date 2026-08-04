@@ -127,16 +127,15 @@ type RunError struct {
 const SourceScanSchemaVersion = 1
 
 type SourceScanManifest struct {
-	SchemaVersion  int                    `json:"schema_version"`
-	Organization   string                 `json:"organization"`
-	GitHubHost     string                 `json:"github_host"`
-	GeneratedAt    time.Time              `json:"generated_at"`
-	Enabled        bool                   `json:"enabled"`
-	Complete       bool                   `json:"complete"`
-	Concurrency    int                    `json:"concurrency"`
-	TimeoutMinutes int                    `json:"timeout_minutes"`
-	Repositories   []SourceScanRepository `json:"repositories"`
-	Errors         []RunError             `json:"errors,omitempty"`
+	SchemaVersion int                    `json:"schema_version"`
+	Organization  string                 `json:"organization"`
+	GitHubHost    string                 `json:"github_host"`
+	GeneratedAt   time.Time              `json:"generated_at"`
+	Enabled       bool                   `json:"enabled"`
+	Complete      bool                   `json:"complete"`
+	Concurrency   int                    `json:"concurrency"`
+	Repositories  []SourceScanRepository `json:"repositories"`
+	Errors        []RunError             `json:"errors,omitempty"`
 }
 
 type SourceScanRepository struct {

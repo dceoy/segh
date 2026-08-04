@@ -119,9 +119,10 @@ suppressions:
 
 `inventory.concurrency` (default `4`) and `inventory.timeout` (default `30m`,
 capped at `30m`) bound organization inventory collection.
-`source_scan.concurrency` (default `4`) and `source_scan.timeout` (default
-`30m`, capped at `6h`) bound the periodic scan matrix once
-`source_scan.enabled` is `true`. `selectors.repositories` and
+`source_scan.concurrency` (default `4`) bounds the periodic scan matrix's
+parallelism once `source_scan.enabled` is `true`; each matrix repository's
+scan duration is bounded by the pinned upstream reusable workflow instead of
+a `segh` configuration field. `selectors.repositories` and
 `selectors.exclude` accept explicit repository full names for auditable
 allow/deny lists beyond the `exclude_archived`/`exclude_disabled`/
 `exclude_forks` class exclusions. These are commonly left at their defaults;

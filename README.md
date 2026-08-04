@@ -78,10 +78,13 @@ rulesets, branch protection, dependency graph, Dependabot coverage, and
 repository metadata. It does not clone repositories or run
 scanners during governance collection. When `source_scan.enabled` is true, the
 scheduled control workflow reuses that selected inventory, records every
-default branch's exact commit SHA, and scans each checkout with the pinned
-`gha-for-devops` static-analysis policy. Repository scripts, package installers,
-submodules, Git LFS objects, and Terraform providers are never executed or
-initialized.
+default branch's exact commit SHA, and delegates each target to
+`gha-for-devops`'s pinned `repository-security-scan.yml` reusable workflow,
+which mints its own repository-scoped token, checks out the recorded commit,
+and runs the static-analysis policy. `segh` retains only inventory collection,
+commit resolution, matrix orchestration, and result aggregation. Repository
+scripts, package installers, submodules, Git LFS objects, and Terraform
+providers are never executed or initialized.
 
 Source scanning writes separate `scan-manifest.json`, `scan-summary.json`, and
 per-repository evidence. Findings, incomplete content or checkout coverage, and

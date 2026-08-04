@@ -26,10 +26,16 @@ same Contents read permission to fetch a repository's default-branch tree and
 matched manifest content; it makes no additional permission request.
 
 The inventory and commit-resolution job receives the organization-wide token.
-Each repository scan job separately mints a short-lived token restricted to the
-single matrix repository with only Contents: Read and Metadata: Read, then
-checks out the recorded commit with `persist-credentials: false`. Scanner steps
-never receive the App private key.
+Each repository scan job invokes `dceoy/gha-for-devops`'s pinned
+`repository-security-scan.yml` reusable workflow, which separately mints a
+short-lived token restricted to the single matrix repository with only
+Contents: Read and Metadata: Read and checks out the recorded commit with
+`persist-credentials: false` itself; `segh`'s own workflow only forwards the
+App's Client ID (`SEGH_READ_APP_CLIENT_ID`) and private key
+(`SEGH_READ_APP_PRIVATE_KEY`) as `TARGET_APP_CLIENT_ID`/`TARGET_APP_PRIVATE_KEY`
+secrets to that call. Scanner steps never receive the App private key: GitHub
+masks it as a secret, and only the called workflow's token-minting step
+consumes it.
 
 ## Installation scope
 

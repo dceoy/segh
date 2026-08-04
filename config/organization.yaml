@@ -6,7 +6,6 @@ inventory:
 source_scan:
   enabled: true
   concurrency: 4
-  timeout: 30m
 selectors:
   exclude_archived: true
   exclude_disabled: true
