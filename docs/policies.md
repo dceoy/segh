@@ -1,6 +1,6 @@
 # Policies
 
-Version 4 policy sections are independent. A field is evaluated only when it is
+Version 5 policy sections are independent. A field is evaluated only when it is
 present in configuration.
 
 `source_scan` is operational configuration rather than a governance policy. It
@@ -54,4 +54,27 @@ Unavailable or forbidden evidence never becomes a pass.
 
 Suppressions require a policy ID, owner, rationale, and optional repository glob
 and expiry. A matching unexpired suppression changes only a failure to
-`exempt`. An expired suppression adds an explicit failure.
+`exempt`. An expired suppression adds an explicit failure:
+
+```yaml
+suppressions:
+  - policy: repository.security_md
+    repository: example-org/legacy-*
+    owner: security@example.com
+    rationale: Migration is tracked in the security program.
+    expires: 2026-12-31T00:00:00Z
+```
+
+## Advanced configuration
+
+`inventory.concurrency` (default `4`) and `inventory.timeout` (default `30m`,
+capped at `30m`) bound organization inventory collection.
+`source_scan.concurrency` (default `4`) and `source_scan.timeout` (default
+`30m`, capped at `6h`) bound the periodic scan matrix once
+`source_scan.enabled` is `true`. `selectors.repositories` and
+`selectors.exclude` accept explicit repository full names for auditable
+allow/deny lists beyond the `exclude_archived`/`exclude_disabled`/
+`exclude_forks` class exclusions. These are commonly left at their defaults;
+`segh.example.yaml` omits them for that reason. The embedded JSON Schema
+(`schema/segh-config-v5.schema.json`) is the complete, authoritative field
+reference and drives editor completion.
