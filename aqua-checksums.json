@@ -1,51 +1,6 @@
 {
   "checksums": [
     {
-      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_Linux-64bit.tar.gz",
-      "checksum": "BBB64B9695866CE4A7A8F5C9592002C5961CAB378577FA3F8A040DF362B9B2EA",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_Linux-ARM64.tar.gz",
-      "checksum": "2CA2C023109C2DB6B2B77366B6717291452D4531167377D95C79547F0C8E3467",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_macOS-64bit.tar.gz",
-      "checksum": "EE5E60DF8A98E5B89FD74A6D86F9E5C7E9A266A35002CB1E43291698B3BFEE08",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_macOS-ARM64.tar.gz",
-      "checksum": "88F208680DC05DA2B459E19B4F5AA2B4DC7C2117892BA4AAB2AE63BABA330016",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/aquasecurity/trivy/v0.72.0/trivy_0.72.0_windows-64bit.zip",
-      "checksum": "ED3CF122060F61818FE1F735FD97557954E16E10BC8B058AF9852271CF2E91B3",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/bridgecrewio/checkov/3.3.8/checkov_darwin_X86_64.zip",
-      "checksum": "35B0461510CF1A680DC4450D2362DE6CA4AED101D86699F20A4329806230DB1B",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/bridgecrewio/checkov/3.3.8/checkov_linux_X86_64.zip",
-      "checksum": "7F9F62EB3812FEE7CB9C570503A266A599F5458B362FE581C14DCF4A44027BD4",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/bridgecrewio/checkov/3.3.8/checkov_linux_arm64.zip",
-      "checksum": "AFE1D3C96DF7119F16DD27AC4971EB83D2F9F50EC2150CE9E2BAD6F483733B0C",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/bridgecrewio/checkov/3.3.8/checkov_windows_X86_64.zip",
-      "checksum": "38DF789780A62142FEF1474AF98094D9BFA440DE1BE982D51E2AFFC8881E7EE2",
-      "algorithm": "sha256"
-    },
-    {
       "id": "github_release/github.com/golangci/golangci-lint/v2.12.2/golangci-lint-2.12.2-darwin-amd64.tar.gz",
       "checksum": "F6F06D94B6241521C53D15450C5209B028270BF966F842AFB11C030C79F5BC16",
       "algorithm": "sha256"
@@ -128,31 +83,6 @@
     {
       "id": "github_release/github.com/rhysd/actionlint/v1.7.12/actionlint_1.7.12_windows_arm64.zip",
       "checksum": "CADCF7EA4EFE3A68728893813643CEBE1185E5B1D4BE5B96245F65C9A4D5EA41",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-aarch64-apple-darwin.tar.gz",
-      "checksum": "54949BBD6B4C8527046BB8990BAC9E0DAB3EEC787640F4E6199AE121DD1040BE",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-aarch64-unknown-linux-gnu.tar.gz",
-      "checksum": "324E43770CFACF4216F8AEFB287263B5B5C733C85B03BF7583B5CC4A0460239E",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-x86_64-apple-darwin.tar.gz",
-      "checksum": "40A58D8560D65C71357B3977D0DA425773BF8F10BF1FFD38099D963D3AFDF3AA",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-x86_64-pc-windows-msvc.zip",
-      "checksum": "06E5B2345323201ED4C55897651862FEE3B43F79DDCED799F1236F0F0D1C1C0F",
-      "algorithm": "sha256"
-    },
-    {
-      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-x86_64-unknown-linux-gnu.tar.gz",
-      "checksum": "E87B67160194884E375A46A12C57CCC904F762B53845F254FAB7F17D98809C09",
       "algorithm": "sha256"
     },
     {

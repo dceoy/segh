@@ -75,7 +75,7 @@ jobs:
           # Organization-wide inventory requires every repository in the App
           # installation; the permissions below still constrain the token to
           # the exact read-only API surface used by segh.
-          owner: ${{ github.repository_owner }}   # zizmor: ignore[github-app]
+          owner: ${{ github.repository_owner }}
           permission-actions: read
           permission-administration: read
           permission-contents: read
@@ -112,7 +112,7 @@ jobs:
         with:
           app-id: ${{ secrets.SEGH_READ_APP_ID }}
           private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}   # zizmor: ignore[github-app]
+          owner: ${{ github.repository_owner }}
           permission-contents: read
           permission-metadata: read
       - name: Resolve immutable source scan targets

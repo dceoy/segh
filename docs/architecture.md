@@ -1,6 +1,8 @@
 # Architecture
 
-`segh` has two read-only paths with separate evidence contracts.
+`segh` has two read-only organization-level paths with separate evidence
+contracts. It has no pull-request or merge-queue execution path and publishes
+no pull-request checks.
 
 ```text
 Organization audit
@@ -32,23 +34,29 @@ The periodic scan resolves each selected repository's default branch through
 the API and records the returned full commit SHA in a separate manifest, then
 delegates each matrix target to `dceoy/gha-for-devops`'s pinned
 `repository-security-scan.yml` reusable workflow by full commit SHA. That
-called workflow, not `segh`, mints the repository-scoped token, checks out
-only the recorded SHA with credentials, LFS, and submodules disabled, treats
-the checkout only as static input, runs the scanner pipeline, and publishes
-the identity-bound `status.json` evidence artifact. Tracked symlinks are
-removed; submodule gitlinks and Git LFS pointers make coverage incomplete.
-`segh` never installs or invokes a scanner itself, and its aggregation step
-parses the artifact's evidence shape as untrusted input: missing, malformed,
-duplicate, or identity-mismatched evidence is a coverage gap, not a pass.
+called workflow, not `segh`, mints the repository-scoped token, checks out only
+the recorded SHA with credentials, LFS, and submodules disabled, treats the
+checkout only as static input, runs the scanner pipeline, and publishes the
+identity-bound `status.json` evidence artifact. Tracked symlinks are removed;
+submodule gitlinks and Git LFS pointers make coverage incomplete. `segh` never
+installs or invokes a scanner itself, and its aggregation step parses the
+artifact's evidence shape as untrusted input: missing, malformed, duplicate, or
+identity-mismatched evidence is a coverage gap, not a pass.
+
+## Scope boundary
+
+Pull-request source scanning, merge-queue security enforcement, and
+pull-request check publication are intentionally outside `segh`. The
+organization source-scan controller does not expose compatibility wrappers,
+feature flags, or event-specific aliases for those removed responsibilities.
 
 ## Dependency evaluations
 
 Configuration is decoded first into a generic YAML representation and validated
-against the embedded, published
-`schema/segh-config-v5.schema.json`. Typed decoding and duration conversion run
-only after structural validation. The Go layer retains only repository-glob
-validation because it must use the same `path.Match` semantics as policy
-evaluation.
+against the embedded, published `schema/segh-config-v5.schema.json`. Typed
+decoding and duration conversion run only after structural validation. The Go
+layer retains only repository-glob validation because it must use the same
+`path.Match` semantics as policy evaluation.
 
 `github.com/santhosh-tekuri/jsonschema/v6` (a maintained draft 2020-12
 validator) was re-evaluated against a working prototype and adopted, replacing
@@ -62,12 +70,11 @@ round-trip through `time.Parse`. Every prior acceptance/rejection decision
 covered by the test suite is unchanged; only the resulting error message
 wording moved from the removed handwritten dot-notation strings to the
 library's JSON-pointer-based messages. Adoption removed the second handwritten
-set of enums, uniqueness checks, required-policy checks, `$ref` resolution,
-and duration patterns: `internal/config/schema.go` shrank from 525 to 92 lines
-and `internal/config/schema_test.go` from 239 to 65 lines, a net reduction of
-594 lines (689 deletions, 95 insertions) across `go.mod`, `go.sum`,
-`schema.go`, `schema_test.go`, and the updated assertions in
-`config_test.go`.
+set of enums, uniqueness checks, required-policy checks, `$ref` resolution, and
+duration patterns: `internal/config/schema.go` shrank from 525 to 92 lines and
+`internal/config/schema_test.go` from 239 to 65 lines, a net reduction of 594
+lines (689 deletions, 95 insertions) across `go.mod`, `go.sum`, `schema.go`,
+`schema_test.go`, and the updated assertions in `config_test.go`.
 
 `github.com/cli/go-gh/v2/pkg/api` was evaluated for REST transport. Its
 high-level response decoding does not provide segh's required pre-decode size
@@ -120,7 +127,6 @@ with incomplete coverage before considering ordinary policy failures.
 ## Platform boundary
 
 The CLI supports GitHub.com, GHE.com, and GitHub Enterprise Server through
-`GH_HOST`.
-The supplied cross-repository Actions workflows are pinned for GitHub.com.
-GHES operators must mirror the trusted source and validate that their server and
-runner support each pinned action.
+`GH_HOST`. The supplied cross-repository Actions workflow is pinned for
+GitHub.com. GHES operators must mirror the trusted source and validate that
+their server and runner support each pinned action.
