@@ -88,6 +88,20 @@ those custom layers while adding configuration surface. The standard-library
 transport keeps explicit bounds, retries, typed errors, cancellation, and
 GitHub.com/GHE.com/GHES host mapping without subprocess execution.
 
+`github.com/google/go-github/v89` `v89.0.0` was then evaluated on the reduced
+repository after the PR-security and source-scan-controller simplifications.
+The candidate and retained snapshots ran the same 323-line parity suite and the
+complete repository test corpus. The retained implementation measured 280
+production lines plus 734 directly associated test lines (1,014 total), while
+the parity-oriented candidate measured 318 plus the same 734 tests (1,052
+total), a 38-line increase. Aggregate cyclomatic complexity increased from 72
+to 80, maximum complexity remained 12, and the candidate could not preserve the
+retained 64 KiB error-body materialization bound without another transport
+layer. The candidate was rejected and removed. The final tree keeps only 154
+lines of focused production-contract regressions; the complete responsibility
+inventory, reduced-main snapshot SHAs, workflow runs, measurements, and parity
+matrix are recorded in [the GitHub REST client evaluation](github-client-evaluation.md).
+
 ## Inventory model
 
 Repository enumeration is checked against the App installation's authoritative
