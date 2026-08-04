@@ -16,10 +16,10 @@ jobs:
       scan-targets: ${{ steps.scan-outputs.outputs.targets }}
       source-commit: ${{ steps.source.outputs.commit }}
     runs-on: ubuntu-24.04
-    # Budgeted for two sequential inventory.timeout-bounded phases (segh
-    # audit, then segh scan-plan) plus checkout/build/evidence-retention
-    # overhead. inventory.timeout is capped at 30m by config validation, so
-    # the worst case (2 * 30m + overhead) stays within this limit.
+    # The single audit command performs two sequential, independently
+    # inventory.timeout-bounded phases: governance inventory/evaluation and
+    # immutable default-branch commit resolution. The configured timeout is
+    # capped at 30 minutes, so both phases plus setup remain bounded here.
     timeout-minutes: 75
     steps:
       - name: Check out control repository
@@ -72,9 +72,6 @@ jobs:
         with:
           app-id: ${{ secrets.SEGH_READ_APP_ID }}
           private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
-          # Organization-wide inventory requires every repository in the App
-          # installation; the permissions below still constrain the token to
-          # the exact read-only API surface used by segh.
           owner: ${{ github.repository_owner }}   # zizmor: ignore[github-app]
           permission-actions: read
           permission-administration: read
@@ -98,33 +95,13 @@ jobs:
       - name: Build
         working-directory: _segh
         run: go build -trimpath -o "$GITHUB_WORKSPACE/bin/segh" ./cmd/segh
-      - name: Audit GitHub-native governance
-        id: governance
+      - name: Audit governance and plan immutable source scan targets
+        id: audit-run
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SEGH_GITHUB_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
         run: bin/segh audit --config _control/config/organization.yaml
-      - name: Refresh read-only GitHub App token before source scan planning
-        id: scan-plan-token
-        if: always()
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          app-id: ${{ secrets.SEGH_READ_APP_ID }}
-          private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}   # zizmor: ignore[github-app]
-          permission-contents: read
-          permission-metadata: read
-      - name: Resolve immutable source scan targets
-        id: scan-plan
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ steps.scan-plan-token.outputs.token }}
-        run: |
-          bin/segh scan-plan \
-            --config _control/config/organization.yaml \
-            --inventory segh-results/inventory.json
       - name: Export bounded source scan matrix
         id: scan-outputs
         if: always()
@@ -174,26 +151,18 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: organization-source-scan-plan
-          path: |
-            segh-results/scan-manifest.json
+          path: segh-results/scan-manifest.json
           if-no-files-found: warn
           retention-days: 14
-      - name: Enforce governance and planning results
+      - name: Enforce audit result
         if: always()
         env:
-          GOVERNANCE_RESULT: ${{ steps.governance.outcome }}
-          PLAN_RESULT: ${{ steps.scan-plan.outcome }}
+          AUDIT_RESULT: ${{ steps.audit-run.outcome }}
         run: |
-          failed=0
-          if [[ "$GOVERNANCE_RESULT" != success ]]; then
-            echo "::error::Governance audit result: $GOVERNANCE_RESULT"
-            failed=1
+          if [[ "$AUDIT_RESULT" != success ]]; then
+            echo "::error::Governance and source-scan planning result: $AUDIT_RESULT"
+            exit 1
           fi
-          if [[ "$PLAN_RESULT" != success ]]; then
-            echo "::error::Source scan planning result: $PLAN_RESULT"
-            failed=1
-          fi
-          exit "$failed"
 
   source-scan:
     name: Source scan / ${{ matrix.full_name }}
@@ -205,14 +174,9 @@ jobs:
       matrix: ${{ fromJSON(needs.audit.outputs.scan-matrix) }}
     permissions:
       contents: read
-    # Pinned dceoy/gha-for-devops commit: owns target checkout, token
-    # minting, scanner installation and invocation, exit-code and
-    # evidence-shape classification, identity-bound status.json generation,
-    # and per-repository artifact publication. segh supplies only the
-    # planned target identity and a unique evidence artifact name.
     uses: dceoy/gha-for-devops/.github/workflows/repository-security-scan.yml@c84ceed28723b5cd5a93edb1febdfaad39e7c522
     with:
-      target-repository: ${{ matrix.full_name }}
+      target-repository: ${{ matrix.ful_name }}
       target-ref: ${{ matrix.commit_sha }}
       repository-id: ${{ matrix.id }}
       default-branch: ${{ matrix.default_branch }}
@@ -243,7 +207,7 @@ jobs:
           go-version: "1.26.5"
           cache: true
           cache-dependency-path: _segh/go.sum
-      - name: Build trusted summarizer
+      - name: Build trusted reconciler
         working-directory: _segh
         run: go build -trimpath -o "$GITHUB_WORKSPACE/bin/segh" ./cmd/segh
       - name: Download source scan plan
@@ -257,14 +221,15 @@ jobs:
         with:
           pattern: repository-scan-*
           path: repository-scans
-      - name: Aggregate source scan evidence
+      - name: Reconcile source scan evidence
         id: summarize
         continue-on-error: true
         run: |
           mkdir -p repository-scans
-          bin/segh scan-summary \
-            --manifest segh-results/scan-manifest.json \
-            --results repository-scans
+          bin/segh audit \
+            --reconcile-source-scan \
+            --scan-manifest segh-results/scan-manifest.json \
+            --scan-results repository-scans
       - name: Publish bounded source scan summary
         if: always()
         run: |
@@ -287,7 +252,7 @@ jobs:
         if: always()
         env:
           MATRIX_RESULT: ${{ needs.source-scan.result }}
-          SUMMARY_RESULT: ${{ steps.summarize.outcome }}
+          SUMMARY_RESULTT ${{ steps.summarize.outcome }}
           HAS_TARGETS: ${{ needs.audit.outputs.scan-targets }}
         run: |
           if [[ "$SUMMARY_RESULT" != success ]]; then
