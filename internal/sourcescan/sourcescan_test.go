@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,15 +45,20 @@ func TestPlannerResolvesSortsAndSchedulesImmutableCommits(t *testing.T) {
 	}}
 	planner := NewPlanner(cfg, client)
 	planner.now = func() time.Time { return time.Unix(10, 0) }
-	manifest, err := planner.Run(context.Background(), model.Inventory{
+	inventory := model.Inventory{
 		SchemaVersion: model.SchemaVersion, Organization: "example", GitHubHost: "github.com", Complete: true,
 		Repositories: []model.Repository{
 			{ID: 2, FullName: "example/zeta", Visibility: "private", DefaultBranch: "main"},
 			{ID: 1, FullName: "example/alpha", Visibility: "public", DefaultBranch: "release"},
 		},
-	})
+	}
+	manifest, err := planner.Run(context.Background(), inventory)
 	if err != nil {
 		t.Fatal(err)
+	}
+	repeated, err := planner.Run(context.Background(), inventory)
+	if err != nil || !reflect.DeepEqual(manifest, repeated) {
+		t.Fatalf("repeated manifest=%#v err=%v, first=%#v", repeated, err, manifest)
 	}
 	if !manifest.Complete || manifest.Concurrency != 2 ||
 		manifest.GeneratedAt != time.Unix(10, 0).UTC() {
@@ -201,26 +207,48 @@ func TestSummaryParsesLiteralUpstreamStatusJSON(t *testing.T) {
 	}
 }
 
-func TestSummaryRejectsMismatchedOrMalformedStatusEvidence(t *testing.T) {
+func TestSummaryRejectsInvalidDuplicateAndMismatchedStatusEvidence(t *testing.T) {
 	repository := resolvedRepository(1, "repo", "a")
 	manifest := model.SourceScanManifest{SchemaVersion: 1, Organization: "example", Complete: true, Repositories: []model.SourceScanRepository{repository}}
 	for _, test := range []struct {
-		name   string
-		mutate func(*upstreamStatus)
+		name      string
+		mutate    func(*upstreamStatus)
+		malformed bool
+		duplicate bool
 	}{
-		{"commit", func(status *upstreamStatus) { status.CommitSHA = strings.Repeat("b", 40) }},
-		{"result", func(status *upstreamStatus) { status.Result = "success" }},
+		{"repository ID", func(status *upstreamStatus) { status.RepositoryID = "2" }, false, false},
+		{"repository name", func(status *upstreamStatus) { status.Repository = "example/other" }, false, false},
+		{"default branch", func(status *upstreamStatus) { status.DefaultBranch = "release" }, false, false},
+		{"commit SHA", func(status *upstreamStatus) { status.CommitSHA = strings.Repeat("b", 40) }, false, false},
+		{"unsupported result", func(status *upstreamStatus) { status.Result = "success" }, false, false},
+		{"malformed JSON", nil, true, false},
+		{"duplicate status", nil, false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
-			status := validStatus(repository, "pass")
-			test.mutate(&status)
-			writeJSON(t, filepath.Join(dir, "status.json"), status)
+			statusPath := filepath.Join(dir, "repository-scan-1", "status.json")
+			if test.malformed {
+				if err := os.MkdirAll(filepath.Dir(statusPath), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(statusPath, []byte("{"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				status := validStatus(repository, "pass")
+				if test.mutate != nil {
+					test.mutate(&status)
+				}
+				writeJSON(t, statusPath, status)
+				if test.duplicate {
+					writeJSON(t, filepath.Join(dir, "duplicate", "status.json"), status)
+				}
+			}
 			summary, err := Summarize(manifest, dir, time.Now())
 			if err != nil {
 				t.Fatal(err)
 			}
-			if summary.Complete || summary.Counts.Errors != 1 || summary.Counts.Incomplete != 1 {
+			if summary.Complete || summary.Counts.Errors != 1 {
 				t.Fatalf("summary = %#v", summary)
 			}
 		})
