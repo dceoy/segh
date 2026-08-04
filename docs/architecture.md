@@ -19,26 +19,12 @@ Periodic organization source scan
 
 ## Source-scan responsibility boundary
 
-The removed `scan-plan` and `scan-summary` routes previously split one control
-flow into three CLI executions. Their responsibilities now map as follows:
-
 | Responsibility | Owner |
 | --- | --- |
 | Configuration validation, inventory collection, repository selection | `segh audit` governance path |
 | Default-branch SHA resolution, deterministic target ordering, matrix bound, `scan-manifest.json` | `segh audit` organization controller |
 | Target token, checkout, preflight, scanners, repository classification, `status.json` | pinned `gha-for-devops` workflow |
 | Artifact discovery, planned-identity matching, missing/duplicate/malformed evidence, aggregate counts and bounded summary | `segh audit` organization reconciliation mode |
-| Re-reading configuration or inventory between planning stages | deleted duplication |
-
-A concrete upstream-aggregation prototype was rejected: a generic upstream
-workflow would need to accept `segh`'s organization manifest, discover a whole
-matrix's artifacts, reproduce manifest-specific identity checks, and return a
-second adapter contract. That moves rather than removes the organization logic
-and increases total workflow, adapter, test, and documentation surface. The
-adopted prototype instead keeps the existing small manifest-aware reconciler
-local while eliminating both standalone commands, one configuration reload, one
-inventory serialization/read boundary, a second App-token mint, and two
-executable routes.
 
 ## Trust boundaries
 
@@ -68,39 +54,21 @@ repository-level classification.
 ## Scope boundary
 
 Pull-request source scanning, merge-queue security enforcement, and
-pull-request check publication are intentionally outside `segh`. The
-organization source-scan controller does not expose compatibility wrappers,
-feature flags, or event-specific aliases for those removed responsibilities.
+pull-request check publication are intentionally outside `segh`. Periodic
+organization source scanning is the only source-scanning path maintained here.
 
-## Dependency evaluations
+## Dependencies and transport
 
 Configuration is structurally validated against the embedded version 5 JSON
 Schema before typed decoding and duration conversion. The maintained
 `github.com/santhosh-tekuri/jsonschema/v6` validator compiles that schema
 in-memory without runtime network or filesystem access. A strict date-time
-format override preserves the typed configuration contract. Its adoption
-removed the handwritten schema evaluator and its duplicated test surface.
+format override preserves the typed configuration contract.
 
-`github.com/cli/go-gh/v2/pkg/api` was evaluated for REST transport but rejected.
-Its high-level decoder does not provide the required pre-decode response bound,
-automatic retries, or endpoint pagination; its lower-level API would retain
-those custom layers while adding configuration surface. The standard-library
-transport keeps explicit bounds, retries, typed errors, cancellation, and
-GitHub.com/GHE.com/GHES host mapping without subprocess execution.
-
-`github.com/google/go-github/v89` `v89.0.0` was then evaluated on the reduced
-repository after the PR-security and source-scan-controller simplifications.
-The candidate and retained snapshots ran the same 323-line parity suite and the
-complete repository test corpus. The retained implementation measured 280
-production lines plus 734 directly associated test lines (1,014 total), while
-the parity-oriented candidate measured 318 plus the same 734 tests (1,052
-total), a 38-line increase. Aggregate cyclomatic complexity increased from 72
-to 80, maximum complexity remained 12, and the candidate could not preserve the
-retained 64 KiB error-body materialization bound without another transport
-layer. The candidate was rejected and removed. The final tree keeps only 154
-lines of focused production-contract regressions; the complete responsibility
-inventory, reduced-main snapshot SHAs, workflow runs, measurements, and parity
-matrix are recorded in [the GitHub REST client evaluation](github-client-evaluation.md).
+GitHub REST access uses the Go standard library with explicit response bounds,
+retry and backoff policy, cancellable waits, token redaction, and
+GitHub.com/GHE.com/GHES host mapping. Endpoint pagination, ordering, and
+availability classification remain caller-owned.
 
 ## Inventory model
 
