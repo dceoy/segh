@@ -65,11 +65,13 @@ The organization audit workflow also invokes two internal pipeline stages
 
 Keep the existing `PR security / scan` required workflow active until the
 trusted `Repository security` replacement in
-[`dceoy/gha-for-devops`](https://github.com/dceoy/gha-for-devops) has direct
-pull-request and merge-group triggers and its organization-ruleset rollout is
-verified. `segh` already uses the reviewed upstream scanner for periodic
-organization scans; remove the local PR workflow only in the follow-up
-migration.
+[`dceoy/gha-for-devops`](https://github.com/dceoy/gha-for-devops)'s
+organization-ruleset rollout is verified. Its direct pull-request and
+merge-group triggers are active as of `dceoy/gha-for-devops#873`; `segh`
+already uses the reviewed upstream scanner for periodic organization scans
+and PR-time scanning. Remove the local PR workflow only after an organization
+administrator has required the pinned upstream workflow and verified it
+passes live, per [Workflows and rollout](docs/workflows.md).
 
 ## Organization audit and periodic source scan
 

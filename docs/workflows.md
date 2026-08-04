@@ -73,9 +73,37 @@ success and failure.
 
 ## Pull-request security
 
-The existing `PR security / scan` required workflow remains active while the
-`Repository security` migration in `dceoy/gha-for-devops` is incomplete. Do
-not remove the local workflow or self-check publisher until the upstream direct
-pull-request and merge-group path is active and its organization-ruleset
-replacement has been verified. Pin the replacement to a reviewed upstream
-commit and complete that rollout before removing the local path in a follow-up.
+The existing `PR security / scan` required workflow (`pr-security.yml`,
+`pr-security-self.yml`, and the `.github/actions/pr-security` composite
+action) remains active. `dceoy/gha-for-devops`'s `repository-security-scan.yml`
+now has direct `pull_request`/`merge_group` triggers active and verified live
+(`dceoy/gha-for-devops#873`, merged as
+`c84ceed28723b5cd5a93edb1febdfaad39e7c522`), so the upstream replacement
+itself is ready to be required. Migration is not complete, and the local
+workflow and self-check publisher must not be removed yet:
+
+1. An organization administrator adds
+   `dceoy/gha-for-devops/.github/workflows/repository-security-scan.yml@c84ceed28723b5cd5a93edb1febdfaad39e7c522`
+   as a required workflow in the organization ruleset that currently requires
+   `dceoy/segh`'s own `pr-security.yml`, alongside the existing requirement
+   (not replacing it yet) — an organization-ruleset change this repository's
+   code cannot make or verify itself.
+2. Verify a live pull request and a live `merge_group` run in `dceoy/segh`
+   and in at least one representative downstream repository produce a
+   passing `Repository security / scan` check, including confirming which
+   commit the required-workflow execution actually trusts as the scanner
+   revision for a repository other than `dceoy/gha-for-devops` itself — this
+   specific trust-selection path has not been live-verified and must be
+   before anything is required.
+3. Make `Repository security / scan` required (not just present) and confirm
+   representative failing pull requests are still blocked.
+4. Only after step 3 is verified: remove `pr-security.yml`,
+   `pr-security-self.yml`, `.github/actions/pr-security`, their tests and
+   documentation, and the `dceoy/segh`'s own required-workflow entry for the
+   old check; remove the organization ruleset's requirement of the old
+   check; and decommission the dedicated Checks-write GitHub App and the
+   `self-scan-publisher` environment if nothing else uses them.
+
+Steps 1, 3 (the ruleset change), and 4's App/environment decommission are
+organization-administrator actions outside this repository; they must be
+performed and confirmed by an operator, not assumed complete.
