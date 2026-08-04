@@ -41,14 +41,24 @@ only after structural validation. The Go layer retains only repository-glob
 validation because it must use the same `path.Match` semantics as policy
 evaluation.
 
-`github.com/santhosh-tekuri/jsonschema/v6` was evaluated as a general draft
-2020-12 validator. It supports the required draft and embedded resources, but a
-general validator dependency plus YAML error adaptation did not reduce the
-maintained surface for this fixed, single-schema CLI. The runtime therefore uses
-a focused evaluator for only the keywords present in the embedded schema. This
-keeps the JSON Schema authoritative without runtime schema downloads or a
-second handwritten set of enums, uniqueness checks, required-policy checks, or
-duration patterns.
+`github.com/santhosh-tekuri/jsonschema/v6` (a maintained draft 2020-12
+validator) was re-evaluated against a working prototype and adopted, replacing
+the handwritten evaluator. The library compiles the embedded schema in-memory
+via `Compiler.AddResource`/`Compile` with no runtime network or filesystem
+access, so the fail-closed, offline-only guarantee is unchanged; the only
+behavioral override is a stricter `date-time` format (`validateStrictRFC3339`)
+that rejects lenient forms (lowercase designators, leap seconds, out-of-range
+offsets) the built-in format assertion would otherwise accept but that cannot
+round-trip through `time.Parse`. Every prior acceptance/rejection decision
+covered by the test suite is unchanged; only the resulting error message
+wording moved from the removed handwritten dot-notation strings to the
+library's JSON-pointer-based messages. Adoption removed the second handwritten
+set of enums, uniqueness checks, required-policy checks, `$ref` resolution,
+and duration patterns: `internal/config/schema.go` shrank from 525 to 92 lines
+and `internal/config/schema_test.go` from 239 to 65 lines, a net reduction of
+594 lines (689 deletions, 95 insertions) across `go.mod`, `go.sum`,
+`schema.go`, `schema_test.go`, and the updated assertions in
+`config_test.go`.
 
 `github.com/cli/go-gh/v2/pkg/api` was evaluated for REST transport. Its
 high-level response decoding does not provide segh's required pre-decode size
