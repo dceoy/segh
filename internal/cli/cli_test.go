@@ -13,7 +13,7 @@ import (
 	"github.com/dceoy/segh/internal/model"
 )
 
-func TestHelpVersionAndRemovedCommands(t *testing.T) {
+func TestHelpAndVersion(t *testing.T) {
 	for _, test := range []struct {
 		args []string
 		want string
@@ -27,13 +27,6 @@ func TestHelpVersionAndRemovedCommands(t *testing.T) {
 		}
 		if !strings.Contains(stdout.String(), test.want) {
 			t.Fatalf("%v output = %q", test.args, stdout.String())
-		}
-	}
-	for _, command := range []string{"scan-plan", "scan-summary"} {
-		var stdout, stderr bytes.Buffer
-		err := Run(context.Background(), []string{command}, "test", &stdout, &stderr)
-		if err == nil || ExitCode(err) != exitUsage {
-			t.Fatalf("%s: err=%v code=%d", command, err, ExitCode(err))
 		}
 	}
 }

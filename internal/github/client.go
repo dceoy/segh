@@ -177,12 +177,8 @@ func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {
 	return nil
 }
 
-// transportError wraps a transport-level failure (connection establishment,
-// response-body read, or a response body that fails to decode) as a
-// retryable, status-0 APIError, mirroring how the removed gh api path
-// surfaced a command failure. It returns the bare context error instead when
-// the failure is actually a context cancellation/timeout, which must not be
-// retried.
+// transportError wraps transport and decode failures as retryable status-0
+// API errors. Context cancellation and timeouts are returned directly.
 func (c *Client) transportError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()

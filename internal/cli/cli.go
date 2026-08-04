@@ -53,13 +53,19 @@ func (e *commandError) Error() string { return e.err.Error() }
 func (e *commandError) Unwrap() error { return e.err }
 
 func Run(ctx context.Context, args []string, version string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || len(args) == 1 && slicesHelp(args[0]) {
+	if len(args) == 0 {
 		printHelp(stdout, version)
 		return nil
 	}
-	if len(args) == 1 && slicesVersion(args[0]) {
-		writef(stdout, "%s\n", version)
-		return nil
+	if len(args) == 1 {
+		switch args[0] {
+		case "--help", "-h", "help":
+			printHelp(stdout, version)
+			return nil
+		case "--version", "version":
+			writef(stdout, "%s\n", version)
+			return nil
+		}
 	}
 	if args[0] != "audit" {
 		return usageError(fmt.Errorf("unknown command %q", args[0]))
@@ -184,7 +190,7 @@ func runAudit(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if authenticationFailure(inventoryErr) || authenticationFailure(planErr) {
 		return authError(fmt.Errorf("audit authentication or permission failure"))
 	}
-	if planErr != nil && classifyPlanFailure(planErr) == exitRuntime {
+	if planErr != nil && isRuntimePlanFailure(planErr) {
 		return runtimeError(planErr)
 	}
 	if inventoryErr != nil || planErr != nil || audit.Coverage != "complete" {
@@ -238,19 +244,16 @@ func authenticationFailure(err error) bool {
 	return false
 }
 
-func classifyPlanFailure(err error) int {
-	apiErrs := collectAPIErrors(err)
-	for _, apiErr := range apiErrs {
-		if apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden {
-			return exitAuth
+func isRuntimePlanFailure(err error) bool {
+	for _, apiErr := range collectAPIErrors(err) {
+		switch apiErr.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity:
+			continue
+		default:
+			return true
 		}
 	}
-	for _, apiErr := range apiErrs {
-		if apiErr.StatusCode != http.StatusNotFound && apiErr.StatusCode != http.StatusUnprocessableEntity {
-			return exitRuntime
-		}
-	}
-	return exitIncomplete
+	return false
 }
 
 func collectAPIErrors(err error) []*gh.APIError {
@@ -304,14 +307,6 @@ Exit codes:
 
 "segh version" prints the build version.
 `, version)
-}
-
-func slicesHelp(value string) bool {
-	return value == "--help" || value == "-h" || value == "help"
-}
-
-func slicesVersion(value string) bool {
-	return value == "--version" || value == "version"
 }
 
 func writef(out io.Writer, format string, args ...any) {

@@ -56,8 +56,7 @@ to match the manifest exactly. It then writes deterministic aggregate counts to
 Governance artifacts remain `inventory.json`, `audit.json`, and `report.md`.
 Source scan planning, repository reports, `scan-summary.json`, and the bounded
 `scan-report.md` remain separate private artifacts retained for 14 days on
-success and failure. The hidden `scan-plan` and `scan-summary` commands were
-removed without aliases.
+success and failure.
 
 The upstream policy rejects target-owned Zizmor ignores, unapproved ShellCheck
 directives, expression-valued shell selection, and Checkov inline suppressions.
