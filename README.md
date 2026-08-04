@@ -57,8 +57,7 @@ configuration, and the embedded JSON Schema
 (`schema/segh-config-v5.schema.json`) for the complete reference.
 
 The organization workflow uses the same `audit` executable route to reconcile
-repository artifacts after the matrix completes. The removed `scan-plan` and
-`scan-summary` commands have no compatibility aliases; see
+repository artifacts after the matrix completes; see
 [Workflows](docs/workflows.md).
 
 ## Scope boundary
