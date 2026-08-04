@@ -123,6 +123,21 @@ func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsLockFilesDependencyPolicy(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "segh.yaml")
+	data := "version: 5\norganization: test\npolicies:\n  dependencies:\n    lock_files: true\n"
+	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Policies.Dependencies.LockFiles == nil || !*cfg.Policies.Dependencies.LockFiles {
+		t.Fatalf("lock_files was not decoded: %#v", cfg.Policies.Dependencies)
+	}
+}
+
 func TestSchemaRejectsInvalidStructuralValuesAtRuntime(t *testing.T) {
 	tests := []struct {
 		name string

@@ -73,6 +73,12 @@ const (
 	PolicyUnknown     PolicyStatus = "unknown"
 	PolicyUnsupported PolicyStatus = "unsupported"
 	PolicyExempt      PolicyStatus = "exempt"
+	// PolicyWarning and PolicyNotice report an actionable observation that
+	// never counts toward Violations or Partial coverage: unlike a fail,
+	// unknown, or unsupported result, a check that only ever produces these
+	// two statuses cannot change an audit's exit code or coverage.
+	PolicyWarning PolicyStatus = "warning"
+	PolicyNotice  PolicyStatus = "notice"
 )
 
 type PolicyResult struct {

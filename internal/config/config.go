@@ -62,6 +62,7 @@ type DependenciesPolicy struct {
 	DependencyGraph           *bool `yaml:"dependency_graph"`
 	DependabotAlerts          *bool `yaml:"dependabot_alerts"`
 	DependabotSecurityUpdates *bool `yaml:"dependabot_security_updates"`
+	LockFiles                 *bool `yaml:"lock_files"`
 }
 
 type RepositoryPolicy struct {

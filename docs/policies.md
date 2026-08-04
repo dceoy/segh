@@ -21,6 +21,7 @@ exclusions.
 | `dependencies.dependency_graph`            | Dependency graph availability                  |
 | `dependencies.dependabot_alerts`           | Dependabot alerts enablement                   |
 | `dependencies.dependabot_security_updates` | Dependabot security updates enablement         |
+| `dependencies.lock_file`                   | Dependency manifest missing its lock/checksum file |
 | `repository.ruleset`                       | Effective default-branch ruleset               |
 | `repository.branch_protection`             | Ruleset or classic protection                  |
 | `repository.required_pull_request`         | Pull request requirement                       |
@@ -47,10 +48,59 @@ policies:
 The model has no policy IDs for CodeQL, code scanning, secret scanning, push
 protection, or Security Configurations.
 
+### Dependency lock files
+
+`policies.dependencies.lock_files` is opt-in and off by default:
+
+```yaml
+policies:
+  dependencies:
+    lock_files: true
+```
+
+When enabled, `segh audit` fetches each selected repository's default-branch
+file tree and, for the manifest kinds in the table below, reports a manifest
+that declares dependencies but has no lock/checksum file beside it or at its
+workspace/monorepo root. A manifest with no declared dependencies, or beside
+an existing lock file, produces no result at all.
+
+| Manifest         | Accepted lock/checksum files                                                   |
+| ---------------- | -------------------------------------------------------------------------------- |
+| `package.json`    | `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `bun.lockb` |
+| `pyproject.toml`  | `uv.lock`, `poetry.lock`, `pdm.lock`                                              |
+| `Pipfile`         | `Pipfile.lock`                                                                    |
+| `Cargo.toml`      | `Cargo.lock`                                                                      |
+| `go.mod`          | `go.sum`                                                                          |
+| `Gemfile`         | `Gemfile.lock`                                                                    |
+| `composer.json`   | `composer.lock`                                                                   |
+| `mix.exs`         | `mix.lock`                                                                        |
+| `pubspec.yaml`    | `pubspec.lock`                                                                    |
+| `*.tf` (per directory) | `.terraform.lock.hcl`                                                       |
+| `flake.nix`       | `flake.lock`                                                                      |
+
+Each result carries `warning` or `notice` status instead of `pass`/`fail`, so
+this check never fails the audit by itself: `notice` is used where the
+ecosystem's own convention makes omitting the lock file a normal choice for a
+published library (a Python or Rust package, for example), refined using a
+signal the manifest itself provides where one exists (`composer.json`'s
+`"type": "library"`, or whether a Go module has a `main.go`). `notice` is also
+used when a repository's tree could not be evaluated (fetch failure or a
+truncated tree response), so a lock-file evaluation gap is visible without
+being treated as a policy violation. The remediation text names the expected
+lock file and, where it can be inferred safely (the Node.js package manager
+from a `packageManager` field or workspace config file; the Python tool from
+`pyproject.toml`'s own `[tool.poetry]`/`[tool.pdm]` tables), a generation
+command; segh never runs that command or generates a lock file itself.
+`dependencies.lock_file` accepts the same repository-scoped suppressions as
+any other policy.
+
 ## Status and suppressions
 
-Policy status is `pass`, `fail`, `unknown`, `unsupported`, or `exempt`.
-Unavailable or forbidden evidence never becomes a pass.
+Policy status is `pass`, `fail`, `unknown`, `unsupported`, `exempt`, `warning`,
+or `notice`. Unavailable or forbidden evidence never becomes a pass. Only
+`fail` counts toward exit-code violations, and only `unknown`/`unsupported`
+count toward partial coverage; `warning` and `notice` are informational and
+change neither.
 
 Suppressions require a policy ID, owner, rationale, and optional repository glob
 and expiry. A matching unexpired suppression changes only a failure to

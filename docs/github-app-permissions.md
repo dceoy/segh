@@ -7,7 +7,7 @@ installed on every repository in the organization.
 | ----------------------------- | ------ | ----------------------------------------------------------- |
 | Actions                       | Read   | Actions enablement and policy                               |
 | Administration                | Read   | Rulesets, branch protection, Dependabot enablement          |
-| Contents                      | Read   | Repository metadata, dependency graph export, `SECURITY.md` |
+| Contents                      | Read   | Repository metadata, dependency graph export, `SECURITY.md`, dependency lock-file detection |
 | Metadata                      | Read   | Repository enumeration and classification                   |
 | Organization administration   | Read   | Authoritative App installation scope                        |
 
@@ -20,7 +20,10 @@ The dependency graph observation uses the repository SBOM export endpoint,
 which requires Contents read. Dependabot alert and security-update enablement
 use repository settings endpoints, which require Administration read. The audit
 does not enumerate Dependabot alert findings, so a Vulnerability alerts
-permission is not required by this implementation.
+permission is not required by this implementation. When
+`policies.dependencies.lock_files` is enabled, lock-file detection uses the
+same Contents read permission to fetch a repository's default-branch tree and
+matched manifest content; it makes no additional permission request.
 
 The inventory and commit-resolution job receives the organization-wide token.
 Each repository scan job separately mints a short-lived token restricted to the
