@@ -289,15 +289,9 @@ func printHelp(out io.Writer, version string) {
 	writef(out, `segh %s - GitHub security governance audit
 
 Usage:
-  segh audit [options]
+  segh audit --config segh.yaml [options]
 
-Commands:
-  audit        Validate configuration, inventory controls, evaluate policy, and write evidence
-  scan-plan    Resolve selected default branches to immutable commit SHAs
-  scan-summary Validate and aggregate separate repository scan evidence
-  version      Print the build version
-
-Audit options:
+Options:
   --config PATH             Configuration file (default segh.yaml)
   --validate-only           Validate configuration without GitHub credentials
   --inventory-output PATH   Inventory JSON (default segh-results/inventory.json)
@@ -317,6 +311,8 @@ Exit codes:
   3 authentication or permission failure
   4 partial or unsupported coverage
   5 runtime failure
+
+"segh version" prints the build version.
 `, version)
 }
 

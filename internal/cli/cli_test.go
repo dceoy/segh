@@ -31,6 +31,22 @@ func TestHelpAndVersionDoNotRequireConfiguration(t *testing.T) {
 	}
 }
 
+func TestHelpPresentsOnlyAuditAsTheOperatorCommand(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"--help"}, "test-version", &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "segh audit --config segh.yaml") {
+		t.Fatalf("help output does not present audit as the operator workflow: %q", output)
+	}
+	for _, internal := range []string{"scan-plan", "scan-summary"} {
+		if strings.Contains(output, internal) {
+			t.Fatalf("help output = %q, must not advertise internal command %q", output, internal)
+		}
+	}
+}
+
 func TestRemovedCommandsAndFlagsAreRejected(t *testing.T) {
 	for _, args := range [][]string{
 		{"validate"},

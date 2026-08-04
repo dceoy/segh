@@ -21,38 +21,45 @@ The supported baseline is:
 
 ## Quick start
 
-Copy the example and edit the organization and policies:
+`segh audit --config segh.yaml` is the one operator workflow: configure,
+validate, audit, read the evidence.
 
 ```bash
+# 1. Configure
 cp segh.example.yaml segh.yaml
+# edit organization and policies
+
+# 2. Validate offline, no GitHub credentials required
+go build -o bin/segh ./cmd/segh
+bin/segh audit --config segh.yaml --validate-only
+
+# 3. Audit
 export GH_TOKEN=...
 export SEGH_GITHUB_INSTALLATION_ID=...
-go build -o bin/segh ./cmd/segh
 bin/segh audit --config segh.yaml
+
+# 4. Read the evidence
+cat segh-results/report.md
 ```
 
 `audit` strictly validates the version 5 configuration before making API
-requests, collects inventory, evaluates policy, and writes:
-
-- `segh-results/inventory.json`
-- `segh-results/audit.json`
-- `segh-results/report.md`
-
-Use `bin/segh audit --config segh.yaml --validate-only` for offline validation.
-Only schema version 5 is accepted. Older versions and removed fields are
-rejected without aliases or migration logic.
-
-## Commands and exit codes
-
-| Command        | Purpose                                                  |
-| -------------- | -------------------------------------------------------- |
-| `audit`        | Validate, inventory, evaluate policy, and write evidence |
-| `scan-plan`    | Resolve selected repositories to immutable commits       |
-| `scan-summary` | Validate and aggregate repository scan evidence          |
+requests, collects inventory, evaluates policy, and writes
+`segh-results/inventory.json`, `segh-results/audit.json`, and
+`segh-results/report.md`. Only schema version 5 is accepted; older versions
+and removed fields are rejected without aliases or migration logic.
 
 Exit codes are `0` success, `1` policy violations, `2` invalid configuration or
 arguments, `3` authentication or permission failure, `4` incomplete coverage,
 and `5` runtime failure.
+
+`segh.example.yaml` shows the recommended starter fields only; see
+[Policies](docs/policies.md) for suppressions and advanced, commonly-defaulted
+configuration, and the embedded JSON Schema
+(`schema/segh-config-v5.schema.json`) for the complete reference.
+
+The organization audit workflow also invokes two internal pipeline stages
+(`scan-plan`, `scan-summary`) not part of the normal operator interface; see
+[Workflows and rollout](docs/workflows.md).
 
 ## Pull-request gate
 
