@@ -31,7 +31,7 @@ go build -o bin/segh ./cmd/segh
 bin/segh audit --config segh.yaml
 ```
 
-`audit` strictly validates the version 4 configuration before making API
+`audit` strictly validates the version 5 configuration before making API
 requests, collects inventory, evaluates policy, and writes:
 
 - `segh-results/inventory.json`
@@ -39,7 +39,7 @@ requests, collects inventory, evaluates policy, and writes:
 - `segh-results/report.md`
 
 Use `bin/segh audit --config segh.yaml --validate-only` for offline validation.
-Only schema version 4 is accepted. Older versions and removed fields are
+Only schema version 5 is accepted. Older versions and removed fields are
 rejected without aliases or migration logic.
 
 ## Commands and exit codes
@@ -67,8 +67,8 @@ migration.
 ## Organization audit and periodic source scan
 
 The organization audit is read-only. Its GitHub App inventories Actions policy,
-rulesets, branch protection, custom properties, dependency graph, Dependabot
-coverage, and repository metadata. It does not clone repositories or run
+rulesets, branch protection, dependency graph, Dependabot coverage, and
+repository metadata. It does not clone repositories or run
 scanners during governance collection. When `source_scan.enabled` is true, the
 scheduled control workflow reuses that selected inventory, records every
 default branch's exact commit SHA, and scans each checkout with the pinned

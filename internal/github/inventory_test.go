@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -90,179 +89,6 @@ func TestProbeEndpoint(t *testing.T) {
 			observed := service.probeEndpoint(context.Background(), "/feature", "feature", &jsonObject{})
 			if observed.State != test.wantState || observed.Value != test.wantValue {
 				t.Fatalf("observed = %#v", observed)
-			}
-		})
-	}
-}
-
-func TestCustomPropertiesJoinOrganizationResponseByRepositoryID(t *testing.T) {
-	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/orgs/org/properties/values" {
-			_, _ = io.WriteString(writer, `[
-				{"repository_id":2,"repository_full_name":"org/two","properties":[]},
-				{"repository_id":1,"repository_full_name":"org/one","properties":[
-					{"property_name":"teams","value":["security","platform"]},
-					{"property_name":"tier","value":"critical"},
-					{"property_name":"unset","value":null}
-				]}
-			]`)
-			return
-		}
-		t.Errorf("unexpected path = %s", request.URL.Path)
-	})
-	service.cfg.Selectors.CustomProperties = map[string]string{
-		"teams": "security",
-		"tier":  "critical",
-	}
-	observations, err := service.customProperties(context.Background(), []apiRepository{
-		{ID: 1, FullName: "org/one"}, {ID: 2, FullName: "org/two"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := model.Repository{FullName: "org/one", CustomProperties: observations[1]}
-	if !reflect.DeepEqual(repo.CustomProperties.Value["teams"], []string{"platform", "security"}) {
-		t.Fatalf("teams custom property = %#v, want a preserved, sorted string slice", repo.CustomProperties.Value["teams"])
-	}
-	if value, present := repo.CustomProperties.Value["unset"]; !present || value != nil {
-		t.Fatalf("unset custom property = %#v, present = %v; want a preserved null", value, present)
-	}
-	if reason, unknown := service.exclusionReason(repo); reason != "" || unknown {
-		t.Fatalf("exclusionReason() = %q, %v; want multi-select membership to match", reason, unknown)
-	}
-
-	service.cfg.Selectors.CustomProperties["teams"] = "application"
-	if reason, unknown := service.exclusionReason(repo); reason != "custom property teams" || unknown {
-		t.Fatalf("exclusionReason() = %q, %v; want a verified multi-select mismatch", reason, unknown)
-	}
-}
-
-func TestCustomPropertiesFetchesEveryPage(t *testing.T) {
-	var pages []string
-	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		page := request.URL.Query().Get("page")
-		pages = append(pages, page)
-		switch page {
-		case "1":
-			items := make([]string, 100)
-			for i := range items {
-				items[i] = fmt.Sprintf(
-					`{"repository_id":%d,"repository_full_name":"org/repo-%d","properties":[]}`,
-					i+1, i+1,
-				)
-			}
-			_, _ = io.WriteString(writer, "["+strings.Join(items, ",")+"]")
-		case "2":
-			_, _ = io.WriteString(
-				writer,
-				`[{"repository_id":101,"repository_full_name":"org/repo-101","properties":[]}]`,
-			)
-		default:
-			t.Errorf("unexpected page %q", page)
-		}
-	})
-	repositories := make([]apiRepository, 101)
-	for i := range repositories {
-		repositories[i] = apiRepository{ID: int64(i + 1), FullName: fmt.Sprintf("org/repo-%d", i+1)}
-	}
-	observations, err := service.customProperties(context.Background(), repositories)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(observations) != 101 || !reflect.DeepEqual(pages, []string{"1", "2"}) {
-		t.Fatalf("observations = %d, pages = %#v", len(observations), pages)
-	}
-}
-
-func TestCustomPropertiesFailsClosedWhenAggregatePaginatedResponseExceedsByteBudget(t *testing.T) {
-	repositories := make([]apiRepository, 150)
-	page1 := make([]customPropertyRepository, 100)
-	for i := range repositories {
-		repositories[i] = apiRepository{ID: int64(i + 1), FullName: fmt.Sprintf("org/repo-%d", i+1)}
-	}
-	for i := range page1 {
-		page1[i] = customPropertyRepository{RepositoryID: int64(i + 1), RepositoryFullName: fmt.Sprintf("org/repo-%d", i+1)}
-	}
-	page2 := make([]customPropertyRepository, 50)
-	for i := range page2 {
-		page2[i] = customPropertyRepository{
-			RepositoryID: int64(i + 101), RepositoryFullName: fmt.Sprintf("org/repo-%d", i+101),
-		}
-	}
-	page1Body, err := json.Marshal(page1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	page2Body, err := json.Marshal(page2)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var pages []string
-	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		page := request.URL.Query().Get("page")
-		pages = append(pages, page)
-		switch page {
-		case "1":
-			_, _ = writer.Write(page1Body)
-		case "2":
-			_, _ = writer.Write(page2Body)
-		default:
-			t.Errorf("unexpected page %q", page)
-		}
-	})
-	// The budget covers the first page alone but not both pages combined,
-	// proving the bound is carried across the pagination loop rather than
-	// reset for each page independently.
-	service.customPropertiesByteBudget = int64(len(page1Body)) + int64(len(page2Body)) - 1
-
-	observations, err := service.customProperties(context.Background(), repositories)
-	if err == nil || !strings.Contains(err.Error(), "exceeds") || !strings.Contains(err.Error(), "aggregate") {
-		t.Fatalf("err = %v, want an aggregate byte-budget error", err)
-	}
-	if !reflect.DeepEqual(pages, []string{"1", "2"}) {
-		t.Fatalf("pages fetched = %#v, want both pages requested before failing", pages)
-	}
-	for _, observation := range observations {
-		if observation.State == model.Available {
-			t.Fatalf("observations = %#v, want unavailable state after aggregate overflow", observations)
-		}
-	}
-}
-
-func TestCustomPropertiesFailClosedOnIncompleteOrInconsistentOrganizationResponse(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		response string
-	}{
-		{"missing repository", `[]`},
-		{"unknown repository", `[{"repository_id":2,"repository_full_name":"org/two","properties":[]}]`},
-		{"mismatched full name", `[{"repository_id":1,"repository_full_name":"org/two","properties":[]}]`},
-		{"duplicate repository", `[
-			{"repository_id":1,"repository_full_name":"org/one","properties":[]},
-			{"repository_id":1,"repository_full_name":"org/one","properties":[]}
-		]`},
-		{"duplicate property", `[{"repository_id":1,"repository_full_name":"org/one","properties":[
-			{"property_name":"tier","value":"critical"},{"property_name":"tier","value":"other"}
-		]}]`},
-		{"unsupported value", `[{"repository_id":1,"repository_full_name":"org/one","properties":[
-			{"property_name":"tier","value":true}
-		]}]`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			service := newInventoryTestService(t, func(writer http.ResponseWriter, _ *http.Request) {
-				_, _ = io.WriteString(writer, test.response)
-			})
-			observations, err := service.customProperties(
-				context.Background(), []apiRepository{{ID: 1, FullName: "org/one"}},
-			)
-			if err == nil || observations[1].State != model.Unknown {
-				t.Fatalf("err = %v, observations = %#v", err, observations)
-			}
-			service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
-			repo := model.Repository{FullName: "org/one", CustomProperties: observations[1]}
-			if reason, unknown := service.exclusionReason(repo); reason != "" || !unknown {
-				t.Fatalf("exclusionReason() = %q, %v; want fail-closed selection", reason, unknown)
 			}
 		})
 	}
@@ -482,8 +308,6 @@ func TestRunFailsClosedWhenInstallationIsScopedToSelectedRepositories(t *testing
 			t.Error("accessible repositories must not be queried after selected installation metadata")
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
-		case "/orgs/org/properties/values":
-			_, _ = io.WriteString(writer, `[]`)
 		default:
 			t.Errorf("unexpected path = %s", request.URL.Path)
 		}
@@ -577,8 +401,6 @@ func TestRunFailsClosedWhenInstallationAccountDoesNotMatchConfiguredOrganization
 			t.Error("accessible repositories must not be queried after account mismatch")
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
-		case "/orgs/org/properties/values":
-			_, _ = io.WriteString(writer, `[]`)
 		default:
 			t.Errorf("unexpected path = %s", request.URL.Path)
 		}
@@ -610,8 +432,6 @@ func TestRunSucceedsForAllRepositoriesInstallationOnEmptyOrganization(t *testing
 			_, _ = io.WriteString(writer, `{"total_count":0,"repositories":[]}`)
 		case "/orgs/org/repos":
 			_, _ = io.WriteString(writer, `[]`)
-		case "/orgs/org/properties/values":
-			_, _ = io.WriteString(writer, `[]`)
 		default:
 			t.Errorf("unexpected path = %s", request.URL.Path)
 		}
@@ -636,8 +456,6 @@ func TestRunFailsClosedWhenInstallationCountIsPositiveButReturnsNoRepositories(t
 		case "/installation/repositories":
 			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[]}`)
 		case "/orgs/org/repos":
-			_, _ = io.WriteString(writer, `[]`)
-		case "/orgs/org/properties/values":
 			_, _ = io.WriteString(writer, `[]`)
 		default:
 			t.Errorf("unexpected path = %s", request.URL.Path)
@@ -734,34 +552,5 @@ func TestRunFailsClosedWhenExplicitlyIncludedRepositoryIsNotEnumerated(t *testin
 	}
 	if !found {
 		t.Fatalf("errors = %#v, want a repository_not_found error for org/does-not-exist", inventory.Errors)
-	}
-}
-
-func TestRunFailsClosedWhenOrganizationCustomPropertiesAreUnavailableForSelection(t *testing.T) {
-	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/orgs/org/installations":
-			_, _ = io.WriteString(writer, `{"installations":[{"id":1,"account":{"login":"org"},"repository_selection":"all"}]}`)
-		case "/installation/repositories":
-			_, _ = io.WriteString(writer, `{"total_count":1,"repositories":[{"full_name":"org/repo"}]}`)
-		case "/orgs/org/repos":
-			_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo","default_branch":"main"}]`)
-		case "/orgs/org/properties/values":
-			writer.WriteHeader(http.StatusForbidden)
-			_, _ = io.WriteString(writer, `{"message":"forbidden"}`)
-		default:
-			writer.WriteHeader(http.StatusNotFound)
-		}
-	})
-	service.cfg.Selectors.CustomProperties = map[string]string{"tier": "critical"}
-	inventory, err := service.Run(context.Background())
-	if err == nil || inventory.Complete || inventory.Selected != 1 {
-		t.Fatalf("err = %v, inventory = %#v", err, inventory)
-	}
-	if len(inventory.Errors) != 1 || inventory.Errors[0].Kind != "custom_properties" {
-		t.Fatalf("errors = %#v", inventory.Errors)
-	}
-	if observation := inventory.Repositories[0].CustomProperties; observation.State != model.Unknown {
-		t.Fatalf("custom properties = %#v", observation)
 	}
 }

@@ -6,15 +6,10 @@ import (
 	"testing"
 )
 
-func TestRepositoryUsesVersionFourTypedObservations(t *testing.T) {
+func TestRepositoryUsesTypedObservations(t *testing.T) {
 	repository := Repository{
-		FullName: "example/repository",
-		CustomProperties: Observed[map[string]any]{
-			State:  Available,
-			Value:  map[string]any{"tier": "critical", "teams": []string{"platform", "security"}},
-			Source: "organization_properties/values",
-		},
-		DependencyGraph:           Observed[bool]{State: Available, Value: true},
+		FullName:                  "example/repository",
+		DependencyGraph:           Observed[bool]{State: Available, Value: true, Source: "dependency_graph/sbom"},
 		DependabotAlerts:          Observed[bool]{State: Available, Value: true},
 		DependabotSecurityUpdates: Observed[bool]{State: Available, Value: true},
 	}
@@ -23,12 +18,12 @@ func TestRepositoryUsesVersionFourTypedObservations(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, `"custom_properties":{"state":"available","value":{"teams":["platform","security"],"tier":"critical"},"source":"organization_properties/values"}`) {
+	if !strings.Contains(text, `"dependency_graph":{"state":"available","value":true,"source":"dependency_graph/sbom"}`) {
 		t.Fatalf("repository JSON = %s", text)
 	}
 	for _, removed := range []string{
-		`"capabilities"`, `"codeql"`, `"code_scanning"`, `"secret_scanning"`,
-		`"push_protection"`, `"code_security_configuration"`,
+		`"topics"`, `"custom_properties"`, `"capabilities"`, `"codeql"`, `"code_scanning"`,
+		`"secret_scanning"`, `"push_protection"`, `"code_security_configuration"`,
 	} {
 		if strings.Contains(text, removed) {
 			t.Fatalf("repository JSON retains removed field %s: %s", removed, text)
@@ -39,7 +34,7 @@ func TestRepositoryUsesVersionFourTypedObservations(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.CustomProperties.State != Available || decoded.CustomProperties.Value["tier"] != "critical" {
-		t.Fatalf("decoded custom properties = %#v", decoded.CustomProperties)
+	if decoded.DependencyGraph.State != Available || !decoded.DependencyGraph.Value {
+		t.Fatalf("decoded dependency graph observation = %#v", decoded.DependencyGraph)
 	}
 }

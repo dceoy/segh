@@ -37,15 +37,11 @@ type SourceScan struct {
 }
 
 type Selectors struct {
-	ExcludeArchived  bool              `yaml:"exclude_archived"`
-	ExcludeDisabled  bool              `yaml:"exclude_disabled"`
-	ExcludeForks     bool              `yaml:"exclude_forks"`
-	Visibilities     []string          `yaml:"visibilities"`
-	IncludeTopics    []string          `yaml:"include_topics"`
-	ExcludeTopics    []string          `yaml:"exclude_topics"`
-	CustomProperties map[string]string `yaml:"custom_properties"`
-	Repositories     []string          `yaml:"repositories"`
-	Exclude          []string          `yaml:"exclude"`
+	ExcludeArchived bool     `yaml:"exclude_archived"`
+	ExcludeDisabled bool     `yaml:"exclude_disabled"`
+	ExcludeForks    bool     `yaml:"exclude_forks"`
+	Repositories    []string `yaml:"repositories"`
+	Exclude         []string `yaml:"exclude"`
 }
 
 type Policies struct {
@@ -84,7 +80,7 @@ type RepositoryPolicy struct {
 
 func Default() Config {
 	return Config{
-		Version: 4,
+		Version: 5,
 		Inventory: Inventory{
 			Concurrency: 4,
 			Timeout:     Duration(30 * time.Minute),

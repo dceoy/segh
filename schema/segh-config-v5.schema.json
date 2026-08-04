@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/dceoy/segh/schema/segh-config-v4.schema.json",
-  "title": "segh governance configuration v4",
+  "$id": "https://github.com/dceoy/segh/schema/segh-config-v5.schema.json",
+  "title": "segh governance configuration v5",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "organization", "policies"],
   "properties": {
-    "version": { "const": 4 },
+    "version": { "const": 5 },
     "organization": { "type": "string", "minLength": 1 },
     "inventory": {
       "type": "object",
@@ -32,17 +32,6 @@
         "exclude_archived": { "type": "boolean" },
         "exclude_disabled": { "type": "boolean" },
         "exclude_forks": { "type": "boolean" },
-        "visibilities": {
-          "type": "array",
-          "items": { "enum": ["public", "private", "internal"] },
-          "uniqueItems": true
-        },
-        "include_topics": { "$ref": "#/$defs/stringArray" },
-        "exclude_topics": { "$ref": "#/$defs/stringArray" },
-        "custom_properties": {
-          "type": "object",
-          "additionalProperties": { "type": "string" }
-        },
         "repositories": { "$ref": "#/$defs/stringArray" },
         "exclude": { "$ref": "#/$defs/stringArray" }
       }

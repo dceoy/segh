@@ -36,7 +36,7 @@ configuration and binaries come only from a full, reviewed
 
 Configuration is decoded first into a generic YAML representation and validated
 against the embedded, published
-`schema/segh-config-v4.schema.json`. Typed decoding and duration conversion run
+`schema/segh-config-v5.schema.json`. Typed decoding and duration conversion run
 only after structural validation. The Go layer retains only repository-glob
 validation because it must use the same `path.Match` semantics as policy
 evaluation.
@@ -63,9 +63,10 @@ context cancellation, and the narrow `API` inventory seam.
 ## Inventory model
 
 Repository enumeration is checked against the App installation's authoritative
-`repository_selection` and accessible repository count. Organization custom
-properties are collected once and joined by repository ID with the full name
-validated independently.
+`repository_selection` and accessible repository count. Selection is limited to
+class exclusions (archived, disabled, forks) and explicit repository
+include/exclude lists; there is no visibility, topic, or organization
+custom-property selector.
 
 Per-repository inventory covers:
 
@@ -82,7 +83,7 @@ secret scanning, push protection, or GitHub Security Configurations.
 
 ## Determinism and failure behavior
 
-Configuration version 4 is the only accepted governance contract. Repository,
+Configuration version 5 is the only accepted governance contract. Repository,
 error, policy, source-scan manifest, and source-scan summary arrays are sorted
 by stable identifiers. `audit.json` is the canonical compliance result;
 `inventory.json` is observation evidence; and `report.md` is the operator

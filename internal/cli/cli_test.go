@@ -50,7 +50,7 @@ func TestRemovedCommandsAndFlagsAreRejected(t *testing.T) {
 func TestAuditValidateOnlyDoesNotRequireCredentials(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "")
-	configPath := writeConfig(t, false, false)
+	configPath := writeConfig(t, false)
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
 		"audit", "--config", configPath, "--validate-only",
@@ -67,7 +67,7 @@ func TestAuditRequiresInstallationIDAfterConfigurationValidation(t *testing.T) {
 	t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "")
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
-		"audit", "--config", writeConfig(t, false, false),
+		"audit", "--config", writeConfig(t, false),
 	}, "test", &stdout, &stderr)
 	if err == nil || ExitCode(err) != exitAuth ||
 		!strings.Contains(err.Error(), "SEGH_GITHUB_INSTALLATION_ID must be a positive integer") {
@@ -75,7 +75,7 @@ func TestAuditRequiresInstallationIDAfterConfigurationValidation(t *testing.T) {
 	}
 }
 
-func TestAuditWritesOnlyThreeVersionFourArtifacts(t *testing.T) {
+func TestAuditWritesOnlyThreeArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	workingDirectory, err := os.Getwd()
 	if err != nil {
@@ -96,7 +96,7 @@ func TestAuditWritesOnlyThreeVersionFourArtifacts(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err = Run(context.Background(), []string{
 		"audit",
-		"--config", writeConfig(t, false, false),
+		"--config", writeConfig(t, false),
 	}, "test", &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
@@ -112,13 +112,13 @@ func TestAuditWritesOnlyThreeVersionFourArtifacts(t *testing.T) {
 	}
 	var inventory model.Inventory
 	readJSON(t, filepath.Join(resultsDir, "inventory.json"), &inventory)
-	if inventory.SchemaVersion != 4 || inventory.GitHubHost != "ghes.example" ||
-		inventory.Repositories[0].CustomProperties.State != model.Available {
+	if inventory.SchemaVersion != model.SchemaVersion || inventory.GitHubHost != "ghes.example" ||
+		len(inventory.Repositories) != 1 {
 		t.Fatalf("inventory = %#v", inventory)
 	}
 	var audit model.Audit
 	readJSON(t, filepath.Join(resultsDir, "audit.json"), &audit)
-	if audit.SchemaVersion != 4 || audit.Coverage != "complete" ||
+	if audit.SchemaVersion != model.SchemaVersion || audit.Coverage != "complete" ||
 		audit.RepositoryCounts != (model.RepositoryCounts{Total: 1, Selected: 1}) ||
 		audit.PolicyCounts[string(model.PolicyPass)] != 1 {
 		t.Fatalf("audit = %#v", audit)
@@ -133,7 +133,7 @@ func TestIncompleteCoveragePrecedesPolicyViolations(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
 		"audit",
-		"--config", writeConfig(t, true, false),
+		"--config", writeConfig(t, true),
 		"--inventory-output", filepath.Join(dir, "inventory.json"),
 		"--audit-output", filepath.Join(dir, "audit.json"),
 		"--markdown-output", filepath.Join(dir, "report.md"),
@@ -147,34 +147,6 @@ func TestIncompleteCoveragePrecedesPolicyViolations(t *testing.T) {
 		audit.PolicyCounts[string(model.PolicyFail)] != 1 ||
 		audit.Coverage != "partial" {
 		t.Fatalf("audit = %#v", audit)
-	}
-}
-
-func TestOrganizationCollectionPermissionFailuresUseAuthenticationExitCode(t *testing.T) {
-	for _, test := range []struct {
-		name                 string
-		forbiddenEndpoint    string
-		customPropertyFilter bool
-	}{
-		{"custom properties", "custom_properties", true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			installFixtureAPI(t, test.forbiddenEndpoint)
-			t.Setenv("GH_TOKEN", "test-token")
-			t.Setenv("SEGH_GITHUB_INSTALLATION_ID", "7")
-			var stdout, stderr bytes.Buffer
-			err := Run(context.Background(), []string{
-				"audit",
-				"--config", writeConfig(t, false, test.customPropertyFilter),
-				"--inventory-output", filepath.Join(dir, "inventory.json"),
-				"--audit-output", filepath.Join(dir, "audit.json"),
-				"--markdown-output", filepath.Join(dir, "report.md"),
-			}, "test", &stdout, &stderr)
-			if err == nil || ExitCode(err) != exitAuth {
-				t.Fatalf("err=%v code=%d", err, ExitCode(err))
-			}
-		})
 	}
 }
 
@@ -195,7 +167,7 @@ func TestRepositoryPermissionFailuresUseAuthenticationExitCode(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			err := Run(context.Background(), []string{
 				"audit",
-				"--config", writeConfig(t, false, false),
+				"--config", writeConfig(t, false),
 				"--inventory-output", filepath.Join(dir, "inventory.json"),
 				"--audit-output", filepath.Join(dir, "audit.json"),
 				"--markdown-output", filepath.Join(dir, "report.md"),
@@ -218,7 +190,7 @@ func TestAuditOutputFailureUsesRuntimeExitCode(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
 		"audit",
-		"--config", writeConfig(t, false, false),
+		"--config", writeConfig(t, false),
 		"--inventory-output", inventoryPath,
 		"--audit-output", filepath.Join(dir, "audit.json"),
 		"--markdown-output", filepath.Join(dir, "report.md"),
@@ -263,7 +235,7 @@ func TestScanPlanCommitResolutionFailuresClassifyExitCode(t *testing.T) {
 
 func writeScanPlanConfig(t *testing.T) string {
 	t.Helper()
-	data := "version: 4\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
+	data := "version: 5\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
 		"source_scan:\n  enabled: true\n  concurrency: 1\n  timeout: 1m\n" +
 		"policies:\n  dependencies:\n    dependency_graph: true\n"
 	path := filepath.Join(t.TempDir(), "segh.yaml")
@@ -291,18 +263,14 @@ func writeScanPlanInventory(t *testing.T, path string) {
 	}
 }
 
-func writeConfig(t *testing.T, requireRuleset, customPropertyFilter bool) string {
+func writeConfig(t *testing.T, requireRuleset bool) string {
 	t.Helper()
 	repositoryPolicy := ""
 	if requireRuleset {
 		repositoryPolicy = "\n  repository:\n    require_ruleset: true"
 	}
-	selectors := ""
-	if customPropertyFilter {
-		selectors = "selectors:\n  custom_properties:\n    tier: critical\n"
-	}
-	data := "version: 4\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
-		selectors + "policies:\n  dependencies:\n    dependency_graph: true" + repositoryPolicy + "\n"
+	data := "version: 5\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
+		"policies:\n  dependencies:\n    dependency_graph: true" + repositoryPolicy + "\n"
 	path := filepath.Join(t.TempDir(), "segh.yaml")
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
@@ -336,11 +304,6 @@ func (f fixtureAPI) Get(_ context.Context, apiPath string, out any) error {
 		data = `{"total_count":1,"repositories":[{"full_name":"example/repo"}]}`
 	case strings.Contains(apiPath, "/orgs/example/repos?"):
 		data = `[{"id":1,"full_name":"example/repo","default_branch":"main"}]`
-	case strings.Contains(apiPath, "/orgs/example/properties/values?"):
-		if f.forbiddenEndpoint == "custom_properties" {
-			return &gh.APIError{StatusCode: 403, Message: "forbidden"}
-		}
-		data = `[{"repository_id":1,"repository_full_name":"example/repo","properties":[]}]`
 	case strings.HasSuffix(apiPath, "/actions/permissions/workflow"):
 		data = `{"default_workflow_permissions":"read"}`
 	case strings.HasSuffix(apiPath, "/actions/permissions/fork-pr-contributor-approval"):

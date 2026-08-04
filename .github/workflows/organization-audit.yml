@@ -81,7 +81,6 @@ jobs:
           permission-contents: read
           permission-metadata: read
           permission-organization-administration: read
-          permission-organization-custom-properties: read
       - name: Require a private control repository
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

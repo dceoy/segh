@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -20,27 +19,21 @@ type InventoryService struct {
 	client         API
 	installationID int64
 
-	// customPropertiesByteBudget bounds the aggregate size of a paginated
-	// custom-properties response, mirroring the per-page Client.Get limit
-	// so that many small pages cannot bypass the response-size ceiling.
-	customPropertiesByteBudget int64
-
 	permissionMu  sync.Mutex
 	permissionErr *APIError
 }
 
 type apiRepository struct {
-	ID            int64    `json:"id"`
-	FullName      string   `json:"full_name"`
-	HTMLURL       string   `json:"html_url"`
-	Visibility    string   `json:"visibility"`
-	Private       bool     `json:"private"`
-	Archived      bool     `json:"archived"`
-	Disabled      bool     `json:"disabled"`
-	Fork          bool     `json:"fork"`
-	IsTemplate    bool     `json:"is_template"`
-	DefaultBranch string   `json:"default_branch"`
-	Topics        []string `json:"topics"`
+	ID            int64  `json:"id"`
+	FullName      string `json:"full_name"`
+	HTMLURL       string `json:"html_url"`
+	Visibility    string `json:"visibility"`
+	Private       bool   `json:"private"`
+	Archived      bool   `json:"archived"`
+	Disabled      bool   `json:"disabled"`
+	Fork          bool   `json:"fork"`
+	IsTemplate    bool   `json:"is_template"`
+	DefaultBranch string `json:"default_branch"`
 }
 
 type apiInstallation struct {
@@ -52,10 +45,7 @@ type apiInstallation struct {
 }
 
 func NewInventoryService(cfg config.Config, client API, installationID int64) *InventoryService {
-	return &InventoryService{
-		cfg: cfg, client: client, installationID: installationID,
-		customPropertiesByteBudget: maxResponseBytes,
-	}
+	return &InventoryService{cfg: cfg, client: client, installationID: installationID}
 }
 
 // notePermissionFailure records the first 401/403 encountered while collecting
@@ -119,14 +109,6 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		})
 	}
 
-	customProperties, customPropertiesErr := s.customProperties(ctx, repos)
-	if customPropertiesErr != nil && len(s.cfg.Selectors.CustomProperties) > 0 {
-		inventory.Complete = false
-		inventory.Errors = append(inventory.Errors, model.RunError{
-			Component: "selectors", Kind: "custom_properties",
-			Message: "organization custom-property coverage is incomplete: " + customPropertiesErr.Error(),
-		})
-	}
 	concurrency := s.cfg.Inventory.Concurrency
 	jobs := make(chan apiRepository)
 	results := make(chan model.Repository, len(repos))
@@ -136,7 +118,7 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 		go func() {
 			defer workers.Done()
 			for repo := range jobs {
-				results <- s.enrich(ctx, repo, customProperties[repo.ID])
+				results <- s.enrich(ctx, repo)
 			}
 		}()
 	}
@@ -156,10 +138,7 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 	}()
 
 	for repo := range results {
-		reason, propertiesUnknown := s.exclusionReason(repo)
-		if propertiesUnknown {
-			inventory.Complete = false
-		}
+		reason := s.exclusionReason(repo)
 		if reason == "" {
 			inventory.Repositories = append(inventory.Repositories, repo)
 		} else {
@@ -204,11 +183,6 @@ func (s *InventoryService) Run(ctx context.Context) (model.Inventory, error) {
 			runErr = fmt.Errorf("verify installation coverage: %w", installationErr)
 		}
 		runErrs := []error{runErr}
-		if customPropertiesErr != nil && len(s.cfg.Selectors.CustomProperties) > 0 {
-			runErrs = append(runErrs, fmt.Errorf(
-				"collect organization custom properties: %w", customPropertiesErr,
-			))
-		}
 		if s.permissionErr != nil {
 			runErrs = append(runErrs, fmt.Errorf("collect repository controls: %w", s.permissionErr))
 		}
@@ -323,125 +297,6 @@ func (s *InventoryService) listRepositories(ctx context.Context) ([]apiRepositor
 	}
 }
 
-type customPropertyRepository struct {
-	RepositoryID       int64  `json:"repository_id"`
-	RepositoryFullName string `json:"repository_full_name"`
-	Properties         []struct {
-		Name  string `json:"property_name"`
-		Value any    `json:"value"`
-	} `json:"properties"`
-}
-
-func (s *InventoryService) customProperties(
-	ctx context.Context, repos []apiRepository,
-) (map[int64]model.Observed[map[string]any], error) {
-	var response []customPropertyRepository
-	remainingBytes := s.customPropertiesByteBudget
-	for page := 1; ; page++ {
-		var batch []customPropertyRepository
-		apiPath := fmt.Sprintf(
-			"/orgs/%s/properties/values?per_page=100&page=%d",
-			pathEscape(s.cfg.Organization), page,
-		)
-		if err := s.client.Get(ctx, apiPath, &batch); err != nil {
-			return unavailableCustomProperties(repos, err), err
-		}
-		encoded, err := json.Marshal(batch)
-		if err != nil {
-			return unavailableCustomProperties(repos, err), err
-		}
-		remainingBytes -= int64(len(encoded))
-		if remainingBytes < 0 {
-			err := fmt.Errorf(
-				"custom-property paginated response exceeds %d bytes in aggregate",
-				s.customPropertiesByteBudget,
-			)
-			return unavailableCustomProperties(repos, err), err
-		}
-		response = append(response, batch...)
-		if len(response) > len(repos) {
-			err := fmt.Errorf("custom-property response contains more repositories than organization enumeration")
-			return unavailableCustomProperties(repos, err), err
-		}
-		if len(batch) < 100 || len(response) == len(repos) {
-			break
-		}
-	}
-	byID, err := repositoryIndex(repos)
-	if err != nil {
-		return unavailableCustomProperties(repos, err), err
-	}
-	observations := make(map[int64]model.Observed[map[string]any], len(repos))
-	for _, item := range response {
-		repo, ok := byID[item.RepositoryID]
-		if !ok || repo.FullName != item.RepositoryFullName {
-			err := fmt.Errorf("custom-property entry does not match an enumerated repository")
-			return unavailableCustomProperties(repos, err), err
-		}
-		if _, duplicate := observations[item.RepositoryID]; duplicate {
-			err := fmt.Errorf("duplicate custom-property repository entry")
-			return unavailableCustomProperties(repos, err), err
-		}
-		values := make(map[string]any, len(item.Properties))
-		for _, property := range item.Properties {
-			if property.Name == "" {
-				err := fmt.Errorf("custom-property entry has an empty property name")
-				return unavailableCustomProperties(repos, err), err
-			}
-			if _, duplicate := values[property.Name]; duplicate {
-				err := fmt.Errorf("duplicate custom property %q", property.Name)
-				return unavailableCustomProperties(repos, err), err
-			}
-			value, valid := normalizeCustomPropertyValue(property.Value)
-			if !valid {
-				err := fmt.Errorf("unsupported value for custom property %q", property.Name)
-				return unavailableCustomProperties(repos, err), err
-			}
-			values[property.Name] = value
-		}
-		observations[item.RepositoryID] = model.Observed[map[string]any]{
-			State: model.Available, Value: values, Source: "organization_properties/values",
-		}
-	}
-	if len(observations) != len(repos) {
-		err := fmt.Errorf("custom-property response omitted an enumerated repository")
-		return unavailableCustomProperties(repos, err), err
-	}
-	return observations, nil
-}
-
-func unavailableCustomProperties(
-	repos []apiRepository, err error,
-) map[int64]model.Observed[map[string]any] {
-	state, reason := ErrorState(err)
-	observations := make(map[int64]model.Observed[map[string]any], len(repos))
-	for _, repo := range repos {
-		observations[repo.ID] = model.Observed[map[string]any]{
-			State: model.Availability(state), Source: "organization_properties/values", Reason: reason,
-		}
-	}
-	return observations
-}
-
-func repositoryIndex(repos []apiRepository) (map[int64]apiRepository, error) {
-	byID := make(map[int64]apiRepository, len(repos))
-	names := make(map[string]bool, len(repos))
-	for _, repo := range repos {
-		if repo.ID <= 0 || repo.FullName == "" {
-			return nil, fmt.Errorf("enumerated repository is missing a stable identifier")
-		}
-		if _, duplicate := byID[repo.ID]; duplicate {
-			return nil, fmt.Errorf("duplicate enumerated repository ID")
-		}
-		if names[repo.FullName] {
-			return nil, fmt.Errorf("duplicate enumerated repository full name")
-		}
-		byID[repo.ID] = repo
-		names[repo.FullName] = true
-	}
-	return byID, nil
-}
-
 // missingExplicitRepositories reports entries of selectors.repositories that were not
 // found among the organization's enumerated repositories. A typo, rename, or a
 // repository the token cannot see would otherwise be silently dropped: exclusionReason
@@ -464,13 +319,8 @@ func missingExplicitRepositories(allowlist []string, repos []apiRepository) []st
 	return missing
 }
 
-func (s *InventoryService) enrich(
-	ctx context.Context,
-	raw apiRepository,
-	customProperties model.Observed[map[string]any],
-) model.Repository {
+func (s *InventoryService) enrich(ctx context.Context, raw apiRepository) model.Repository {
 	repo := repositoryFromAPI(raw)
-	repo.CustomProperties = customProperties
 	base := "/repos/" + escapeFullName(raw.FullName)
 	s.collectActionsControls(ctx, base, &repo)
 	s.collectDependencyControls(ctx, base, &repo)
@@ -503,7 +353,6 @@ func repositoryFromAPI(raw apiRepository) model.Repository {
 		Fork:          raw.Fork,
 		Template:      raw.IsTemplate,
 		DefaultBranch: raw.DefaultBranch,
-		Topics:        sortedStrings(raw.Topics),
 	}
 }
 
@@ -715,50 +564,24 @@ func (s *InventoryService) anyContentExists(ctx context.Context, base, branch st
 	return model.Observed[bool]{State: model.Available, Value: false, Source: source}
 }
 
-func (s *InventoryService) exclusionReason(repo model.Repository) (reason string, propertiesUnknown bool) {
+func (s *InventoryService) exclusionReason(repo model.Repository) string {
 	selectors := s.cfg.Selectors
 	if selectors.ExcludeArchived && repo.Archived {
-		return "archived", false
+		return "archived"
 	}
 	if selectors.ExcludeDisabled && repo.Disabled {
-		return "disabled", false
+		return "disabled"
 	}
 	if selectors.ExcludeForks && repo.Fork {
-		return "fork", false
+		return "fork"
 	}
 	if len(selectors.Repositories) > 0 && !slices.Contains(selectors.Repositories, repo.FullName) {
-		return "not explicitly included", false
+		return "not explicitly included"
 	}
 	if slices.Contains(selectors.Exclude, repo.FullName) {
-		return "explicitly excluded", false
+		return "explicitly excluded"
 	}
-	if len(selectors.Visibilities) > 0 && !slices.Contains(selectors.Visibilities, repo.Visibility) {
-		return "visibility", false
-	}
-	if len(selectors.IncludeTopics) > 0 && !intersects(repo.Topics, selectors.IncludeTopics) {
-		return "required topic missing", false
-	}
-	if intersects(repo.Topics, selectors.ExcludeTopics) {
-		return "excluded topic", false
-	}
-	if len(selectors.CustomProperties) > 0 {
-		if repo.CustomProperties.State != model.Available {
-			// The custom-properties API call failed, so repo.CustomProperties holds no
-			// reliable data. Treating missing keys as mismatches here would silently
-			// exclude the repository from the audit instead of surfacing the gap.
-			return "", true
-		}
-		for key, expected := range selectors.CustomProperties {
-			matches, valid := customPropertyMatches(repo.CustomProperties.Value[key], expected)
-			if !valid {
-				return "", true
-			}
-			if !matches {
-				return "custom property " + key, false
-			}
-		}
-	}
-	return "", false
+	return ""
 }
 
 func escapeFullName(fullName string) string {
@@ -767,54 +590,4 @@ func escapeFullName(fullName string) string {
 		return pathEscape(fullName)
 	}
 	return pathEscape(parts[0]) + "/" + pathEscape(parts[1])
-}
-
-func sortedStrings(values []string) []string {
-	result := slices.Clone(values)
-	sort.Strings(result)
-	return result
-}
-
-func intersects(left, right []string) bool {
-	for _, value := range left {
-		if slices.Contains(right, value) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeCustomPropertyValue(value any) (any, bool) {
-	switch typed := value.(type) {
-	case nil, string:
-		return typed, true
-	case []any:
-		values := make([]string, len(typed))
-		for i, item := range typed {
-			text, ok := item.(string)
-			if !ok {
-				return nil, false
-			}
-			values[i] = text
-		}
-		sort.Strings(values)
-		return values, true
-	case []string:
-		return sortedStrings(typed), true
-	default:
-		return nil, false
-	}
-}
-
-func customPropertyMatches(value any, expected string) (matches, valid bool) {
-	switch typed := value.(type) {
-	case nil:
-		return false, true
-	case string:
-		return typed == expected, true
-	case []string:
-		return slices.Contains(typed, expected), true
-	default:
-		return false, false
-	}
 }

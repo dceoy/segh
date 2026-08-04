@@ -17,7 +17,7 @@ import (
 
 var loadSchema = sync.OnceValues(func() (map[string]any, error) {
 	var schema map[string]any
-	decoder := json.NewDecoder(strings.NewReader(configschema.ConfigV4()))
+	decoder := json.NewDecoder(strings.NewReader(configschema.ConfigV5()))
 	decoder.UseNumber()
 	if err := decoder.Decode(&schema); err != nil {
 		return nil, fmt.Errorf("decode embedded configuration schema: %w", err)

@@ -18,7 +18,7 @@ func TestLoadExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != 4 || cfg.Organization != "example-org" || cfg.Inventory.Concurrency != 4 ||
+	if cfg.Version != 5 || cfg.Organization != "example-org" || cfg.Inventory.Concurrency != 4 ||
 		!cfg.SourceScan.Enabled || cfg.SourceScan.Concurrency != 4 ||
 		time.Duration(cfg.SourceScan.Timeout) != 30*time.Minute {
 		t.Fatalf("unexpected config: %#v", cfg)
@@ -27,7 +27,7 @@ func TestLoadExample(t *testing.T) {
 
 func TestLoadRejectsUnknownField(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 4\norganization: test\nsurprise: true\n"
+	data := "version: 5\norganization: test\nsurprise: true\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 
 func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n---\norganization: ignored\n"
+	data := "version: 5\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n---\norganization: ignored\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
 
 func TestLoadRejectsUnboundedDuration(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 4\norganization: test\ninventory:\n  timeout: 999999999999999999999999999h\npolicies:\n  repository:\n    require_ruleset: true\n"
+	data := "version: 5\norganization: test\ninventory:\n  timeout: 999999999999999999999999999h\npolicies:\n  repository:\n    require_ruleset: true\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestLoadRejectsUnboundedDuration(t *testing.T) {
 
 func TestLoadRejectsMissingPolicies(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 4\norganization: test\n"
+	data := "version: 5\norganization: test\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestLoadRejectsMissingPolicies(t *testing.T) {
 
 func TestLoadRejectsRemovedCodeSecurityPolicy(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 4\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n"
+	data := "version: 5\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -85,11 +85,11 @@ func TestSchemaAndRuntimeRejectNullValues(t *testing.T) {
 		name string
 		data string
 	}{
-		{"section", "version: 4\norganization: test\ninventory: null\npolicies:\n  repository:\n    require_ruleset: true\n"},
-		{"array", "version: 4\norganization: test\nselectors:\n  repositories: null\npolicies:\n  repository:\n    require_ruleset: true\n"},
-		{"nested scalar", "version: 4\norganization: test\npolicies:\n  actions:\n    enabled: null\n  repository:\n    require_ruleset: true\n"},
-		{"bare key", "version: 4\norganization: test\npolicies:\n  dependencies:\n  repository:\n    require_ruleset: true\n"},
-		{"alias", "version: 4\norganization: test\nselectors:\n  repositories: &empty null\npolicies:\n  actions:\n    enabled: *empty\n  repository:\n    require_ruleset: true\n"},
+		{"section", "version: 5\norganization: test\ninventory: null\npolicies:\n  repository:\n    require_ruleset: true\n"},
+		{"array", "version: 5\norganization: test\nselectors:\n  repositories: null\npolicies:\n  repository:\n    require_ruleset: true\n"},
+		{"nested scalar", "version: 5\norganization: test\npolicies:\n  actions:\n    enabled: null\n  repository:\n    require_ruleset: true\n"},
+		{"bare key", "version: 5\norganization: test\npolicies:\n  dependencies:\n  repository:\n    require_ruleset: true\n"},
+		{"alias", "version: 5\norganization: test\nselectors:\n  repositories: &empty null\npolicies:\n  actions:\n    enabled: *empty\n  repository:\n    require_ruleset: true\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			configPath := filepath.Join(t.TempDir(), "segh.yaml")
@@ -106,7 +106,7 @@ func TestSchemaAndRuntimeRejectNullValues(t *testing.T) {
 
 func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n"
+	data := "version: 5\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -128,10 +128,6 @@ func TestSchemaRejectsInvalidStructuralValuesAtRuntime(t *testing.T) {
 		name string
 		data string
 	}{
-		{
-			"invalid visibility enum",
-			"selectors:\n  visibilities: [external]\npolicies:\n  repository:\n    require_ruleset: true\n",
-		},
 		{
 			"invalid actions enum",
 			"policies:\n  actions:\n    allowed_actions: unrestricted\n",
@@ -162,7 +158,7 @@ func TestSchemaRejectsInvalidStructuralValuesAtRuntime(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			configPath := filepath.Join(t.TempDir(), "segh.yaml")
-			data := "version: 4\norganization: test\n" + test.data
+			data := "version: 5\norganization: test\n" + test.data
 			if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -178,9 +174,6 @@ func TestSchemaAndRuntimeRejectDuplicateArrayItems(t *testing.T) {
 		name string
 		data string
 	}{
-		{"selectors.visibilities", "selectors:\n  visibilities: [private, private]\n"},
-		{"selectors.include_topics", "selectors:\n  include_topics: [security, security]\n"},
-		{"selectors.exclude_topics", "selectors:\n  exclude_topics: [archived, archived]\n"},
 		{"selectors.repositories", "selectors:\n  repositories: [example/repository, example/repository]\n"},
 		{"selectors.exclude", "selectors:\n  exclude: [example/legacy, example/legacy]\n"},
 		{
@@ -197,7 +190,7 @@ func TestSchemaAndRuntimeRejectDuplicateArrayItems(t *testing.T) {
 			configPath := filepath.Join(t.TempDir(), "segh.yaml")
 			if err := os.WriteFile(
 				configPath,
-				[]byte("version: 4\norganization: test\n"+tc.data+policies),
+				[]byte("version: 5\norganization: test\n"+tc.data+policies),
 				0o600,
 			); err != nil {
 				t.Fatal(err)
@@ -217,13 +210,18 @@ func TestLoadRejectsPreviousVersionsAndRemovedRuntimeFields(t *testing.T) {
 		data string
 		want string
 	}{
-		{"version 1", "version: 1\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 4"},
-		{"version 2", "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 4"},
-		{"version 3", "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 4"},
-		{"github host", "version: 4\norganization: test\ngithub:\n  web_url: https://github.com\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.github is not allowed"},
-		{"output directory", "version: 4\norganization: test\noutput:\n  directory: results\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.output is not allowed"},
-		{"code security policy", "version: 4\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n", "configuration.policies.code_security is not allowed"},
-		{"CodeQL policy", "version: 4\norganization: test\npolicies:\n  dependencies:\n    codeql: true\n", "configuration.policies.dependencies.codeql is not allowed"},
+		{"version 1", "version: 1\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 5"},
+		{"version 2", "version: 2\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 5"},
+		{"version 3", "version: 3\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 5"},
+		{"version 4", "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.version must equal 5"},
+		{"github host", "version: 5\norganization: test\ngithub:\n  web_url: https://github.com\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.github is not allowed"},
+		{"output directory", "version: 5\norganization: test\noutput:\n  directory: results\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.output is not allowed"},
+		{"code security policy", "version: 5\norganization: test\npolicies:\n  code_security:\n    configuration: approved\n", "configuration.policies.code_security is not allowed"},
+		{"CodeQL policy", "version: 5\norganization: test\npolicies:\n  dependencies:\n    codeql: true\n", "configuration.policies.dependencies.codeql is not allowed"},
+		{"visibilities selector", "version: 5\norganization: test\nselectors:\n  visibilities: [public]\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.selectors.visibilities is not allowed"},
+		{"include_topics selector", "version: 5\norganization: test\nselectors:\n  include_topics: [security]\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.selectors.include_topics is not allowed"},
+		{"exclude_topics selector", "version: 5\norganization: test\nselectors:\n  exclude_topics: [exempt]\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.selectors.exclude_topics is not allowed"},
+		{"custom_properties selector", "version: 5\norganization: test\nselectors:\n  custom_properties:\n    tier: critical\npolicies:\n  repository:\n    require_ruleset: true\n", "configuration.selectors.custom_properties is not allowed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configPath := filepath.Join(t.TempDir(), "segh.yaml")
@@ -295,7 +293,7 @@ func TestSchemaDrivesRuntimeDurationValidation(t *testing.T) {
 	// pattern-valid durations remain schema-valid here even though Load()
 	// would separately reject them on semantic grounds.
 	for _, tc := range cases {
-		data := "version: 4\norganization: test\ninventory:\n  timeout: \"" + tc.raw +
+		data := "version: 5\norganization: test\ninventory:\n  timeout: \"" + tc.raw +
 			"\"\npolicies:\n  repository:\n    require_ruleset: true\n"
 		var document any
 		if err := yaml.Unmarshal([]byte(data), &document); err != nil {
@@ -309,7 +307,7 @@ func TestSchemaDrivesRuntimeDurationValidation(t *testing.T) {
 }
 
 func TestSchemaSuppressionRepositoryPatternMatchesRuntimeValidation(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v4.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "segh-config-v5.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +376,7 @@ func TestLoadRejectsLenientRFC3339FormsInUnquotedSuppressionExpiry(t *testing.T)
 	// schema-validation document is built, so an out-of-range offset or a
 	// comma fractional separator never reaches the schema's format check as
 	// the literal text the operator wrote.
-	base := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n" +
+	base := "version: 5\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n" +
 		"suppressions:\n  - policy: p1\n    owner: someone\n    rationale: testing\n    expires: "
 	for name, expires := range map[string]string{
 		"unquoted out-of-range offset minute": "2026-01-01T00:00:00+00:60",
@@ -403,7 +401,7 @@ func TestLoadRejectsLenientRFC3339FormsInUnquotedSuppressionExpiry(t *testing.T)
 
 func TestLoadAcceptsUnquotedValidSuppressionExpiry(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "segh.yaml")
-	data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n" +
+	data := "version: 5\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n" +
 		"suppressions:\n  - policy: p1\n    owner: someone\n    rationale: testing\n    expires: 2026-06-15T12:30:00Z\n"
 	if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
@@ -428,7 +426,7 @@ func TestLoadAcceptsSuppressionExpiryWithFractionAndOffset(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			configPath := filepath.Join(t.TempDir(), "segh.yaml")
-			data := "version: 4\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n" +
+			data := "version: 5\norganization: test\npolicies:\n  repository:\n    require_ruleset: true\n" +
 				"suppressions:\n  - policy: p1\n    owner: someone\n    rationale: testing\n    expires: " + expires + "\n"
 			if err := os.WriteFile(configPath, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
