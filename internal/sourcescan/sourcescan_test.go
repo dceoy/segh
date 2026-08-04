@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,6 @@ func TestPlannerResolvesSortsAndSchedulesImmutableCommits(t *testing.T) {
 	cfg.Organization = "example"
 	cfg.SourceScan.Enabled = true
 	cfg.SourceScan.Concurrency = 2
-	cfg.SourceScan.Timeout = config.Duration(91 * time.Second)
 	client := fakeAPI{commits: map[string]string{
 		"/repos/example/zeta/commits/main":     strings.Repeat("b", 40),
 		"/repos/example/alpha/commits/release": strings.Repeat("a", 40),
@@ -54,7 +54,7 @@ func TestPlannerResolvesSortsAndSchedulesImmutableCommits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manifest.Complete || manifest.Concurrency != 2 || manifest.TimeoutMinutes != 2 ||
+	if !manifest.Complete || manifest.Concurrency != 2 ||
 		manifest.GeneratedAt != time.Unix(10, 0).UTC() {
 		t.Fatalf("manifest = %#v", manifest)
 	}
@@ -171,15 +171,45 @@ func TestSummaryDistinguishesFindingsMissingAndRuntimeResults(t *testing.T) {
 	}
 }
 
+// TestSummaryParsesLiteralUpstreamStatusJSON writes the exact bytes
+// dceoy/gha-for-devops's repository-security-scan composite action's
+// record_status() produces (see its scan.sh), rather than round-tripping
+// through this package's own upstreamStatus type, so a drift between the
+// two schemas would show up as a real parsing failure here.
+func TestSummaryParsesLiteralUpstreamStatusJSON(t *testing.T) {
+	repository := resolvedRepository(7, "literal", "c")
+	manifest := model.SourceScanManifest{
+		SchemaVersion: model.SourceScanSchemaVersion, Organization: "example", Complete: true,
+		Repositories: []model.SourceScanRepository{repository},
+	}
+	dir := t.TempDir()
+	statusPath := filepath.Join(dir, "repository-scan-7", "status.json")
+	if err := os.MkdirAll(filepath.Dir(statusPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	literal := `{"result":"pass","repository-id":"7","repository":"example/literal","default-branch":"main","commit-sha":"` +
+		repository.CommitSHA + `"}` + "\n"
+	if err := os.WriteFile(statusPath, []byte(literal), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := Summarize(manifest, dir, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Counts != (model.SourceScanCounts{Selected: 1, Scanned: 1, Passed: 1}) || !summary.Complete {
+		t.Fatalf("summary = %#v", summary)
+	}
+}
+
 func TestSummaryRejectsMismatchedOrMalformedStatusEvidence(t *testing.T) {
 	repository := resolvedRepository(1, "repo", "a")
 	manifest := model.SourceScanManifest{SchemaVersion: 1, Organization: "example", Complete: true, Repositories: []model.SourceScanRepository{repository}}
 	for _, test := range []struct {
 		name   string
-		mutate func(*model.RepositoryScanStatus)
+		mutate func(*upstreamStatus)
 	}{
-		{"commit", func(status *model.RepositoryScanStatus) { status.CommitSHA = strings.Repeat("b", 40) }},
-		{"result", func(status *model.RepositoryScanStatus) { status.Result = "success" }},
+		{"commit", func(status *upstreamStatus) { status.CommitSHA = strings.Repeat("b", 40) }},
+		{"result", func(status *upstreamStatus) { status.Result = "success" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -222,10 +252,13 @@ func resolvedRepository(id int64, name, sha string) model.SourceScanRepository {
 	}
 }
 
-func validStatus(repository model.SourceScanRepository, result string) model.RepositoryScanStatus {
-	return model.RepositoryScanStatus{
-		SchemaVersion: 1, RepositoryID: repository.ID, Repository: repository.FullName,
-		DefaultBranch: repository.DefaultBranch, CommitSHA: repository.CommitSHA, Result: result,
+// validStatus mirrors the exact status.json shape dceoy/gha-for-devops's
+// repository-security-scan composite action writes: hyphenated keys, a
+// string repository-id, and no schema version field.
+func validStatus(repository model.SourceScanRepository, result string) upstreamStatus {
+	return upstreamStatus{
+		Result: result, RepositoryID: strconv.FormatInt(repository.ID, 10), Repository: repository.FullName,
+		DefaultBranch: repository.DefaultBranch, CommitSHA: repository.CommitSHA,
 	}
 }
 

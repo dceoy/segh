@@ -8,11 +8,14 @@ repository.
 1. Add a reviewed 40-character commit from protected `dceoy/segh` `main` to
    `config/segh-source-commit`.
 2. Install a read-only GitHub App on every repository in the organization.
-3. Add the App ID as `SEGH_READ_APP_ID` and private key as
-   `SEGH_READ_APP_PRIVATE_KEY`.
+3. Add the App ID as `SEGH_READ_APP_ID`, its Client ID as
+   `SEGH_READ_APP_CLIENT_ID`, and its private key as
+   `SEGH_READ_APP_PRIVATE_KEY`. The Client ID is required in addition to the
+   App ID because the pinned upstream reusable workflow mints its own
+   per-repository token through `actions/create-github-app-token`'s
+   `client-id` input rather than `app-id`.
 4. Store the version 5 policy in `config/organization.yaml`.
-5. Configure `source_scan.enabled`, `source_scan.concurrency`, and
-   `source_scan.timeout`.
+5. Configure `source_scan.enabled` and `source_scan.concurrency`.
 6. Add a weekly `schedule` trigger to the control repository's copy of the
    workflow (the checked-in `segh` template is dispatch-only, since its
    prerequisites only exist in the private control repository), or run
@@ -29,35 +32,39 @@ and resolves every selected default branch to a full commit SHA. Failed
 resolutions remain in `scan-manifest.json` as unscheduled selections, so the
 final coverage counts cannot report them as passes. At most 256 resolved
 repositories are scheduled in a `fail-fast: false` matrix with configured,
-bounded concurrency and per-repository timeout.
+bounded concurrency.
 
-Each worker:
-
-- mints a new Contents/Metadata read token limited to one repository;
-- checks out the recorded commit with persisted credentials, LFS, and
-  submodules disabled;
-- checks out the trusted repository scanner from `dceoy/gha-for-devops` at the
-  full commit pinned in the workflow;
-- installs that revision's checksum-verified scanner versions;
-- runs its preflight, Zizmor, actionlint/embedded ShellCheck, standalone
-  ShellCheck, Checkov, Trivy vulnerability, and Trivy secret operations;
-- binds the upstream evidence to the planned repository and commit identity;
-  and
-- uploads a unique private artifact before enforcing the aggregate result.
+Each matrix entry calls `dceoy/gha-for-devops`'s `repository-security-scan.yml`
+reusable workflow, pinned to a reviewed full commit SHA, supplying the
+repository's ID, full name, default branch, resolved commit SHA, and a unique
+evidence artifact name. `segh` itself no longer mints the per-repository
+token, checks out the target, installs or invokes a scanner, or classifies
+scanner exit codes: the called workflow mints its own short-lived,
+repository-scoped Contents/Metadata read token, checks out the recorded
+commit with LFS and submodules disabled, runs its own preflight and scanner
+pipeline (Zizmor, actionlint/embedded ShellCheck, standalone ShellCheck,
+Checkov, Trivy vulnerability, Trivy secret), classifies the result, and
+uploads the identity-bound `status.json` evidence itself under the supplied
+artifact name. Its per-repository scan duration is bounded by that reusable
+workflow's own fixed timeout, not a `segh` configuration field.
 
 The upstream policy rejects target-owned Zizmor ignores, ShellCheck directives,
 expression-valued shell selection, and Checkov inline suppressions. It also
 scans supported shell blocks from composite actions. Target repositories cannot
 replace the scanner, its configuration, thresholds, or accepted exclusions.
 
-Workers cache only Trivy's public vulnerability and Java advisory databases
-under a daily, scanner-versioned key. Repository content and scan artifacts are
-not shared between matrix jobs.
-
 The scanner never runs a repository script, dependency installation, package
 lifecycle hook, Terraform initialization, LFS hook, or submodule command.
 Tracked symlinks are removed before scanning. LFS pointers and submodule
 gitlinks produce incomplete-coverage evidence.
+
+The aggregation job downloads every repository's `status.json` artifact and
+parses it against the upstream workflow's own evidence shape (hyphenated
+keys, a string repository ID, no schema version), converting it into
+`segh`'s own `RepositoryScanStatus` before matching it against the planned
+repository identity in `scan-manifest.json` and writing `scan-summary.json`.
+Missing, malformed, duplicate, or identity-mismatched evidence remains a
+coverage gap, not a silent pass.
 
 Governance artifacts remain `inventory.json`, `audit.json`, and `report.md`.
 Source scan planning, per-repository reports, `scan-summary.json`, and the

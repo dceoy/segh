@@ -29,13 +29,17 @@ cannot be evaluated is reported as `notice`, never silently skipped or
 promoted to a coverage-affecting failure.
 
 The periodic scan resolves each selected repository's default branch through
-the API before checkout and records the returned full commit SHA in a separate
-manifest. Each matrix job mints a new token limited to that one repository,
-checks out only the recorded SHA with credentials, LFS, and submodules disabled,
-and treats the checkout only as static input. Tracked symlinks are removed;
-submodule gitlinks and Git LFS pointers make coverage incomplete. Scanner
-configuration and binaries come only from a full, reviewed
-`dceoy/gha-for-devops` commit pinned in the workflow.
+the API and records the returned full commit SHA in a separate manifest, then
+delegates each matrix target to `dceoy/gha-for-devops`'s pinned
+`repository-security-scan.yml` reusable workflow by full commit SHA. That
+called workflow, not `segh`, mints the repository-scoped token, checks out
+only the recorded SHA with credentials, LFS, and submodules disabled, treats
+the checkout only as static input, runs the scanner pipeline, and publishes
+the identity-bound `status.json` evidence artifact. Tracked symlinks are
+removed; submodule gitlinks and Git LFS pointers make coverage incomplete.
+`segh` never installs or invokes a scanner itself, and its aggregation step
+parses the artifact's evidence shape as untrusted input: missing, malformed,
+duplicate, or identity-mismatched evidence is a coverage gap, not a pass.
 
 ## Dependency evaluations
 

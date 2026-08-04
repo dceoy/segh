@@ -31,9 +31,8 @@ type Inventory struct {
 }
 
 type SourceScan struct {
-	Enabled     bool     `yaml:"enabled"`
-	Concurrency int      `yaml:"concurrency"`
-	Timeout     Duration `yaml:"timeout"`
+	Enabled     bool `yaml:"enabled"`
+	Concurrency int  `yaml:"concurrency"`
 }
 
 type Selectors struct {
@@ -88,7 +87,6 @@ func Default() Config {
 		},
 		SourceScan: SourceScan{
 			Concurrency: 4,
-			Timeout:     Duration(30 * time.Minute),
 		},
 		Selectors: Selectors{ExcludeArchived: true, ExcludeForks: true},
 	}
@@ -162,9 +160,6 @@ func (c Config) validateSemantics() error {
 	// terminated before matrix export and artifact retention run.
 	if time.Duration(c.Inventory.Timeout) > 30*time.Minute {
 		errs = append(errs, fmt.Errorf("inventory.timeout must not exceed 30m"))
-	}
-	if c.SourceScan.Enabled && time.Duration(c.SourceScan.Timeout) > 6*time.Hour {
-		errs = append(errs, fmt.Errorf("source_scan.timeout must not exceed 6h"))
 	}
 	for i, suppression := range c.Suppressions {
 		if _, err := path.Match(suppression.Repository, "owner/repository"); suppression.Repository != "" && err != nil {

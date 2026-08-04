@@ -36,15 +36,14 @@ func NewPlanner(cfg config.Config, client gh.API) *Planner {
 
 func (p *Planner) Run(ctx context.Context, inventory model.Inventory) (model.SourceScanManifest, error) {
 	manifest := model.SourceScanManifest{
-		SchemaVersion:  model.SourceScanSchemaVersion,
-		Organization:   p.cfg.Organization,
-		GitHubHost:     p.client.Hostname(),
-		GeneratedAt:    p.now().UTC(),
-		Enabled:        p.cfg.SourceScan.Enabled,
-		Complete:       true,
-		Concurrency:    p.cfg.SourceScan.Concurrency,
-		TimeoutMinutes: int((time.Duration(p.cfg.SourceScan.Timeout) + time.Minute - 1) / time.Minute),
-		Repositories:   []model.SourceScanRepository{},
+		SchemaVersion: model.SourceScanSchemaVersion,
+		Organization:  p.cfg.Organization,
+		GitHubHost:    p.client.Hostname(),
+		GeneratedAt:   p.now().UTC(),
+		Enabled:       p.cfg.SourceScan.Enabled,
+		Complete:      true,
+		Concurrency:   p.cfg.SourceScan.Concurrency,
+		Repositories:  []model.SourceScanRepository{},
 	}
 	if inventory.SchemaVersion != model.SchemaVersion || inventory.Organization != p.cfg.Organization ||
 		inventory.GitHubHost == "" || inventory.GitHubHost != p.client.Hostname() {
@@ -209,8 +208,8 @@ func Summarize(manifest model.SourceScanManifest, resultsDirectory string, now t
 		if entry.IsDir() || entry.Name() != "status.json" {
 			return nil
 		}
-		var status model.RepositoryScanStatus
-		if err := ReadJSON(path, &status); err != nil {
+		status, err := readUpstreamStatus(path)
+		if err != nil {
 			summary.Complete = false
 			summary.Counts.Errors++
 			summary.Errors = append(summary.Errors, model.RunError{Component: "source_scan_summary", Kind: "invalid_status", Message: err.Error()})
@@ -330,12 +329,46 @@ func ReadJSON(path string, value any) error {
 }
 
 func statusMatches(status model.RepositoryScanStatus, repository model.SourceScanRepository) bool {
-	if status.SchemaVersion != model.SourceScanSchemaVersion || status.RepositoryID != repository.ID ||
+	if status.RepositoryID != repository.ID ||
 		status.Repository != repository.FullName || status.DefaultBranch != repository.DefaultBranch ||
 		status.CommitSHA != repository.CommitSHA || !isFullSHA(status.CommitSHA) {
 		return false
 	}
 	return map[string]bool{"pass": true, "findings": true, "incomplete": true, "error": true}[status.Result]
+}
+
+// upstreamStatus mirrors the exact JSON shape dceoy/gha-for-devops's
+// repository-security-scan composite action writes to each target's
+// status.json: hyphenated keys, a string repository-id, and no schema
+// version field, since segh no longer produces this file itself.
+type upstreamStatus struct {
+	Result        string `json:"result"`
+	RepositoryID  string `json:"repository-id"`
+	Repository    string `json:"repository"`
+	DefaultBranch string `json:"default-branch"`
+	CommitSHA     string `json:"commit-sha"`
+}
+
+// readUpstreamStatus decodes an upstream status.json artifact and converts
+// it into segh's own RepositoryScanStatus shape, which remains the schema
+// scan-summary.json publishes.
+func readUpstreamStatus(path string) (model.RepositoryScanStatus, error) {
+	var raw upstreamStatus
+	if err := ReadJSON(path, &raw); err != nil {
+		return model.RepositoryScanStatus{}, err
+	}
+	repositoryID, err := strconv.ParseInt(raw.RepositoryID, 10, 64)
+	if err != nil {
+		return model.RepositoryScanStatus{}, fmt.Errorf("status repository-id is not an integer: %w", err)
+	}
+	return model.RepositoryScanStatus{
+		SchemaVersion: model.SourceScanSchemaVersion,
+		RepositoryID:  repositoryID,
+		Repository:    raw.Repository,
+		DefaultBranch: raw.DefaultBranch,
+		CommitSHA:     raw.CommitSHA,
+		Result:        raw.Result,
+	}, nil
 }
 
 func isFullSHA(value string) bool {

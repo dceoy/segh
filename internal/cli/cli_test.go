@@ -252,7 +252,7 @@ func TestScanPlanCommitResolutionFailuresClassifyExitCode(t *testing.T) {
 func writeScanPlanConfig(t *testing.T) string {
 	t.Helper()
 	data := "version: 5\norganization: example\ninventory:\n  concurrency: 1\n  timeout: 1m\n" +
-		"source_scan:\n  enabled: true\n  concurrency: 1\n  timeout: 1m\n" +
+		"source_scan:\n  enabled: true\n  concurrency: 1\n" +
 		"policies:\n  dependencies:\n    dependency_graph: true\n"
 	path := filepath.Join(t.TempDir(), "segh.yaml")
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {

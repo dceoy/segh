@@ -19,8 +19,7 @@ func TestLoadExample(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Version != 5 || cfg.Organization != "example-org" || cfg.Inventory.Concurrency != 4 ||
-		!cfg.SourceScan.Enabled || cfg.SourceScan.Concurrency != 4 ||
-		time.Duration(cfg.SourceScan.Timeout) != 30*time.Minute {
+		!cfg.SourceScan.Enabled || cfg.SourceScan.Concurrency != 4 {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
 }
@@ -117,8 +116,7 @@ func TestLoadAcceptsDefaultedNonPolicySections(t *testing.T) {
 	if cfg.Inventory.Concurrency != 4 || time.Duration(cfg.Inventory.Timeout) != 30*time.Minute {
 		t.Fatalf("defaults were not applied: %#v", cfg)
 	}
-	if cfg.SourceScan.Enabled || cfg.SourceScan.Concurrency != 4 ||
-		time.Duration(cfg.SourceScan.Timeout) != 30*time.Minute {
+	if cfg.SourceScan.Enabled || cfg.SourceScan.Concurrency != 4 {
 		t.Fatalf("source scan defaults were not applied: %#v", cfg.SourceScan)
 	}
 }
@@ -154,10 +152,6 @@ func TestSchemaRejectsInvalidStructuralValuesAtRuntime(t *testing.T) {
 		{
 			"excessive source scan concurrency",
 			"source_scan:\n  enabled: true\n  concurrency: 17\npolicies:\n  repository:\n    require_ruleset: true\n",
-		},
-		{
-			"excessive source scan timeout",
-			"source_scan:\n  enabled: true\n  timeout: 6h1m\npolicies:\n  repository:\n    require_ruleset: true\n",
 		},
 		{
 			"excessive inventory timeout",

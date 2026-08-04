@@ -48,15 +48,19 @@ commit SHA, and whether it was scheduled. Failed commit resolution preserves
 the selected identity with no commit or schedule and adds a sorted planning
 error, so incomplete selections remain countable.
 
-Every repository artifact contains `status.json` with the same repository and
+Every repository artifact contains `status.json`, published by the pinned
+upstream `repository-security-scan.yml` reusable workflow in its own shape
+(hyphenated `result`, `repository-id` (string), `repository`, `default-branch`,
+`commit-sha` keys; no schema version field), with the same repository and
 commit identity plus an aggregate result (`pass`, `findings`, `incomplete`, or
-`error`). The pinned upstream scanner's complete JSON, text, log, and per-tool
-status files remain beside it.
+`error`). The upstream scanner's complete JSON, text, log, and per-tool status
+files remain beside it.
 
-`scan-summary.json` validates every repository status against the manifest,
-rejects missing, duplicate, malformed, or mismatched evidence, and reports
-separate passed, findings, incomplete, and runtime-error counts. Its bounded
-operator rendering is `scan-report.md`.
+`scan-summary.json` parses every repository's upstream `status.json` as
+untrusted input, converts it into `segh`'s own `RepositoryScanStatus` shape,
+validates it against the manifest, rejects missing, duplicate, malformed, or
+mismatched evidence, and reports separate passed, findings, incomplete, and
+runtime-error counts. Its bounded operator rendering is `scan-report.md`.
 
 Artifacts can contain sensitive secret findings and repository paths. Keep the
 control repository and Actions artifacts private and retain them only for the
