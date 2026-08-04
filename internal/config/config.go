@@ -151,13 +151,6 @@ func demoteTimestampScalars(node *yaml.Node) {
 
 func (c Config) validateSemantics() error {
 	var errs []error
-	// The organization-audit workflow's audit job budgets two sequential
-	// phases bounded by inventory.timeout (segh audit, then segh scan-plan)
-	// within its fixed 75-minute job timeout, alongside checkout, build,
-	// and evidence-retention steps that must still run afterward. Bounding
-	// inventory.timeout to the documented 30-minute default keeps the
-	// combined worst case within that budget; a higher value can be
-	// terminated before matrix export and artifact retention run.
 	if time.Duration(c.Inventory.Timeout) > 30*time.Minute {
 		errs = append(errs, fmt.Errorf("inventory.timeout must not exceed 30m"))
 	}
