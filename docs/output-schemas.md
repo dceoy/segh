@@ -26,7 +26,10 @@ Audit is the canonical automation result. It contains schema version,
 organization, generation time, repository counts, policy counts, final
 coverage, and sorted policy results. Each result contains repository, policy ID,
 status, severity, observed and expected values, evidence source, remediation,
-and an optional applied suppression.
+and an optional applied suppression. Status is `pass`, `fail`, `unknown`,
+`unsupported`, `exempt`, `warning`, or `notice`; only `fail` counts toward the
+findings exit code, and only `unknown`/`unsupported` count toward partial
+coverage.
 
 ## `report.md`
 

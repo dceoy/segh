@@ -21,7 +21,12 @@ Periodic organization source scan
 The organization audit receives a short-lived, read-only GitHub App token. It
 uses that token directly over HTTPS, bounds response sizes, retries transient
 failures, and treats unavailable evidence as `unknown` or `unsupported`, never
-as a policy pass.
+as a policy pass. When `policies.dependencies.lock_files` is enabled, it also
+reads a repository's default-branch file tree and the content of matched
+dependency manifests through the same read-only GitHub REST API (a recursive
+tree listing and per-file content, never a checkout); a repository whose tree
+cannot be evaluated is reported as `notice`, never silently skipped or
+promoted to a coverage-affecting failure.
 
 The periodic scan resolves each selected repository's default branch through
 the API before checkout and records the returned full commit SHA in a separate
