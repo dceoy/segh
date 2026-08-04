@@ -74,9 +74,15 @@ publishes pull-request security checks. Those controls are outside this
 repository's responsibility. The periodic organization scan described above is
 unchanged and remains the only source-scanning path maintained here.
 
-After this removal is merged, an administrator should delete external GitHub
-configuration that existed only for the retired pull-request publisher: the
-dedicated Checks-write App or installation, its protected environment,
-associated secrets and variables, and obsolete branch-protection or ruleset
-required-check entries. Repository code must not attempt to modify those
+Before merging the removal, an administrator must delete the obsolete
+organization-ruleset required-workflow entry and branch-protection or ruleset
+required-check entries for `PR security / scan` and
+`segh source scan (head commit)`. Otherwise, subsequent pull requests can remain
+blocked while waiting for checks that no longer have a workflow to publish
+them.
+
+After the merge, an administrator should delete the remaining external GitHub
+configuration used only by the retired pull-request publisher: the dedicated
+Checks-write App or installation, its protected environment, and associated
+secrets and variables. Repository code must not attempt to modify those
 organization settings.
