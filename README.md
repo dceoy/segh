@@ -40,22 +40,25 @@ cat segh-results/report.md
 ```
 
 `audit` strictly validates the version 5 configuration before making API
-requests, collects inventory, evaluates policy, and writes
+requests, collects one authoritative inventory, evaluates policy, and writes
 `segh-results/inventory.json`, `segh-results/audit.json`, and
-`segh-results/report.md`. Only schema version 5 is accepted; older versions
-and removed fields are rejected without aliases or migration logic.
+`segh-results/report.md`. When `source_scan.enabled` is true, the same execution
+also resolves immutable default-branch commits and writes
+`segh-results/scan-manifest.json`. Only schema version 5 is accepted; older
+versions and removed fields are rejected without aliases or migration logic.
 
-Exit codes are `0` success, `1` policy violations, `2` invalid configuration or
-arguments, `3` authentication or permission failure, `4` incomplete coverage,
-and `5` runtime failure.
+Exit codes are `0` success, `1` policy or source-scan findings, `2` invalid
+configuration or arguments, `3` authentication or permission failure, `4`
+incomplete coverage, and `5` runtime failure.
 
 `segh.example.yaml` shows the recommended starter fields only; see
 [Policies](docs/policies.md) for suppressions and advanced, commonly-defaulted
 configuration, and the embedded JSON Schema
 (`schema/segh-config-v5.schema.json`) for the complete reference.
 
-The organization audit workflow also invokes two internal pipeline stages
-(`scan-plan`, `scan-summary`) not part of the normal operator interface; see
+The organization workflow uses the same `audit` executable route to reconcile
+repository artifacts after the matrix completes. The removed `scan-plan` and
+`scan-summary` commands have no compatibility aliases; see
 [Workflows](docs/workflows.md).
 
 ## Scope boundary
@@ -70,16 +73,17 @@ independently where required.
 The organization audit is read-only. Its GitHub App inventories Actions policy,
 rulesets, branch protection, dependency graph, Dependabot coverage, and
 repository metadata. It does not clone repositories or run scanners during
-governance collection.
-
-When `source_scan.enabled` is true, the control workflow reuses the selected
-inventory, records every default branch's exact commit SHA, and delegates each
-target to `gha-for-devops`'s pinned `repository-security-scan.yml` reusable
-workflow. The called workflow mints its own repository-scoped token, checks out
-the recorded commit, and runs the static-analysis policy. `segh` retains only
-inventory collection, commit resolution, matrix orchestration, and result
-aggregation. Repository scripts, package installers, submodules, Git LFS
-objects, and Terraform providers are never executed or initialized.
+governance collection. When `source_scan.enabled` is true, the same audit
+execution reuses its selected inventory, records every default branch's exact
+commit SHA, and delegates each target to `gha-for-devops`'s pinned
+`repository-security-scan.yml` reusable workflow. The upstream workflow mints
+its own repository-scoped token, checks out the recorded commit, runs the
+static-analysis policy, classifies the repository result, and publishes the
+identity-bound `status.json`. `segh` retains only organization-specific
+inventory collection, commit resolution, bounded matrix control, identity
+reconciliation, and aggregate output. Repository scripts, package installers,
+submodules, Git LFS objects, and Terraform providers are never executed or
+initialized.
 
 Source scanning writes separate `scan-manifest.json`, `scan-summary.json`, and
 per-repository evidence. Findings, incomplete content or checkout coverage, and

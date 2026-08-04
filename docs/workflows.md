@@ -10,79 +10,73 @@ repository.
 2. Install a read-only GitHub App on every repository in the organization.
 3. Add the App ID as `SEGH_READ_APP_ID`, its Client ID as
    `SEGH_READ_APP_CLIENT_ID`, and its private key as
-   `SEGH_READ_APP_PRIVATE_KEY`. The Client ID is required in addition to the
-   App ID because the pinned upstream reusable workflow mints its own
-   per-repository token through `actions/create-github-app-token`'s
-   `client-id` input rather than `app-id`.
-4. Store the version 5 policy in `config/organization.yaml`.
-5. Configure `source_scan.enabled` and `source_scan.concurrency`.
-6. Add a weekly `schedule` trigger to the control repository's copy of the
-   workflow (the checked-in `segh` template is dispatch-only, since its
-   prerequisites only exist in the private control repository), or run
-   `Organization security audit and source scan` manually.
+   `SEGH_READ_APP_PRIVATE_KEY`. The pinned upstream reusable workflow requires
+   the Client ID to mint its per-repository token.
+4. Store the version 5 policy in `config/organization.yaml` and configure
+   `source_scan.enabled` and `source_scan.concurrency`.
+5. Add a weekly `schedule` trigger to the control repository's copy of the
+   workflow, or dispatch it manually. The checked-in template is dispatch-only
+   because its prerequisites exist only in the private control repository.
 
 The audit job verifies that the pinned `segh` source is reachable from protected
-`main`, mints a short-lived App token, requires a private control repository,
-and runs `segh audit`. Its 75-minute bound covers the sequential governance and
-source-planning phases, each of which can use the default 30-minute inventory
-timeout.
+`main`, mints one short-lived read-only App token, requires a private control
+repository, and runs `segh audit`. Configuration validation completes before
+any API access. The command performs one authoritative inventory collection and,
+when source scanning is enabled, reuses that in-memory inventory to resolve each
+selected default branch to a full immutable commit SHA and write
+`scan-manifest.json`. Failed resolutions remain unscheduled manifest entries, so
+they cannot be counted as passes. At most 256 resolved repositories enter a
+`fail-fast: false` matrix with bounded configured concurrency.
 
-When scanning is enabled, `segh scan-plan` reuses the authoritative inventory
-and resolves every selected default branch to a full commit SHA. Failed
-resolutions remain in `scan-manifest.json` as unscheduled selections, so the
-final coverage counts cannot report them as passes. At most 256 resolved
-repositories are scheduled in a `fail-fast: false` matrix with configured,
-bounded concurrency.
+The authenticated inventory and planning phases share a 50-minute parent
+deadline. The workflow step has a 55-minute timeout, so `segh` regains control,
+writes governance evidence and an incomplete manifest, and exits fail closed
+before the short-lived App token or runner timeout can preempt evidence
+emission.
 
-Each matrix entry calls `dceoy/gha-for-devops`'s
-`repository-security-scan.yml` reusable workflow, pinned to a reviewed full
-commit SHA, supplying the repository's ID, full name, default branch, resolved
-commit SHA, and a unique evidence artifact name. `segh` itself does not mint
-the per-repository token, check out the target, install or invoke a scanner, or
-classify scanner exit codes. The called workflow mints its own short-lived,
-repository-scoped Contents/Metadata read token, checks out the recorded commit
-with LFS and submodules disabled, runs its own preflight and scanner pipeline,
-classifies the result, and uploads the identity-bound `status.json` evidence
-under the supplied artifact name. Its per-repository scan duration is bounded
-by that reusable workflow's fixed timeout, not a `segh` configuration field.
+Each matrix entry calls the reviewed
+`dceoy/gha-for-devops/.github/workflows/repository-security-scan.yml` revision
+pinned by full SHA. The call supplies repository ID, full name, default branch,
+resolved commit SHA, and a unique artifact name. The upstream workflow owns
+repository-scoped token minting, target checkout, scanner installation and
+execution, repository-level classification, bounded repository summary,
+`status.json` production, complete artifact publication, and enforcement.
+`segh` does not duplicate those generic repository-scan responsibilities.
 
-The upstream policy rejects target-owned scanner configuration and unsupported
-suppressions. Target repositories cannot replace the scanner, versions,
-thresholds, configuration, or accepted exclusions.
-
-The scanner never runs a repository script, dependency installation, package
-lifecycle hook, Terraform initialization, LFS hook, or submodule command.
-Tracked symlinks are removed before scanning. LFS pointers and submodule
-gitlinks produce incomplete-coverage evidence.
-
-The aggregation job downloads every repository's `status.json` artifact and
-parses it against the upstream workflow's evidence shape, converting it into
-`segh`'s own `RepositoryScanStatus` before matching it against the planned
-repository identity in `scan-manifest.json` and writing `scan-summary.json`.
-Missing, malformed, duplicate, or identity-mismatched evidence remains a
-coverage gap, not a silent pass.
+The upstream status contract has no schema-version field and uses the exact keys
+`result`, `repository-id` (string), `repository`, `default-branch`, and
+`commit-sha`. Its result is `pass`, `findings`, `incomplete`, or `error`.
+The organization summary job invokes the same `segh audit` executable route in
+reconciliation mode. It treats every downloaded artifact as untrusted input,
+rejects malformed or unsupported status values, detects missing or duplicate
+status files, and requires repository ID, name, default branch, and commit SHA
+to match the manifest exactly. It then writes deterministic aggregate counts to
+`scan-summary.json` and a bounded `scan-report.md`.
 
 Governance artifacts remain `inventory.json`, `audit.json`, and `report.md`.
-Source scan planning, per-repository reports, `scan-summary.json`, and the
-bounded `scan-report.md` are separate private artifacts retained for 14 days on
-success and failure.
+Source scan planning, repository reports, `scan-summary.json`, and the bounded
+`scan-report.md` remain separate private artifacts retained for 14 days on
+success and failure. The hidden `scan-plan` and `scan-summary` commands were
+removed without aliases.
+
+The upstream policy rejects target-owned Zizmor ignores, unapproved ShellCheck
+directives, expression-valued shell selection, and Checkov inline suppressions.
+It scans supported composite-action shell blocks and never runs repository
+scripts, dependency installation, package lifecycle hooks, Terraform
+initialization, LFS hooks, or submodule commands. Tracked symlinks are removed;
+LFS pointers and submodule gitlinks produce incomplete evidence.
 
 ## Scope boundary
 
 `segh` has no workflow that scans pull requests or merge queues and no code that
 publishes pull-request security checks. Those controls are outside this
 repository's responsibility. The periodic organization scan described above is
-unchanged and remains the only source-scanning path maintained here.
+the only source-scanning path maintained here.
 
-Before merging the removal, an administrator must delete the obsolete
-organization-ruleset required-workflow entry and branch-protection or ruleset
-required-check entries for `PR security / scan` and
-`segh source scan (head commit)`. Otherwise, subsequent pull requests can remain
-blocked while waiting for checks that no longer have a workflow to publish
-them.
-
-After the merge, an administrator should delete the remaining external GitHub
-configuration used only by the retired pull-request publisher: the dedicated
-Checks-write App or installation, its protected environment, and associated
-secrets and variables. Repository code must not attempt to modify those
-organization settings.
+Administrators should remove obsolete organization-ruleset required-workflow
+entries and branch-protection or ruleset required-check entries for
+`PR security / scan` and `segh source scan (head commit)` if they remain. They
+should also delete the retired publisher's dedicated Checks-write App or
+installation, protected environment, and associated secrets or variables when
+nothing else uses them. Repository code does not modify those organization
+settings.
