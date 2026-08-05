@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +38,39 @@ func TestCollectBranchGovernanceCombinesEffectiveRuleResults(t *testing.T) {
 		{"type":"non_fast_forward","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1},
 		{"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":2}
 	]`)
+	assertGovernance(t, repo, true, true, true, true, true)
+}
+
+func TestCollectBranchGovernanceFetchesAllPages(t *testing.T) {
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/repos/org/repo/rules/branches/main" {
+			t.Fatalf("unexpected path = %s", request.URL.Path)
+		}
+		if perPage := request.URL.Query().Get("per_page"); perPage != "100" {
+			t.Fatalf("per_page = %q, want 100", perPage)
+		}
+		switch page := request.URL.Query().Get("page"); page {
+		case "1":
+			rules := make([]map[string]string, 100)
+			for index := range rules {
+				rules[index] = map[string]string{"type": "creation"}
+			}
+			if err := json.NewEncoder(writer).Encode(rules); err != nil {
+				t.Fatal(err)
+			}
+		case "2":
+			_, _ = io.WriteString(writer, `[
+				{"type":"pull_request"},
+				{"type":"workflows"},
+				{"type":"non_fast_forward"},
+				{"type":"deletion"}
+			]`)
+		default:
+			t.Fatalf("unexpected page = %q", page)
+		}
+	})
+	var repo model.Repository
+	service.collectBranchGovernance(context.Background(), "/repos/org/repo", "main", &repo)
 	assertGovernance(t, repo, true, true, true, true, true)
 }
 
