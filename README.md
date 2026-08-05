@@ -20,7 +20,7 @@ Scorecard JSON is always retained. Its aggregate score is not a gate; only failu
 
 Use `.github/workflows/organization-scan.yml` from a **private control repository**. This is mandatory because GitHub Actions artifacts inherit the visibility of the workflow repository and can contain sensitive findings.
 
-Configure a GitHub App with only repository metadata and contents read access, install it on the authoritative repository selection, and add these secrets to the private control repository:
+Configure a GitHub App with read access to repository metadata, contents, issues, pull requests, and checks. Install it on the authoritative repository selection, then add these secrets to the private control repository:
 
 - `SEGH_READ_APP_ID`
 - `SEGH_READ_APP_PRIVATE_KEY`

@@ -10,7 +10,7 @@ Report vulnerabilities through GitHub private vulnerability reporting for this r
 
 ## Operational requirements
 
-Organization scans must run from a private control repository. Store `SEGH_READ_APP_PRIVATE_KEY` only as an Actions secret and grant the GitHub App no more than repository metadata and contents read access.
+Organization scans must run from a private control repository. Store `SEGH_READ_APP_PRIVATE_KEY` only as an Actions secret and grant the GitHub App only read access to repository metadata, contents, issues, pull requests, and checks.
 
 The workflow treats selected repositories as untrusted input. It resolves immutable commits, uses repository-scoped read-only tokens, disables credential persistence, Git LFS, and submodules, removes tracked symlinks, rejects incomplete content, ignores target-owned scanner configuration where supported, and never executes target repository code.
 

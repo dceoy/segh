@@ -161,8 +161,11 @@ jobs:
           private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
           owner: ${{ matrix.owner }}
           repositories: ${{ matrix.name }}
+          permission-checks: read
           permission-contents: read
+          permission-issues: read
           permission-metadata: read
+          permission-pull-requests: read
       - name: Check out untrusted target revision
         id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
