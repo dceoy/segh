@@ -25,7 +25,7 @@ unfinished migration work:
 | Boundary | Minimal retained contract | Deliberately outside the boundary |
 | --- | --- | --- |
 | Bounded GitHub REST client | Read-only `GET`; fixed GitHub.com endpoint; response and error-body bounds; bounded retries and backoff; primary and secondary rate-limit handling; cancellable waits and request deadlines; redirect rejection; token redaction; bounded diagnostics; the small error classifications used by current callers | General repository abstractions, generated service layers, GraphQL, credential discovery, persistent caches, telemetry, background processing, and SDK compatibility adapters |
-| Manifest-aware source-scan reconciler | Validate the immutable manifest; discover `status.json`; match repository ID, full name, default branch, and commit SHA exactly; reject missing, duplicate, malformed, unexpected, or mismatched evidence; produce deterministic counts and bounded operator output; preserve findings, incomplete coverage, and runtime errors as distinct outcomes | Repository checkout, scanner execution, repository-level classification, artifact publication, generic aggregation frameworks, and upstream ownership of organization identity reconciliation |
+| Manifest-aware source-scan reconciler | Validate the immutable manifest; discover `status.json`; match repository ID, full name, default branch, and commit SHA exactly; reject missing, duplicate, malformed, unexpected, or mismatched evidence; produce deterministic counts and render at most 50 error entries; preserve findings, incomplete coverage, and runtime errors as distinct outcomes | Repository checkout, scanner execution, repository-level classification, artifact publication, generic aggregation frameworks, and upstream ownership of organization identity reconciliation |
 
 These boundaries may remain while their callers, data fields, comments, tests,
 and surrounding compatibility surface continue to be deleted or simplified.
@@ -46,7 +46,7 @@ implementation, or unmeasured SDK substitution.
 | Configuration validation, inventory collection, repository selection | `segh audit` governance path |
 | Default-branch SHA resolution, deterministic target ordering, matrix bound, `scan-manifest.json` | `segh audit` organization controller |
 | Target token, checkout, preflight, scanners, repository classification, `status.json` | pinned `gha-for-devops` workflow |
-| Artifact discovery, planned-identity matching, missing/duplicate/malformed evidence, aggregate counts and bounded summary | `segh audit` organization reconciliation mode |
+| Artifact discovery, planned-identity matching, missing/duplicate/malformed evidence, aggregate counts and 50-entry summary | `segh audit` organization reconciliation mode |
 
 ## Trust boundaries
 
