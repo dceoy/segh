@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       repository_limit:
-        description: Maximum number of GitHub App-selected repositories to scan
+        description: Maximum accepted GitHub App repository selection; larger selections fail closed
         required: false
         type: string
         default: "50"
@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       repository_limit:
-        description: Maximum number of GitHub App-selected repositories to scan
+        description: Maximum accepted GitHub App repository selection; larger selections fail closed
         required: false
         type: string
         default: "50"
@@ -78,9 +78,13 @@ jobs:
           [[ "$REPOSITORY_LIMIT" =~ ^[0-9]+$ ]] && ((REPOSITORY_LIMIT >= 1 && REPOSITORY_LIMIT <= 100))
           [[ "$MAX_PARALLEL" =~ ^[0-9]+$ ]] && ((MAX_PARALLEL >= 1 && MAX_PARALLEL <= 10))
           gh api --paginate --slurp /installation/repositories > repositories.json
-          jq --argjson limit "$REPOSITORY_LIMIT" \
-            '[.[].repositories[] | select(.disabled != true)] | unique_by(.id) | sort_by(.full_name) | .[:$limit]' \
+          jq '[.[].repositories[] | select(.disabled != true)] | unique_by(.id) | sort_by(.full_name)' \
             repositories.json > selected.json
+          selected_count=$(jq 'length' selected.json)
+          if ((selected_count > REPOSITORY_LIMIT)); then
+            echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$REPOSITORY_LIMIT; refusing incomplete coverage."
+            exit 1
+          fi
           : > targets.jsonl
           while IFS= read -r repository; do
             id=$(jq -r '.id' <<<"$repository")
@@ -188,7 +192,14 @@ jobs:
       - name: Run zizmor
         if: always() && steps.preflight.outcome == 'success'
         run: |
-          mapfile -d '' files < <(git -C _target ls-files -z '.github/workflows/*.yml' '.github/workflows/*.yaml' ':(glob)**/action.yml' ':(glob)**/action.yaml')
+          files=()
+          while IFS= read -r -d '' entry; do
+            mode=${entry%% *}
+            case "$mode" in
+              100644|100755) files+=("${entry#*$'\t'}") ;;
+            esac
+          done < <(git -C _target ls-files --stage -z -- '.github/workflows/*.yml' \
+            '.github/workflows/*.yaml' ':(glob)**/action.yml' ':(glob)**/action.yaml')
           if ((${#files[@]} == 0)); then printf '[]\n' > results/zizmor.json; exit 0; fi
           (cd _target && zizmor --offline --no-config --no-ignores --strict-collection --persona regular \
             --min-severity medium --min-confidence high --format json "${files[@]}") \
@@ -196,7 +207,13 @@ jobs:
       - name: Run actionlint
         if: always() && steps.preflight.outcome == 'success'
         run: |
-          mapfile -d '' files < <(git -C _target ls-files -z '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          files=()
+          while IFS= read -r -d '' entry; do
+            mode=${entry%% *}
+            case "$mode" in
+              100644|100755) files+=("${entry#*$'\t'}") ;;
+            esac
+          done < <(git -C _target ls-files --stage -z -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
           if ((${#files[@]} == 0)); then : > results/actionlint.jsonl; exit 0; fi
           (cd _target && SHELLCHECK_OPTS='--rcfile=/dev/null' actionlint --no-color --config-file /dev/null \
             --shellcheck shellcheck --format '{{json .}}' "${files[@]}") \
@@ -204,7 +221,13 @@ jobs:
       - name: Run ShellCheck
         if: always() && steps.preflight.outcome == 'success'
         run: |
-          mapfile -d '' files < <(git -C _target ls-files -z '*.sh' '*.bash' '*.bats')
+          files=()
+          while IFS= read -r -d '' entry; do
+            mode=${entry%% *}
+            case "$mode" in
+              100644|100755) files+=("${entry#*$'\t'}") ;;
+            esac
+          done < <(git -C _target ls-files --stage -z -- '*.sh' '*.bash' '*.bats')
           if ((${#files[@]} == 0)); then printf '[]\n' > results/shellcheck.json; exit 0; fi
           (cd _target && shellcheck --color=never --format=json1 --rcfile /dev/null --severity=style -- "${files[@]}") \
             > results/shellcheck.json 2> results/shellcheck.log
