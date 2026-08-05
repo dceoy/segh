@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +15,8 @@ import (
 )
 
 const (
+	githubHostname      = "github.com"
+	githubAPIBaseURL    = "https://api.github.com"
 	maxResponseBytes    = 64 << 20
 	maxErrorBytes       = 64 << 10
 	maxAPIAttempts      = 4
@@ -32,7 +33,6 @@ type API interface {
 type Client struct {
 	httpClient    *http.Client
 	baseURL       string
-	hostname      string
 	token         string
 	responseLimit int64
 	wait          func(context.Context, time.Duration) error
@@ -57,11 +57,6 @@ func NewClient() (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("GH_TOKEN is required")
 	}
-	hostname := effectiveHostname()
-	baseURL, err := apiBaseURL(hostname)
-	if err != nil {
-		return nil, err
-	}
 	httpClient := &http.Client{
 		Transport: http.DefaultTransport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -70,8 +65,7 @@ func NewClient() (*Client, error) {
 	}
 	return &Client{
 		httpClient:    httpClient,
-		baseURL:       baseURL,
-		hostname:      hostname,
+		baseURL:       githubAPIBaseURL,
 		token:         token,
 		responseLimit: maxResponseBytes,
 		wait:          waitForRetry,
@@ -96,43 +90,8 @@ func (c *Client) Get(ctx context.Context, apiPath string, out any) error {
 	}
 }
 
-func (c *Client) Hostname() string {
-	return c.hostname
-}
-
-func effectiveHostname() string {
-	hostname := strings.TrimSpace(os.Getenv("GH_HOST"))
-	if hostname == "" {
-		return "github.com"
-	}
-	return strings.ToLower(hostname)
-}
-
-func apiBaseURL(hostname string) (string, error) {
-	parsed, err := url.Parse("https://" + hostname)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Path != "" ||
-		parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", fmt.Errorf("GH_HOST must be a hostname, optionally with a port")
-	}
-	host := parsed.Hostname()
-	port := parsed.Port()
-	switch {
-	case host == "github.com":
-		host = "api.github.com"
-	case strings.HasSuffix(host, ".ghe.com"):
-		host = "api." + strings.TrimPrefix(host, "api.")
-	default:
-		if port != "" {
-			host = net.JoinHostPort(host, port)
-		} else if strings.Contains(host, ":") {
-			host = "[" + host + "]"
-		}
-		return "https://" + host + "/api/v3", nil
-	}
-	if port != "" {
-		host = net.JoinHostPort(host, port)
-	}
-	return "https://" + host, nil
+func (*Client) Hostname() string {
+	return githubHostname
 }
 
 func (c *Client) runOnce(ctx context.Context, apiPath string, out any) error {

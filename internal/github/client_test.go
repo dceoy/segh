@@ -13,6 +13,33 @@ import (
 	"time"
 )
 
+func TestNewClientUsesGitHubDotComEndpoint(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token")
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.httpClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if got, want := request.URL.String(), githubAPIBaseURL+"/meta"; got != want {
+			t.Fatalf("request URL = %q, want %q", got, want)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+		}, nil
+	})
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.Get(context.Background(), "/meta", &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || client.Hostname() != githubHostname {
+		t.Fatalf("response = %#v, hostname = %q", response, client.Hostname())
+	}
+}
+
 func TestClientSendsAuthenticatedVersionedRequest(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.RequestURI() != "/orgs/org/repos?per_page=100&page=1" {
@@ -25,62 +52,33 @@ func TestClientSendsAuthenticatedVersionedRequest(t *testing.T) {
 			t.Errorf("X-GitHub-Api-Version = %q", got)
 		}
 		_, _ = io.WriteString(writer, `[{"id":1,"full_name":"org/repo"}]`)
-	}), "github.example")
+	}))
 	var repositories []apiRepository
 	if err := client.Get(
 		context.Background(), "/orgs/org/repos?per_page=100&page=1", &repositories,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if client.Hostname() != "github.example" || len(repositories) != 1 {
+	if client.Hostname() != githubHostname || len(repositories) != 1 {
 		t.Fatalf("hostname = %q, repositories = %#v", client.Hostname(), repositories)
 	}
 }
 
-func TestAPIBaseURLSupportsGitHubAndEnterpriseHosts(t *testing.T) {
-	tests := []struct {
-		host string
-		want string
-	}{
-		{"github.com", "https://api.github.com"},
-		{"octocorp.ghe.com", "https://api.octocorp.ghe.com"},
-		{"api.octocorp.ghe.com", "https://api.octocorp.ghe.com"},
-		{"github.example", "https://github.example/api/v3"},
-		{"github.example:8443", "https://github.example:8443/api/v3"},
-		{"[2001:db8::1]", "https://[2001:db8::1]/api/v3"},
-	}
-	for _, test := range tests {
-		t.Run(test.host, func(t *testing.T) {
-			got, err := apiBaseURL(test.host)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != test.want {
-				t.Fatalf("apiBaseURL() = %q, want %q", got, test.want)
-			}
-		})
-	}
-	for _, invalid := range []string{"https://github.example", "github.example/path", "user@github.example"} {
-		if _, err := apiBaseURL(invalid); err == nil {
-			t.Errorf("apiBaseURL(%q) succeeded", invalid)
+func TestClientRejectsMalformedRequestPaths(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("malformed request reached transport")
+	}))
+	for _, apiPath := range []string{"relative", "//other.example/path", "/bad%zz"} {
+		if err := client.Get(context.Background(), apiPath, &struct{}{}); err == nil {
+			t.Errorf("Get(%q) succeeded", apiPath)
 		}
-	}
-}
-
-func TestClientSuppressesUnusedResponseBodiesWithoutSizeLimit(t *testing.T) {
-	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(writer, strings.Repeat("x", 17))
-	}), "github.com")
-	client.responseLimit = 16
-	if err := client.Get(context.Background(), "/large", nil); err != nil {
-		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestClientBoundsDecodedResponseBodies(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(writer, strings.Repeat("x", 17))
-	}), "github.com")
+	}))
 	client.responseLimit = 16
 	var out []byte
 	err := client.Get(context.Background(), "/large", &out)
@@ -93,7 +91,7 @@ func TestClientMapsAndSanitizesHTTPError(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(writer, `{"message":"missing test-token"}`)
-	}), "github.com")
+	}))
 	err := client.Get(context.Background(), "/missing", &struct{}{})
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
@@ -108,25 +106,63 @@ func TestClientMapsAndSanitizesHTTPError(t *testing.T) {
 	}
 }
 
-func TestClientRetriesTransientErrors(t *testing.T) {
-	var requests atomic.Int32
+func TestClientBoundsErrorBodies(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		if requests.Add(1) == 1 {
-			writer.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = io.WriteString(writer, `{"message":"temporarily unavailable"}`)
-			return
-		}
-		_, _ = io.WriteString(writer, `{"ok":true}`)
-	}), "github.com")
-	client.wait = func(context.Context, time.Duration) error { return nil }
-	var response struct {
-		OK bool `json:"ok"`
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(writer, strings.Repeat("x", maxErrorBytes+1024))
+	}))
+	err := client.Get(context.Background(), "/large-error", &struct{}{})
+	if err == nil || len(err.Error()) > 600 {
+		t.Fatalf("unbounded error = %v", err)
 	}
-	if err := client.Get(context.Background(), "/transient", &response); err != nil {
-		t.Fatal(err)
+}
+
+func TestClientRetriesRetryableHTTPResponses(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		headers http.Header
+		body    string
+	}{
+		{name: "request timeout", status: http.StatusRequestTimeout},
+		{name: "too many requests", status: http.StatusTooManyRequests},
+		{name: "transient server failure", status: http.StatusBadGateway},
+		{
+			name: "primary rate limit", status: http.StatusForbidden,
+			headers: http.Header{"X-RateLimit-Remaining": {"0"}},
+		},
+		{
+			name: "secondary rate limit", status: http.StatusForbidden,
+			body: `{"message":"secondary rate limit exceeded"}`,
+		},
 	}
-	if requests.Load() != 2 || !response.OK {
-		t.Fatalf("requests = %d, response = %#v", requests.Load(), response)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requests atomic.Int32
+			client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				if requests.Add(1) == 1 {
+					for name, values := range test.headers {
+						for _, value := range values {
+							writer.Header().Add(name, value)
+						}
+					}
+					writer.WriteHeader(test.status)
+					_, _ = io.WriteString(writer, test.body)
+					return
+				}
+				_, _ = io.WriteString(writer, `{"ok":true}`)
+			}))
+			client.wait = func(context.Context, time.Duration) error { return nil }
+			var response struct {
+				OK bool `json:"ok"`
+			}
+			if err := client.Get(context.Background(), "/retryable", &response); err != nil {
+				t.Fatal(err)
+			}
+			if requests.Load() != 2 || !response.OK {
+				t.Fatalf("requests = %d, response = %#v", requests.Load(), response)
+			}
+		})
 	}
 }
 
@@ -148,7 +184,6 @@ func TestClientRetriesBodyReadFailureForDecodedResponse(t *testing.T) {
 			}, nil
 		})},
 		baseURL:       "https://api.github.test",
-		hostname:      "github.com",
 		token:         "test-token",
 		responseLimit: maxResponseBytes,
 		wait:          func(context.Context, time.Duration) error { return nil },
@@ -161,37 +196,6 @@ func TestClientRetriesBodyReadFailureForDecodedResponse(t *testing.T) {
 	}
 	if attempts.Load() != 2 || !response.OK {
 		t.Fatalf("attempts = %d, response = %#v", attempts.Load(), response)
-	}
-}
-
-func TestClientRetriesBodyReadFailureForStatusOnlyProbe(t *testing.T) {
-	var attempts atomic.Int32
-	client := &Client{
-		httpClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			if attempts.Add(1) == 1 {
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Header:     make(http.Header),
-					Body:       &partialThenErrorBody{data: []byte("partial")},
-				}, nil
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader("")),
-			}, nil
-		})},
-		baseURL:       "https://api.github.test",
-		hostname:      "github.com",
-		token:         "test-token",
-		responseLimit: maxResponseBytes,
-		wait:          func(context.Context, time.Duration) error { return nil },
-	}
-	if err := client.Get(context.Background(), "/flaky-probe", nil); err != nil {
-		t.Fatal(err)
-	}
-	if attempts.Load() != 2 {
-		t.Fatalf("attempts = %d", attempts.Load())
 	}
 }
 
@@ -218,7 +222,7 @@ func TestClientDoesNotRetryPermanentErrors(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		writer.WriteHeader(http.StatusUnauthorized)
-	}), "github.com")
+	}))
 	client.wait = func(context.Context, time.Duration) error {
 		t.Fatal("permanent failures must not wait")
 		return nil
@@ -267,7 +271,7 @@ func TestRetryDelayUsesRateLimitFloorAndServerHint(t *testing.T) {
 func TestClientHonorsContextCancellation(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("canceled request reached the server")
-	}), "github.com")
+	}))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := client.Get(ctx, "/canceled", &struct{}{}); !errors.Is(err, context.Canceled) {
@@ -282,7 +286,7 @@ func TestClientRequiresExternalToken(t *testing.T) {
 	}
 }
 
-func newTestClient(t *testing.T, handler http.Handler, hostname string) *Client {
+func newTestClient(t *testing.T, handler http.Handler) *Client {
 	t.Helper()
 	return &Client{
 		httpClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -294,7 +298,6 @@ func newTestClient(t *testing.T, handler http.Handler, hostname string) *Client 
 			return recorder.Result(), nil
 		})},
 		baseURL:       "https://api.github.test",
-		hostname:      hostname,
 		token:         "test-token",
 		responseLimit: maxResponseBytes,
 		wait:          waitForRetry,
@@ -324,7 +327,7 @@ func TestClientRetriesMalformedResponseBodyAndSurfacesRetryableAPIError(t *testi
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		_, _ = io.WriteString(writer, `{"ok": tru`) // truncated, invalid JSON on every attempt
-	}), "github.com")
+	}))
 	client.wait = func(context.Context, time.Duration) error { return nil }
 	var response struct {
 		OK bool `json:"ok"`

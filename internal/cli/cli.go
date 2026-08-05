@@ -286,8 +286,8 @@ When source scanning is enabled, the same audit execution also writes an
 immutable source-scan manifest. The control workflow later reconciles the
 identity-bound repository artifacts through the audit command.
 
-Host selection:
-  Set GH_HOST for GHE.com or GitHub Enterprise Server; the default is github.com.
+Platform:
+  GitHub.com is the only supported runtime platform.
 
 Authentication:
   Supply GH_TOKEN and SEGH_GITHUB_INSTALLATION_ID from the same App-token issuer.
