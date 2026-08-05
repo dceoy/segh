@@ -56,7 +56,6 @@ type Repository struct {
 	DependabotAlerts           Observed[bool]   `json:"dependabot_alerts"`
 	DependabotSecurityUpdates  Observed[bool]   `json:"dependabot_security_updates"`
 	Ruleset                    Observed[bool]   `json:"ruleset"`
-	BranchProtection           Observed[bool]   `json:"branch_protection"`
 	RequiredPullRequests       Observed[bool]   `json:"required_pull_requests"`
 	RequiredChecks             Observed[bool]   `json:"required_checks"`
 	ForcePushRestricted        Observed[bool]   `json:"force_push_restricted"`

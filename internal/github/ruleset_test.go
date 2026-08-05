@@ -1,6 +1,9 @@
 package github
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -8,104 +11,153 @@ import (
 	"github.com/dceoy/segh/internal/model"
 )
 
-func TestEnrichTreatsRulesetOnlyRepositoryAsProtected(t *testing.T) {
+func TestCollectBranchGovernanceFromApplicableOrganizationRuleset(t *testing.T) {
+	repo, _ := collectBranchGovernanceForTest(t, http.StatusOK, `[
+		{"type":"pull_request","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1},
+		{"type":"workflows","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1},
+		{"type":"non_fast_forward","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1},
+		{"type":"deletion","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1}
+	]`)
+	assertGovernance(t, repo, true, true, true, true, true)
+}
+
+func TestCollectBranchGovernanceFromApplicableRepositoryRuleset(t *testing.T) {
+	repo, _ := collectBranchGovernanceForTest(t, http.StatusOK, `[
+		{"type":"pull_request","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":2},
+		{"type":"required_status_checks","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":2},
+		{"type":"non_fast_forward","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":2},
+		{"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":2}
+	]`)
+	assertGovernance(t, repo, true, true, true, true, true)
+}
+
+func TestCollectBranchGovernanceCombinesEffectiveRuleResults(t *testing.T) {
+	repo, _ := collectBranchGovernanceForTest(t, http.StatusOK, `[
+		{"type":"pull_request","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1},
+		{"type":"required_status_checks","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":2},
+		{"type":"non_fast_forward","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1},
+		{"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":2}
+	]`)
+	assertGovernance(t, repo, true, true, true, true, true)
+}
+
+func TestCollectBranchGovernanceFetchesAllPages(t *testing.T) {
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/repos/org/repo/rules/branches/main":
+		if request.URL.Path != "/repos/org/repo/rules/branches/main" {
+			t.Fatalf("unexpected path = %s", request.URL.Path)
+		}
+		if perPage := request.URL.Query().Get("per_page"); perPage != "100" {
+			t.Fatalf("per_page = %q, want 100", perPage)
+		}
+		switch page := request.URL.Query().Get("page"); page {
+		case "1":
+			rules := make([]map[string]string, 100)
+			for index := range rules {
+				rules[index] = map[string]string{"type": "creation"}
+			}
+			if err := json.NewEncoder(writer).Encode(rules); err != nil {
+				t.Fatal(err)
+			}
+		case "2":
 			_, _ = io.WriteString(writer, `[
-				{"type":"pull_request","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1},
-				{"type":"required_status_checks","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1},
-				{"type":"non_fast_forward","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1},
-				{"type":"deletion","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":1}
+				{"type":"pull_request"},
+				{"type":"workflows"},
+				{"type":"non_fast_forward"},
+				{"type":"deletion"}
 			]`)
-		case "/repos/org/repo/branches/main/protection":
-			writer.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(writer, `{"message":"Branch not protected"}`)
 		default:
-			writer.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
+			t.Fatalf("unexpected page = %q", page)
 		}
 	})
-	repo := enrichForTest(service, apiRepository{FullName: "org/repo", DefaultBranch: "main"})
-	for name, observed := range map[string]model.Observed[bool]{
+	var repo model.Repository
+	service.collectBranchGovernance(context.Background(), "/repos/org/repo", "main", &repo)
+	assertGovernance(t, repo, true, true, true, true, true)
+}
+
+func TestCollectBranchGovernanceTreatsSelectorExclusionAsNoEffectiveRules(t *testing.T) {
+	repo, _ := collectBranchGovernanceForTest(t, http.StatusOK, `[]`)
+	assertGovernance(t, repo, false, false, false, false, false)
+}
+
+func TestCollectBranchGovernanceKeepsMissingControlAsAvailableFalse(t *testing.T) {
+	repo, _ := collectBranchGovernanceForTest(t, http.StatusOK, `[{"type":"deletion"}]`)
+	assertGovernance(t, repo, true, false, false, false, true)
+}
+
+func TestCollectBranchGovernanceFailsClosedOnPermissionErrors(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			repo, service := collectBranchGovernanceForTest(t, status, `{"message":"permission denied"}`)
+			for name, observed := range governanceObservations(repo) {
+				if observed.State != model.Unknown || observed.Source != "rules_branches" {
+					t.Fatalf("%s = %#v, want unknown ruleset evidence", name, observed)
+				}
+			}
+			if service.permissionErr == nil || service.permissionErr.StatusCode != status {
+				t.Fatalf("permissionErr = %#v, want %d", service.permissionErr, status)
+			}
+		})
+	}
+}
+
+func TestCollectBranchGovernancePreservesUnsupportedEvidence(t *testing.T) {
+	repo, _ := collectBranchGovernanceForTest(t, http.StatusNotFound, `{"message":"unsupported"}`)
+	for name, observed := range governanceObservations(repo) {
+		if observed.State != model.Unsupported {
+			t.Fatalf("%s = %#v, want unsupported", name, observed)
+		}
+	}
+}
+
+func TestCollectBranchGovernanceRejectsMalformedEvidence(t *testing.T) {
+	for _, body := range []string{`null`, `[{"ruleset_id":1}]`} {
+		t.Run(body, func(t *testing.T) {
+			repo, _ := collectBranchGovernanceForTest(t, http.StatusOK, body)
+			for name, observed := range governanceObservations(repo) {
+				if observed.State != model.Unknown || observed.Source != "rules_branches" {
+					t.Fatalf("%s = %#v, want unknown malformed evidence", name, observed)
+				}
+			}
+		})
+	}
+}
+
+func collectBranchGovernanceForTest(t *testing.T, status int, body string) (model.Repository, *InventoryService) {
+	t.Helper()
+	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/repos/org/repo/rules/branches/main" {
+			t.Fatalf("unexpected path = %s", request.URL.Path)
+		}
+		writer.WriteHeader(status)
+		_, _ = io.WriteString(writer, body)
+	})
+	var repo model.Repository
+	service.collectBranchGovernance(context.Background(), "/repos/org/repo", "main", &repo)
+	return repo, service
+}
+
+func assertGovernance(t *testing.T, repo model.Repository, ruleset, pullRequest, checks, forcePush, deletion bool) {
+	t.Helper()
+	want := map[string]bool{
+		"ruleset":                ruleset,
+		"required_pull_requests": pullRequest,
+		"required_checks":        checks,
+		"force_push_restricted":  forcePush,
+		"deletion_restricted":    deletion,
+	}
+	for name, observed := range governanceObservations(repo) {
+		if observed.State != model.Available || observed.Value != want[name] || observed.Source != "rules_branches" {
+			t.Fatalf("%s = %#v, want available/%v from rules_branches", name, observed, want[name])
+		}
+	}
+}
+
+func governanceObservations(repo model.Repository) map[string]model.Observed[bool] {
+	return map[string]model.Observed[bool]{
 		"ruleset":                repo.Ruleset,
-		"branch_protection":      repo.BranchProtection,
 		"required_pull_requests": repo.RequiredPullRequests,
 		"required_checks":        repo.RequiredChecks,
 		"force_push_restricted":  repo.ForcePushRestricted,
 		"deletion_restricted":    repo.DeletionRestricted,
-	} {
-		if observed.State != model.Available || !observed.Value {
-			t.Fatalf("%s = %#v, want Available/true (org ruleset alone must count as protection)", name, observed)
-		}
-	}
-}
-
-func TestEnrichDoesNotTreatUnrelatedRulesetAsProtection(t *testing.T) {
-	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/repos/org/repo/rules/branches/main":
-			// A ruleset exists in the org, but none of its rules apply to this branch/repo.
-			_, _ = io.WriteString(writer, `[]`)
-		case "/repos/org/repo/branches/main/protection":
-			writer.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(writer, `{"message":"Branch not protected"}`)
-		default:
-			writer.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(writer, `{"message":"Not Found"}`)
-		}
-	})
-	repo := enrichForTest(service, apiRepository{FullName: "org/repo", DefaultBranch: "main"})
-	if repo.Ruleset.State != model.Available || repo.Ruleset.Value {
-		t.Fatalf("ruleset = %#v, want Available/false", repo.Ruleset)
-	}
-	if repo.RequiredPullRequests.State != model.Available || repo.RequiredPullRequests.Value {
-		t.Fatalf("required_pull_requests = %#v, want Available/false", repo.RequiredPullRequests)
-	}
-}
-
-func TestMergeControlPrefersActiveRulesetRule(t *testing.T) {
-	classic := model.Observed[bool]{State: model.Available, Value: false, Source: "branch_protection"}
-	got := mergeControl(nil, true, classic)
-	if got.State != model.Available || !got.Value {
-		t.Fatalf("got = %#v, want Available/true", got)
-	}
-}
-
-func TestMergeControlFallsBackToClassicWhenRuleAbsent(t *testing.T) {
-	classic := model.Observed[bool]{State: model.Available, Value: true, Source: "branch_protection"}
-	got := mergeControl(nil, false, classic)
-	if got != classic {
-		t.Fatalf("got = %#v, want classic %#v", got, classic)
-	}
-	classicFalse := model.Observed[bool]{State: model.Available, Value: false, Source: "branch_protection"}
-	got = mergeControl(nil, false, classicFalse)
-	if got != classicFalse {
-		t.Fatalf("got = %#v, want classic %#v", got, classicFalse)
-	}
-}
-
-func TestMergeControlUsesClassicWhenRulesEvaluationFails(t *testing.T) {
-	classicTrue := model.Observed[bool]{State: model.Available, Value: true, Source: "branch_protection"}
-	got := mergeControl(&APIError{StatusCode: 500, Message: "boom"}, false, classicTrue)
-	if got != classicTrue {
-		t.Fatalf("got = %#v, want classic (already confirmed true) %#v", got, classicTrue)
-	}
-}
-
-func TestMergeControlIsUnknownWhenRulesFailAndClassicIsNotConfirmedTrue(t *testing.T) {
-	classicFalse := model.Observed[bool]{State: model.Available, Value: false, Source: "branch_protection"}
-	got := mergeControl(&APIError{StatusCode: 500, Message: "boom"}, false, classicFalse)
-	if got.State == model.Available && !got.Value {
-		t.Fatalf("got = %#v, must not claim confirmed-false when ruleset evaluation failed", got)
-	}
-	if got.State != model.Unknown {
-		t.Fatalf("got = %#v, want Unknown", got)
-	}
-
-	classicUnknown := model.Observed[bool]{State: model.Unknown, Source: "branch_protection"}
-	got = mergeControl(&APIError{StatusCode: 403, Message: "forbidden"}, false, classicUnknown)
-	if got.State != model.Unknown {
-		t.Fatalf("got = %#v, want Unknown", got)
 	}
 }

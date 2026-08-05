@@ -86,7 +86,6 @@
           "additionalProperties": false,
           "properties": {
             "require_ruleset": { "type": "boolean" },
-            "require_branch_protection": { "type": "boolean" },
             "require_pull_request": { "type": "boolean" },
             "require_required_checks": { "type": "boolean" },
             "restrict_force_pushes": { "type": "boolean" },
@@ -162,10 +161,6 @@
         {
           "required": ["require_ruleset"],
           "properties": { "require_ruleset": { "const": true } }
-        },
-        {
-          "required": ["require_branch_protection"],
-          "properties": { "require_branch_protection": { "const": true } }
         },
         {
           "required": ["require_pull_request"],

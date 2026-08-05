@@ -75,7 +75,7 @@ selection and accessible count. Selection is limited to archived/disabled/fork
 class exclusions and explicit repository include/exclude lists.
 
 Per-repository inventory covers Actions policy, dependency graph, Dependabot,
-effective rulesets and branch protection, pull-request and status-check
+effective rulesets, pull-request and status-check/workflow
 requirements, force-push/deletion restrictions, and `SECURITY.md`. There are no
 inventory fields for CodeQL, code-scanning alerts, secret scanning, push
 protection, or GitHub Security Configurations.
