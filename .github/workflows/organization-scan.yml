@@ -1,0 +1,224 @@
+---
+name: Organization source scan
+
+on:
+  workflow_call:
+    inputs:
+      repository_limit:
+        description: Maximum number of GitHub App-selected repositories to scan
+        required: false
+        type: string
+        default: "50"
+      max_parallel:
+        description: Maximum number of repository scans to run concurrently
+        required: false
+        type: string
+        default: "4"
+    secrets:
+      SEGH_READ_APP_ID:
+        required: true
+      SEGH_READ_APP_PRIVATE_KEY:
+        required: true
+  workflow_dispatch:
+    inputs:
+      repository_limit:
+        description: Maximum number of GitHub App-selected repositories to scan
+        required: false
+        type: string
+        default: "50"
+      max_parallel:
+        description: Maximum number of repository scans to run concurrently
+        required: false
+        type: string
+        default: "4"
+  schedule:
+    - cron: "17 3 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: segh-organization-source-scan-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: github.event_name != 'schedule' || github.event.repository.private
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+      has_targets: ${{ steps.targets.outputs.has_targets }}
+      max_parallel: ${{ steps.targets.outputs.max_parallel }}
+    steps:
+      - name: Require a private control repository
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          if [[ "$REPOSITORY_PRIVATE" != true ]]; then
+            echo "::error::Run organization scans only from a private control repository so findings remain private."
+            exit 1
+          fi
+      - name: Create read-only GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SEGH_READ_APP_ID }}
+          private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }} # zizmor: ignore[github-app]
+          permission-contents: read
+          permission-metadata: read
+      - name: Resolve immutable scan targets
+        id: targets
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOSITORY_LIMIT: ${{ inputs.repository_limit || '50' }}
+          MAX_PARALLEL: ${{ inputs.max_parallel || '4' }}
+        run: |
+          [[ "$REPOSITORY_LIMIT" =~ ^[0-9]+$ ]] && ((REPOSITORY_LIMIT >= 1 && REPOSITORY_LIMIT <= 100))
+          [[ "$MAX_PARALLEL" =~ ^[0-9]+$ ]] && ((MAX_PARALLEL >= 1 && MAX_PARALLEL <= 10))
+          gh api --paginate --slurp /installation/repositories > repositories.json
+          jq --argjson limit "$REPOSITORY_LIMIT" \
+            '[.[].repositories[] | select(.disabled != true)] | unique_by(.id) | sort_by(.full_name) | .[:$limit]' \
+            repositories.json > selected.json
+          : > targets.jsonl
+          while IFS= read -r repository; do
+            id=$(jq -r '.id' <<<"$repository")
+            full_name=$(jq -r '.full_name' <<<"$repository")
+            owner=$(jq -r '.owner.login' <<<"$repository")
+            name=$(jq -r '.name' <<<"$repository")
+            default_branch=$(jq -r '.default_branch // empty' <<<"$repository")
+            commit_sha=''
+            resolution_error=''
+            if [[ -z "$default_branch" ]]; then
+              resolution_error='repository has no default branch'
+            elif ! commit_sha=$(gh api --method GET "repos/$full_name/commits" \
+              -f sha="$default_branch" -f per_page=1 --jq '.[0].sha' 2> resolve.log); then
+              resolution_error=$(<resolve.log)
+            elif [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              resolution_error='default branch did not resolve to a commit SHA'
+              commit_sha=''
+            fi
+            jq -cn --arg id "$id" --arg full_name "$full_name" --arg owner "$owner" \
+              --arg name "$name" --arg default_branch "$default_branch" --arg commit_sha "$commit_sha" \
+              --arg resolution_error "$resolution_error" \
+              '{id, full_name, owner, name, default_branch, commit_sha, resolution_error}' >> targets.jsonl
+          done < <(jq -c '.[]' selected.json)
+          jq -sc '{include: .}' targets.jsonl > matrix.json
+          printf 'matrix=%s\n' "$(jq -c . matrix.json)" >> "$GITHUB_OUTPUT"
+          printf 'has_targets=%s\n' "$(jq -r '.include | length > 0' matrix.json)" >> "$GITHUB_OUTPUT"
+          printf 'max_parallel=%s\n' "$MAX_PARALLEL" >> "$GITHUB_OUTPUT"
+
+  scan:
+    name: Source scan / ${{ matrix.full_name }}
+    needs: plan
+    if: needs.plan.outputs.has_targets == 'true'
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.plan.outputs.max_parallel) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      AQUA_CONFIG: ${{ github.workspace }}/_trusted/aqua.yaml
+    steps:
+      - name: Record immutable target metadata
+        id: target
+        env:
+          REPOSITORY_ID: ${{ matrix.id }}
+          REPOSITORY: ${{ matrix.full_name }}
+          DEFAULT_BRANCH: ${{ matrix.default_branch }}
+          COMMIT_SHA: ${{ matrix.commit_sha }}
+          RESOLUTION_ERROR: ${{ matrix.resolution_error }}
+        run: |
+          mkdir -p results
+          jq -n --arg repository_id "$REPOSITORY_ID" --arg repository "$REPOSITORY" \
+            --arg default_branch "$DEFAULT_BRANCH" --arg commit_sha "$COMMIT_SHA" \
+            --arg resolution_error "$RESOLUTION_ERROR" \
+            '{repository_id, repository, default_branch, commit_sha, resolution_error}' > results/target.json
+          if [[ -n "$RESOLUTION_ERROR" || ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::$REPOSITORY: ${RESOLUTION_ERROR:-invalid immutable commit SHA}"
+            exit 1
+          fi
+      - name: Check out trusted scanner configuration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: _trusted
+          persist-credentials: false
+      - name: Create repository-scoped read-only token
+        id: target-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SEGH_READ_APP_ID }}
+          private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          repositories: ${{ matrix.name }}
+          permission-contents: read
+          permission-metadata: read
+      - name: Check out untrusted target revision
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.full_name }}
+          ref: ${{ matrix.commit_sha }}
+          token: ${{ steps.target-token.outputs.token }}
+          path: _target
+          persist-credentials: false
+          fetch-depth: 1
+          lfs: false
+          submodules: false
+      - name: Install checksum-verified scanners
+        id: tools
+        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
+        with:
+          aqua_version: v2.62.1
+          working_directory: _trusted
+      - name: Validate target content
+        id: preflight
+        run: _trusted/scripts/preflight.sh _target | tee results/preflight.txt
+      - name: Run OpenSSF Scorecard
+        if: always() && steps.preflight.outcome == 'success'
+        env:
+          GITHUB_AUTH_TOKEN: ${{ steps.target-token.outputs.token }}
+        run: scorecard --local=_target --format=json > results/scorecard.json 2> results/scorecard.log
+      - name: Run zizmor
+        if: always() && steps.preflight.outcome == 'success'
+        run: |
+          mapfile -d '' files < <(git -C _target ls-files -z '.github/workflows/*.yml' '.github/workflows/*.yaml' ':(glob)**/action.yml' ':(glob)**/action.yaml')
+          if ((${#files[@]} == 0)); then printf '[]\n' > results/zizmor.json; exit 0; fi
+          (cd _target && zizmor --offline --no-config --no-ignores --strict-collection --persona regular \
+            --min-severity medium --min-confidence high --format json "${files[@]}") \
+            > results/zizmor.json 2> results/zizmor.log
+      - name: Run actionlint
+        if: always() && steps.preflight.outcome == 'success'
+        run: |
+          mapfile -d '' files < <(git -C _target ls-files -z '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          if ((${#files[@]} == 0)); then : > results/actionlint.jsonl; exit 0; fi
+          (cd _target && SHELLCHECK_OPTS='--rcfile=/dev/null' actionlint --no-color --config-file /dev/null \
+            --shellcheck shellcheck --format '{{json .}}' "${files[@]}") \
+            > results/actionlint.jsonl 2> results/actionlint.log
+      - name: Run ShellCheck
+        if: always() && steps.preflight.outcome == 'success'
+        run: |
+          mapfile -d '' files < <(git -C _target ls-files -z '*.sh' '*.bash' '*.bats')
+          if ((${#files[@]} == 0)); then printf '[]\n' > results/shellcheck.json; exit 0; fi
+          (cd _target && shellcheck --color=never --format=json1 --rcfile /dev/null --severity=style -- "${files[@]}") \
+            > results/shellcheck.json 2> results/shellcheck.log
+      - name: Run Trivy
+        if: always() && steps.preflight.outcome == 'success'
+        run: |
+          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners vuln,secret,misconfig \
+            --exit-code 1 --format json --output results/trivy.json --skip-dirs _target/.git \
+            --skip-version-check _target 2> results/trivy.log
+      - name: Retain private raw scanner artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repository-scan-${{ matrix.id }}
+          path: results
+          if-no-files-found: error
+          retention-days: 14

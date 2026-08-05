@@ -1,4 +1,0 @@
-{
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", "local>dceoy/segh:config/renovate-preset"]
-}

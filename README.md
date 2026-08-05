@@ -1,117 +1,80 @@
 # segh
 
-`segh` audits GitHub.com organization governance and periodically scans
-selected default-branch commits. It is designed for private repositories
-without GitHub Code Security or GitHub Secret Protection licenses.
+`segh` is a workflow-only organization source scanner. It runs a small, pinned scanner profile against the immutable default-branch commits of repositories selected by a read-only GitHub App installation.
 
-The supported baseline is:
+The repository intentionally contains no CLI, Go implementation, governance policy engine, report renderer, custom REST client, or source-scan reconciler.
 
-- the CLI inventories GitHub-native organization and repository controls;
-- deterministic policy evaluation produces private governance evidence;
-- periodic source scans resolve immutable default-branch commits;
-- the periodic scan matrix delegates repository scanning to a reviewed,
-  full-SHA-pinned `dceoy/gha-for-devops` reusable workflow;
-- scanner JSON, text, and logs are retained as private Actions artifacts;
-- dependency graph, Dependabot alerts, and Dependabot security updates remain
-  GitHub-native controls; and
-- no scanner result is sent to the GitHub Code Scanning service.
+## Scanner profile
 
-GitHub.com is the only supported runtime platform. The REST API endpoint is
-fixed to `https://api.github.com`; no runtime platform-selection setting or
-API-base rewriting layer is maintained.
+The workflow runs exactly five established tools:
 
-## Quick start
+- OpenSSF Scorecard for informational supply-chain posture evidence;
+- zizmor for GitHub Actions security analysis;
+- actionlint for workflow validation, with ShellCheck integration;
+- ShellCheck for tracked standalone shell files;
+- Trivy for vulnerability, secret, and misconfiguration scanning.
 
-`segh audit --config segh.yaml` is the one operator workflow: configure,
-validate, audit, read the evidence.
+Scorecard JSON is always retained. Its aggregate score is not a gate; only failure to run Scorecard reliably fails the repository scan. Findings from the other scanners use their native exit codes and therefore fail the corresponding matrix job.
 
-```bash
-# 1. Configure
-cp segh.example.yaml segh.yaml
-# edit organization and policies
+## Operation
 
-# 2. Validate offline, no GitHub credentials required
-go build -o bin/segh ./cmd/segh
-bin/segh audit --config segh.yaml --validate-only
+Use `.github/workflows/organization-scan.yml` from a **private control repository**. This is mandatory because GitHub Actions artifacts inherit the visibility of the workflow repository and can contain sensitive findings.
 
-# 3. Audit
-export GH_TOKEN=...
-export SEGH_GITHUB_INSTALLATION_ID=...
-bin/segh audit --config segh.yaml
+Configure a GitHub App with only repository metadata and contents read access, install it on the authoritative repository selection, and add these secrets to the private control repository:
 
-# 4. Read the evidence
-cat segh-results/report.md
+- `SEGH_READ_APP_ID`
+- `SEGH_READ_APP_PRIVATE_KEY`
+
+A scheduled caller can pin the reusable workflow to a reviewed commit:
+
+```yaml
+---
+name: Organization source scan
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scan:
+    uses: dceoy/segh/.github/workflows/organization-scan.yml@<reviewed-40-character-commit-sha>
+    with:
+      repository_limit: "50"
+      max_parallel: "4"
+    secrets:
+      SEGH_READ_APP_ID: ${{ secrets.SEGH_READ_APP_ID }}
+      SEGH_READ_APP_PRIVATE_KEY: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
 ```
 
-`audit` strictly validates the version 5 configuration before making API
-requests, collects one authoritative inventory, evaluates policy, and writes
-`segh-results/inventory.json`, `segh-results/audit.json`, and
-`segh-results/report.md`. When `source_scan.enabled` is true, the same execution
-also resolves immutable default-branch commits and writes
-`segh-results/scan-manifest.json`. Only schema version 5 is accepted; older
-versions and removed fields are rejected without aliases or migration logic.
+The public `dceoy/segh` repository does not publish organization findings. Its direct scheduled job is skipped because the repository is public; manual execution fails closed. A private caller or private deployment activates scheduled and manual scans.
 
-Exit codes are `0` success, `1` policy or source-scan findings, `2` invalid
-configuration or arguments, `3` authentication or permission failure, `4`
-incomplete coverage, and `5` runtime failure.
+## Security boundary
 
-`segh.example.yaml` shows the recommended starter fields only; see
-[Policies](docs/policies.md) for suppressions and advanced, commonly-defaulted
-configuration, and the embedded JSON Schema
-(`schema/segh-config-v5.schema.json`) for the complete reference.
+For every selected repository, the workflow:
 
-The organization workflow uses the same `audit` executable route to reconcile
-repository artifacts after the matrix completes; see
-[Workflows](docs/workflows.md).
+1. resolves the default branch to an immutable commit SHA;
+2. mints a repository-scoped read-only token;
+3. checks out the exact commit with credentials, Git LFS, and submodules disabled;
+4. removes tracked symlinks and rejects submodules, unmaterialized LFS pointers, and checkouts without regular tracked files;
+5. installs the five scanner binaries from pinned Aqua packages with required checksums;
+6. runs only trusted scanner commands and never executes target repository code;
+7. uploads raw scanner output and immutable target metadata as a private per-repository artifact.
 
-## Scope boundary
+A scanner finding, checkout failure, preflight rejection, or scanner runtime error is represented by the native GitHub Actions matrix-job conclusion. `segh` does not create a custom status format or aggregate exit-code taxonomy.
 
-`segh` does not scan pull requests, run security jobs for merge queues, or
-publish pull-request security checks. Pull-request and merge-queue security
-enforcement are outside this repository's scope and must be provided
-independently where required.
+## Evidence
 
-## Organization audit and periodic source scan
+Each matrix job retains `repository-scan-<repository-id>` for 14 days. Depending on the execution path, it contains:
 
-The organization audit is read-only. Its GitHub App inventories Actions policy,
-effective rulesets, dependency graph, Dependabot coverage, and
-repository metadata. It does not clone repositories or run scanners during
-governance collection. When `source_scan.enabled` is true, the same audit
-execution reuses its selected inventory, records every default branch's exact
-commit SHA, and delegates each target to `gha-for-devops`'s pinned
-`repository-security-scan.yml` reusable workflow. The upstream workflow mints
-its own repository-scoped token, checks out the recorded commit, runs the
-static-analysis policy, classifies the repository result, and publishes the
-identity-bound `status.json`. `segh` retains only organization-specific
-inventory collection, commit resolution, bounded matrix control, identity
-reconciliation, and aggregate output. Repository scripts, package installers,
-submodules, Git LFS objects, and Terraform providers are never executed or
-initialized.
+- `target.json` with repository identity, default branch, and immutable commit;
+- `preflight.txt`;
+- `scorecard.json` and `scorecard.log`;
+- `zizmor.json` and `zizmor.log`;
+- `actionlint.jsonl` and `actionlint.log`;
+- `shellcheck.json` and `shellcheck.log`;
+- `trivy.json` and `trivy.log`.
 
-Source scanning writes separate `scan-manifest.json`, `scan-summary.json`, and
-per-repository evidence. Findings, incomplete content or checkout coverage, and
-scanner runtime errors remain distinct from the existing governance schemas and
-exit semantics.
+## Non-goals
 
-A matching short-lived GitHub.com App token and installation ID are required for
-a live audit. See [GitHub App permissions](docs/github-app-permissions.md).
-
-## Cost and limitations
-
-This design requires GitHub Enterprise seats and enough GitHub Actions capacity.
-It does not require GitHub Code Security or GitHub Secret Protection licenses.
-
-The tradeoff is deliberate: there is no server-side secret push prevention,
-GitHub security-alert lifecycle or organization security overview,
-CodeQL-equivalent deep interprocedural SAST, or native finding dismissal,
-campaign, fingerprint, baseline, and severity-gate UI. Scanner artifacts are
-the periodic source-scan evidence boundary.
-
-## Documentation
-
-- [Architecture](docs/architecture.md)
-- [Workflows](docs/workflows.md)
-- [GitHub App permissions](docs/github-app-permissions.md)
-- [Policies](docs/policies.md)
-- [Output schemas](docs/output-schemas.md)
-- [Remediation](docs/remediation.md)
+`segh` does not audit organization rulesets, classic branch protection, Actions settings, Dependabot, dependency graphs, `SECURITY.md`, or other GitHub governance controls. It does not maintain compatibility with the former CLI, configuration schemas, suppressions, `inventory.json`, `audit.json`, `report.md`, `scan-manifest.json`, or normalized source-scan status evidence.
