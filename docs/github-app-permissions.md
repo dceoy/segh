@@ -6,7 +6,7 @@ installed on every repository in the organization.
 | Permission                   | Access | Use                                                         |
 | ----------------------------- | ------ | ----------------------------------------------------------- |
 | Actions                       | Read   | Actions enablement and policy                               |
-| Administration                | Read   | Rulesets, branch protection, Dependabot enablement          |
+| Administration                | Read   | Effective rulesets and Dependabot enablement                |
 | Contents                      | Read   | Repository metadata, dependency graph export, `SECURITY.md` |
 | Metadata                      | Read   | Repository enumeration and classification                   |
 | Organization administration   | Read   | Authoritative App installation scope                        |

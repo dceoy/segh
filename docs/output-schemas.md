@@ -20,8 +20,9 @@ Observations use:
 ```
 
 `state` is `available`, `unknown`, or `unsupported`. Repository fields include
-Actions, dependency graph, Dependabot, branch governance, and security-policy
-observations. There are no Advanced Security feature or configuration fields.
+Actions, dependency graph, Dependabot, effective-ruleset governance, and
+security-policy observations. The removed governance compatibility observation is
+not retained as an empty field. There are no Advanced Security feature or configuration fields.
 
 ## `audit.json`
 

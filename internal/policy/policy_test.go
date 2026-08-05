@@ -86,7 +86,7 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 		DependabotSecurityUpdates: &enabled,
 	}
 	cfg.Policies.Repository = config.RepositoryPolicy{
-		RequireRuleset: true, RequireBranchProtection: true, RequirePullRequest: true,
+		RequireRuleset: true, RequirePullRequest: true,
 		RequireRequiredChecks: true, RestrictForcePushes: true, RestrictDeletions: true,
 		RequireSecurityMD: true, AllowedVisibilities: []string{"private"},
 		ProhibitArchived: true, ProhibitForks: true, ProhibitTemplates: true,
@@ -101,12 +101,12 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 		DependencyGraph:           availableTrue,
 		DependabotAlerts:          availableTrue,
 		DependabotSecurityUpdates: availableTrue,
-		Ruleset:                   availableTrue, BranchProtection: availableTrue, RequiredPullRequests: availableTrue,
+		Ruleset:                   availableTrue, RequiredPullRequests: availableTrue,
 		RequiredChecks: availableTrue, ForcePushRestricted: availableTrue, DeletionRestricted: availableTrue,
 		SecurityMD: availableTrue,
 	}
 	audit := New(cfg, time.Now()).Evaluate(model.Inventory{Organization: "example", Repositories: []model.Repository{repository}})
-	if len(audit.Results) != 19 || audit.PolicyCounts[string(model.PolicyPass)] != 19 {
+	if len(audit.Results) != 18 || audit.PolicyCounts[string(model.PolicyPass)] != 18 {
 		t.Fatalf("results=%d counts=%#v", len(audit.Results), audit.PolicyCounts)
 	}
 	for i := 1; i < len(audit.Results); i++ {

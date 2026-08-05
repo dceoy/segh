@@ -70,7 +70,7 @@ independently where required.
 ## Organization audit and periodic source scan
 
 The organization audit is read-only. Its GitHub App inventories Actions policy,
-rulesets, branch protection, dependency graph, Dependabot coverage, and
+effective rulesets, dependency graph, Dependabot coverage, and
 repository metadata. It does not clone repositories or run scanners during
 governance collection. When `source_scan.enabled` is true, the same audit
 execution reuses its selected inventory, records every default branch's exact

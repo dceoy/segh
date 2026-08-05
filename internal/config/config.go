@@ -64,17 +64,16 @@ type DependenciesPolicy struct {
 }
 
 type RepositoryPolicy struct {
-	RequireRuleset          bool     `yaml:"require_ruleset"`
-	RequireBranchProtection bool     `yaml:"require_branch_protection"`
-	RequirePullRequest      bool     `yaml:"require_pull_request"`
-	RequireRequiredChecks   bool     `yaml:"require_required_checks"`
-	RestrictForcePushes     bool     `yaml:"restrict_force_pushes"`
-	RestrictDeletions       bool     `yaml:"restrict_deletions"`
-	RequireSecurityMD       bool     `yaml:"require_security_md"`
-	AllowedVisibilities     []string `yaml:"allowed_visibilities"`
-	ProhibitArchived        bool     `yaml:"prohibit_archived"`
-	ProhibitForks           bool     `yaml:"prohibit_forks"`
-	ProhibitTemplates       bool     `yaml:"prohibit_templates"`
+	RequireRuleset        bool     `yaml:"require_ruleset"`
+	RequirePullRequest    bool     `yaml:"require_pull_request"`
+	RequireRequiredChecks bool     `yaml:"require_required_checks"`
+	RestrictForcePushes   bool     `yaml:"restrict_force_pushes"`
+	RestrictDeletions     bool     `yaml:"restrict_deletions"`
+	RequireSecurityMD     bool     `yaml:"require_security_md"`
+	AllowedVisibilities   []string `yaml:"allowed_visibilities"`
+	ProhibitArchived      bool     `yaml:"prohibit_archived"`
+	ProhibitForks         bool     `yaml:"prohibit_forks"`
+	ProhibitTemplates     bool     `yaml:"prohibit_templates"`
 }
 
 func Default() Config {

@@ -99,20 +99,16 @@ func (e *Evaluator) repository(repo model.Repository) []model.PolicyResult {
 		results = append(results, observed(repo.FullName, "repository.ruleset", "high", repo.Ruleset, true,
 			"Create an organization ruleset covering the repository's default branch."))
 	}
-	if repository.RequireBranchProtection {
-		results = append(results, observed(repo.FullName, "repository.branch_protection", "high", repo.BranchProtection, true,
-			"Prefer an organization ruleset; otherwise protect the default branch with pull-request and required-check rules."))
-	}
 	for _, check := range []struct {
 		enabled     bool
 		id          string
 		observed    model.Observed[bool]
 		remediation string
 	}{
-		{repository.RequirePullRequest, "repository.required_pull_request", repo.RequiredPullRequests, "Require pull requests through an organization ruleset or default-branch protection."},
-		{repository.RequireRequiredChecks, "repository.required_checks", repo.RequiredChecks, "Require the approved status checks through an organization ruleset or default-branch protection."},
-		{repository.RestrictForcePushes, "repository.force_push_restricted", repo.ForcePushRestricted, "Disable force pushes through an organization ruleset or default-branch protection."},
-		{repository.RestrictDeletions, "repository.deletion_restricted", repo.DeletionRestricted, "Disable branch deletion through an organization ruleset or default-branch protection."},
+		{repository.RequirePullRequest, "repository.required_pull_request", repo.RequiredPullRequests, "Require pull requests through an applicable effective ruleset."},
+		{repository.RequireRequiredChecks, "repository.required_checks", repo.RequiredChecks, "Require approved status checks or workflows through an applicable effective ruleset."},
+		{repository.RestrictForcePushes, "repository.force_push_restricted", repo.ForcePushRestricted, "Disallow non-fast-forward updates through an applicable effective ruleset."},
+		{repository.RestrictDeletions, "repository.deletion_restricted", repo.DeletionRestricted, "Disallow branch deletion through an applicable effective ruleset."},
 	} {
 		if check.enabled {
 			results = append(results, observed(repo.FullName, check.id, "high", check.observed, true, check.remediation))

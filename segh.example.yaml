@@ -19,7 +19,6 @@ policies:
     dependabot_security_updates: true
   repository:
     require_ruleset: true
-    require_branch_protection: true
     require_pull_request: true
     require_required_checks: true
     restrict_force_pushes: true

@@ -4,8 +4,8 @@
 
 - organization or enterprise Actions policy for Actions controls;
 - repository dependency settings for dependency graph and Dependabot;
-- organization rulesets, or classic branch protection where necessary, for
-  pull requests, required checks, force pushes, and deletion; and
+- effective organization or repository rulesets for pull requests, required
+  checks or workflows, non-fast-forward restrictions, and deletion; and
 - repository or inherited community-health files for `SECURITY.md`.
 
 Periodic findings are tied to the recorded default-branch commit in

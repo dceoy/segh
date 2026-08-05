@@ -406,90 +406,56 @@ func (s *InventoryService) collectActionsControls(ctx context.Context, base stri
 }
 
 func (s *InventoryService) collectBranchGovernance(ctx context.Context, base, branch string, repo *model.Repository) {
-	rulesSource := "rules_branches"
+	const source = "rules_branches"
+	setAll := func(observed model.Observed[bool]) {
+		repo.Ruleset = observed
+		repo.RequiredPullRequests = observed
+		repo.RequiredChecks = observed
+		repo.ForcePushRestricted = observed
+		repo.DeletionRestricted = observed
+	}
+
 	var effectiveRules []struct {
 		Type string `json:"type"`
 	}
-	rulesErr := s.client.Get(ctx, base+"/rules/branches/"+pathEscape(branch), &effectiveRules)
-	ruleTypes := map[string]bool{}
-	if rulesErr == nil {
-		for _, rule := range effectiveRules {
-			ruleTypes[rule.Type] = true
-		}
-		repo.Ruleset = model.Observed[bool]{State: model.Available, Value: len(effectiveRules) > 0, Source: rulesSource}
-	} else {
-		s.notePermissionFailure(rulesErr)
-		state, reason := ErrorState(rulesErr)
-		repo.Ruleset = model.Observed[bool]{State: model.Availability(state), Source: rulesSource, Reason: reason}
+	if err := s.client.Get(ctx, base+"/rules/branches/"+pathEscape(branch), &effectiveRules); err != nil {
+		s.notePermissionFailure(err)
+		state, reason := ErrorState(err)
+		setAll(model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason})
+		return
 	}
-	var protection struct {
-		RequiredPullRequestReviews any `json:"required_pull_request_reviews"`
-		RequiredStatusChecks       any `json:"required_status_checks"`
-		AllowForcePushes           *struct {
-			Enabled bool `json:"enabled"`
-		} `json:"allow_force_pushes"`
-		AllowDeletions *struct {
-			Enabled bool `json:"enabled"`
-		} `json:"allow_deletions"`
+	if effectiveRules == nil {
+		setAll(model.Observed[bool]{
+			State: model.Unknown, Source: source,
+			Reason: "malformed effective-rules response: expected an array",
+		})
+		return
 	}
-	protectionSource := "branch_protection"
-	var classicProtection, classicPullRequests, classicChecks, classicForcePush, classicDeletion model.Observed[bool]
-	protectionErr := s.client.Get(ctx, base+"/branches/"+pathEscape(branch)+"/protection", &protection)
-	var protectionAPIErr *APIError
-	if errors.As(protectionErr, &protectionAPIErr) && protectionAPIErr.StatusCode == 404 {
-		absent := model.Observed[bool]{State: model.Available, Value: false, Source: protectionSource}
-		classicProtection, classicPullRequests, classicChecks = absent, absent, absent
-		classicForcePush, classicDeletion = absent, absent
-	} else if protectionErr != nil {
-		s.notePermissionFailure(protectionErr)
-		state, reason := ErrorState(protectionErr)
-		unknown := model.Observed[bool]{State: model.Availability(state), Source: protectionSource, Reason: reason}
-		classicProtection, classicPullRequests, classicChecks = unknown, unknown, unknown
-		classicForcePush, classicDeletion = unknown, unknown
-	} else {
-		classicProtection = model.Observed[bool]{State: model.Available, Value: true, Source: protectionSource}
-		classicPullRequests = model.Observed[bool]{State: model.Available, Value: protection.RequiredPullRequestReviews != nil, Source: protectionSource}
-		classicChecks = model.Observed[bool]{State: model.Available, Value: protection.RequiredStatusChecks != nil, Source: protectionSource}
-		if protection.AllowForcePushes == nil {
-			classicForcePush = model.Observed[bool]{State: model.Unknown, Source: protectionSource, Reason: "field unavailable"}
-		} else {
-			classicForcePush = model.Observed[bool]{State: model.Available, Value: !protection.AllowForcePushes.Enabled, Source: protectionSource}
+
+	ruleTypes := make(map[string]bool, len(effectiveRules))
+	for index, rule := range effectiveRules {
+		ruleType := strings.TrimSpace(rule.Type)
+		if ruleType == "" {
+			setAll(model.Observed[bool]{
+				State: model.Unknown, Source: source,
+				Reason: fmt.Sprintf("malformed effective-rules response: rule %d has no type", index),
+			})
+			return
 		}
-		if protection.AllowDeletions == nil {
-			classicDeletion = model.Observed[bool]{State: model.Unknown, Source: protectionSource, Reason: "field unavailable"}
-		} else {
-			classicDeletion = model.Observed[bool]{State: model.Available, Value: !protection.AllowDeletions.Enabled, Source: protectionSource}
-		}
+		ruleTypes[ruleType] = true
 	}
-	// GitHub enforces the union of effective rulesets and classic branch
-	// protection. Merge both sources so either can prove a control is active.
-	repo.BranchProtection = mergeControl(rulesErr, len(ruleTypes) > 0, classicProtection)
-	repo.RequiredPullRequests = mergeControl(rulesErr, ruleTypes["pull_request"], classicPullRequests)
-	repo.RequiredChecks = mergeControl(rulesErr, ruleTypes["required_status_checks"], classicChecks)
-	repo.ForcePushRestricted = mergeControl(rulesErr, ruleTypes["non_fast_forward"], classicForcePush)
-	repo.DeletionRestricted = mergeControl(rulesErr, ruleTypes["deletion"], classicDeletion)
+
+	available := func(value bool) model.Observed[bool] {
+		return model.Observed[bool]{State: model.Available, Value: value, Source: source}
+	}
+	repo.Ruleset = available(len(effectiveRules) > 0)
+	repo.RequiredPullRequests = available(ruleTypes["pull_request"])
+	repo.RequiredChecks = available(ruleTypes["required_status_checks"] || ruleTypes["workflows"])
+	repo.ForcePushRestricted = available(ruleTypes["non_fast_forward"])
+	repo.DeletionRestricted = available(ruleTypes["deletion"])
 }
 
 type jsonObject map[string]any
-
-// mergeControl combines a boolean policy control derived from GitHub's effective
-// rules-for-branch evaluation (rulesErr/ruleTypePresent) with the equivalent control
-// derived from classic branch protection (classic). Either mechanism enforcing the
-// control is sufficient, matching GitHub's own behavior of enforcing the union of
-// whatever rulesets and branch protection both require.
-func mergeControl(rulesErr error, ruleTypePresent bool, classic model.Observed[bool]) model.Observed[bool] {
-	if rulesErr == nil {
-		if ruleTypePresent {
-			return model.Observed[bool]{State: model.Available, Value: true, Source: "rules_branches"}
-		}
-		return classic
-	}
-	if classic.State == model.Available && classic.Value {
-		return classic
-	}
-	state, reason := ErrorState(rulesErr)
-	return model.Observed[bool]{State: model.Availability(state), Source: "rules_branches", Reason: "ruleset evaluation unavailable: " + reason}
-}
 
 func observe[T any](
 	service *InventoryService, source string, fetch func() (T, error),

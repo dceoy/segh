@@ -22,9 +22,8 @@ exclusions.
 | `dependencies.dependabot_alerts`           | Dependabot alerts enablement                   |
 | `dependencies.dependabot_security_updates` | Dependabot security updates enablement         |
 | `repository.ruleset`                       | Effective default-branch ruleset               |
-| `repository.branch_protection`             | Ruleset or classic protection                  |
 | `repository.required_pull_request`         | Pull request requirement                       |
-| `repository.required_checks`               | Ordinary status-check requirement              |
+| `repository.required_checks`               | Required status-check or workflow rule         |
 | `repository.force_push_restricted`         | Force pushes prohibited                        |
 | `repository.deletion_restricted`           | Branch deletion prohibited                     |
 | `repository.security_md`                   | Security policy present or inherited           |
@@ -44,8 +43,12 @@ policies:
     dependabot_security_updates: true
 ```
 
-The model has no policy IDs for CodeQL, code scanning, secret scanning, push
-protection, or Security Configurations.
+The repository governance observations are derived exclusively from the effective
+default-branch rules returned by GitHub. Repository- and organization-level
+rulesets may contribute to the same effective result; unavailable, unsupported,
+or malformed evidence never becomes a pass. The model has no policy IDs for
+CodeQL, code scanning, secret scanning, push protection, or Security
+Configurations.
 
 ## Status and suppressions
 

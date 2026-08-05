@@ -120,7 +120,7 @@ func TestCollectDependencyControls(t *testing.T) {
 	}
 }
 
-func TestEnrichmentUsesOnlyNinePerRepositoryRequests(t *testing.T) {
+func TestEnrichmentUsesOnlyEightPerRepositoryRequests(t *testing.T) {
 	var paths []string
 	service := newInventoryTestService(t, func(writer http.ResponseWriter, request *http.Request) {
 		paths = append(paths, request.URL.Path)
@@ -139,8 +139,6 @@ func TestEnrichmentUsesOnlyNinePerRepositoryRequests(t *testing.T) {
 			_, _ = io.WriteString(writer, `{"enabled":true,"paused":false}`)
 		case "/repos/org/repo/rules/branches/main":
 			_, _ = io.WriteString(writer, `[]`)
-		case "/repos/org/repo/branches/main/protection":
-			writer.WriteHeader(http.StatusNotFound)
 		case "/repos/org/repo/community/profile":
 			_, _ = io.WriteString(writer, `{"files":{"security":{}}}`)
 		default:
@@ -148,8 +146,8 @@ func TestEnrichmentUsesOnlyNinePerRepositoryRequests(t *testing.T) {
 		}
 	})
 	_ = enrichForTest(service, apiRepository{ID: 1, FullName: "org/repo", DefaultBranch: "main"})
-	if len(paths) != 9 {
-		t.Fatalf("per-repository requests = %d (%v), want 9", len(paths), paths)
+	if len(paths) != 8 {
+		t.Fatalf("per-repository requests = %d (%v), want 8", len(paths), paths)
 	}
 }
 
