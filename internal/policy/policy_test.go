@@ -45,7 +45,7 @@ func TestEvaluateStatusesAndSuppressionExpiry(t *testing.T) {
 
 func TestUnsupportedDoesNotPass(t *testing.T) {
 	result := observed("example/repo", "test", "high",
-		model.Observed[bool]{State: model.Unsupported, Reason: "GHES"}, true, "upgrade")
+		model.Observed[bool]{State: model.Unsupported, Reason: "feature unavailable"}, true, "upgrade")
 	if result.Status != model.PolicyUnsupported {
 		t.Fatalf("status = %s", result.Status)
 	}

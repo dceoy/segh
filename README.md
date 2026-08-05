@@ -1,6 +1,6 @@
 # segh
 
-`segh` audits GitHub Enterprise organization governance and periodically scans
+`segh` audits GitHub.com organization governance and periodically scans
 selected default-branch commits. It is designed for private repositories
 without GitHub Code Security or GitHub Secret Protection licenses.
 
@@ -15,6 +15,10 @@ The supported baseline is:
 - dependency graph, Dependabot alerts, and Dependabot security updates remain
   GitHub-native controls; and
 - no scanner result is sent to the GitHub Code Scanning service.
+
+GitHub.com is the only supported runtime platform. The REST API endpoint is
+fixed to `https://api.github.com`; no runtime platform-selection setting or
+API-base rewriting layer is maintained.
 
 ## Quick start
 
@@ -89,10 +93,8 @@ per-repository evidence. Findings, incomplete content or checkout coverage, and
 scanner runtime errors remain distinct from the existing governance schemas and
 exit semantics.
 
-`GH_HOST` selects GHE.com or GitHub Enterprise Server and defaults to
-`github.com`. The matching short-lived App token and installation ID are
-required for a live audit. See
-[GitHub App permissions](docs/github-app-permissions.md).
+A matching short-lived GitHub.com App token and installation ID are required for
+a live audit. See [GitHub App permissions](docs/github-app-permissions.md).
 
 ## Cost and limitations
 

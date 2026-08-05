@@ -7,9 +7,11 @@ bounded Markdown rendering without changing the governance schemas.
 
 ## `inventory.json`
 
-Inventory contains organization metadata, selected and excluded repository
-counts, sorted repository observations, and bounded collection errors.
-Observations use:
+Inventory contains organization metadata, the fixed `github_host` value
+`github.com`, selected and excluded repository counts, sorted repository
+observations, and bounded collection errors. The host field is retained as a
+strict evidence identity marker; no other value is produced or accepted by the
+live planner. Observations use:
 
 ```json
 {
@@ -46,12 +48,13 @@ are not translated.
 
 ## `scan-manifest.json`
 
-The manifest uses source-scan schema version 1 and records every selected
-repository ID, owner, name, visibility, default branch, resolved lowercase
-40-character commit SHA, and whether it was scheduled. Failed commit resolution
-preserves the selected identity with no commit or schedule and adds a sorted
-planning error, so incomplete selections remain countable. Repository ordering
-and the 256-target matrix bound are deterministic.
+The manifest uses source-scan schema version 1, carries the same fixed
+`github_host` value `github.com`, and records every selected repository ID,
+owner, name, visibility, default branch, resolved lowercase 40-character commit
+SHA, and whether it was scheduled. Failed commit resolution preserves the
+selected identity with no commit or schedule and adds a sorted planning error,
+so incomplete selections remain countable. Repository ordering and the
+256-target matrix bound are deterministic.
 
 ## Repository `status.json`
 

@@ -2,8 +2,9 @@
 
 ## Organization audit and periodic source scan
 
-`.github/workflows/organization-audit.yml` runs from a private control
-repository.
+`.github/workflows/organization-audit.yml` runs from a private GitHub.com
+control repository. GitHub.com is the only supported runtime platform, and the
+workflow uses the fixed GitHub.com API endpoint.
 
 1. Add a reviewed 40-character commit from protected `dceoy/segh` `main` to
    `config/segh-source-commit`.

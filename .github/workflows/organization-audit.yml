@@ -26,15 +26,9 @@ jobs:
         with:
           path: _control
           persist-credentials: false
-      - name: Validate control platform and source pin
+      - name: Validate source pin
         id: source
-        env:
-          CONTROL_SERVER_URL: ${{ github.server_url }}
         run: |
-          if [[ "$CONTROL_SERVER_URL" != "https://github.com" ]]; then
-            echo "::error::The supplied organization-audit workflow supports GitHub.com control repositories only. Adapt it to a protected same-host source mirror before using it on GHES."
-            exit 1
-          fi
           source_commit_file="_control/config/segh-source-commit"
           if [[ ! -f "$source_commit_file" ]]; then
             echo "::error::Create $source_commit_file with a reviewed dceoy/segh commit from protected main."

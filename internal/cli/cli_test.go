@@ -28,6 +28,9 @@ func TestHelpAndVersion(t *testing.T) {
 		if !strings.Contains(stdout.String(), test.want) {
 			t.Fatalf("%v output = %q", test.args, stdout.String())
 		}
+		if test.args[0] == "--help" && !strings.Contains(stdout.String(), "GitHub.com is the only supported runtime platform") {
+			t.Fatalf("help does not state the platform boundary: %q", stdout.String())
+		}
 	}
 }
 
@@ -73,7 +76,7 @@ func TestAuditCollectsInventoryOnceAndWritesManifest(t *testing.T) {
 	}
 	var manifest model.SourceScanManifest
 	readJSON(t, manifestPath, &manifest)
-	if !manifest.Enabled || !manifest.Complete || len(manifest.Repositories) != 1 {
+	if manifest.GitHubHost != "github.com" || !manifest.Enabled || !manifest.Complete || len(manifest.Repositories) != 1 {
 		t.Fatalf("manifest = %#v", manifest)
 	}
 	repository := manifest.Repositories[0]
@@ -209,7 +212,7 @@ type fixtureAPI struct {
 	calls   map[string]int
 }
 
-func (fixtureAPI) Hostname() string { return "ghes.example" }
+func (fixtureAPI) Hostname() string { return "github.com" }
 
 func (f fixtureAPI) Get(_ context.Context, apiPath string, out any) error {
 	var data string

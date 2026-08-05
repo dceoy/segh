@@ -63,10 +63,17 @@ Schema before typed decoding and duration conversion. The maintained
 in-memory without runtime network or filesystem access. A strict date-time
 format override preserves the typed configuration contract.
 
-GitHub REST access uses the Go standard library with explicit response bounds,
-retry and backoff policy, cancellable waits, token redaction, and
-GitHub.com/GHE.com/GHES host mapping. Endpoint pagination, ordering, and
-availability classification remain caller-owned.
+GitHub REST access is GitHub.com-only and uses the Go standard library. The API
+base is the direct constant `https://api.github.com`; no host-selection or URL
+rewriting layer exists. The client retains explicit response and error-body
+bounds, bounded retry and backoff policy, primary and secondary rate-limit
+handling, cancellable waits, request deadlines, redirect rejection, token
+redaction, and bounded diagnostics. Endpoint pagination, deterministic ordering,
+and availability classification remain caller-owned.
+
+The evidence `github_host` field remains constrained to the constant
+`github.com` so inventory and source-scan manifests continue to reject stale or
+foreign-platform evidence without retaining generalized host parsing.
 
 ## Inventory model
 
@@ -99,7 +106,6 @@ coverage takes precedence over ordinary governance findings.
 
 ## Platform boundary
 
-The CLI supports GitHub.com, GHE.com, and GitHub Enterprise Server through
-`GH_HOST`. The supplied cross-repository Actions workflow is pinned for
-GitHub.com. GHES operators must mirror the trusted source and verify their
-server and runners support each pinned action.
+GitHub.com is the sole runtime platform. The REST endpoint is fixed to
+`https://api.github.com`; no runtime platform-selection, hostname parsing, or
+API-base rewriting layer is maintained.

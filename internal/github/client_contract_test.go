@@ -14,7 +14,6 @@ import (
 
 func TestClientRejectsRedirects(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token")
-	t.Setenv("GH_HOST", "github.com")
 	client, err := NewClient()
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +47,7 @@ func TestClientStopsAfterMaximumRetriesAndUsesExponentialBackoff(t *testing.T) {
 		requests.Add(1)
 		writer.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = io.WriteString(writer, `{"message":"still unavailable"}`)
-	}), "github.com")
+	}))
 	var delays []time.Duration
 	client.wait = func(_ context.Context, delay time.Duration) error {
 		delays = append(delays, delay)
@@ -79,7 +78,7 @@ func TestClientCancellationStopsRetryWait(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		writer.WriteHeader(http.StatusServiceUnavailable)
-	}), "github.com")
+	}))
 	ctx, cancel := context.WithCancel(context.Background())
 	client.wait = func(ctx context.Context, _ time.Duration) error {
 		cancel()
@@ -102,7 +101,6 @@ func TestClientRedactsTokenFromTransportErrors(t *testing.T) {
 			return nil, errors.New("connection reset for test-token")
 		})},
 		baseURL:       "https://api.github.test",
-		hostname:      "github.com",
 		token:         "test-token",
 		responseLimit: maxResponseBytes,
 		wait:          func(context.Context, time.Duration) error { return nil },
@@ -115,7 +113,7 @@ func TestClientRedactsTokenFromTransportErrors(t *testing.T) {
 }
 
 func TestClientAcceptsEmptyResponse(t *testing.T) {
-	client := newTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), "github.com")
+	client := newTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	var response struct {
 		OK bool `json:"ok"`
 	}
@@ -133,7 +131,6 @@ func TestClientPropagatesDeadlineExceededWithoutRetry(t *testing.T) {
 			return nil, request.Context().Err()
 		})},
 		baseURL:       "https://api.github.test",
-		hostname:      "github.com",
 		token:         "test-token",
 		responseLimit: maxResponseBytes,
 		wait: func(context.Context, time.Duration) error {
