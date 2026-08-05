@@ -15,7 +15,7 @@ func Markdown(inventory model.Inventory, audit model.Audit) string {
 		inventory.Selected, inventory.Excluded, inventory.Total)
 	fmt.Fprintf(&builder, "- Coverage: %s\n", audit.Coverage)
 	writePolicyCounts(&builder, audit.PolicyCounts)
-	builder.WriteString("\n## Policy violations, notices, and incomplete checks\n\n")
+	builder.WriteString("\n## Policy violations and incomplete checks\n\n")
 	builder.WriteString("| Repository | Policy | Status | Severity | Remediation |\n")
 	builder.WriteString("|---|---|---|---|---|\n")
 	rows := 0
@@ -34,7 +34,7 @@ func Markdown(inventory model.Inventory, audit model.Audit) string {
 }
 
 func writePolicyCounts(builder *strings.Builder, counts map[string]int) {
-	keys := []string{"pass", "fail", "unknown", "unsupported", "exempt", "warning", "notice"}
+	keys := []string{"pass", "fail", "unknown", "unsupported", "exempt"}
 	values := make([]string, 0, len(keys))
 	for _, key := range keys {
 		if value, ok := counts[key]; ok {

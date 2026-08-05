@@ -14,7 +14,6 @@ import (
 
 	"github.com/dceoy/segh/internal/config"
 	gh "github.com/dceoy/segh/internal/github"
-	"github.com/dceoy/segh/internal/lockfiles"
 	"github.com/dceoy/segh/internal/model"
 	"github.com/dceoy/segh/internal/output"
 	"github.com/dceoy/segh/internal/policy"
@@ -153,11 +152,7 @@ func runAudit(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 
 	inventoryCtx, cancelInventory := context.WithTimeout(authenticatedCtx, time.Duration(cfg.Inventory.Timeout))
 	inventory, inventoryErr := gh.NewInventoryService(cfg, client, installationID).Run(inventoryCtx)
-	evaluator := policy.New(cfg, time.Now())
-	audit := evaluator.Evaluate(inventory)
-	if cfg.Policies.Dependencies.LockFiles != nil && *cfg.Policies.Dependencies.LockFiles {
-		evaluator.ApplyExtra(&audit, lockfiles.New(cfg, client).Run(inventoryCtx, inventory))
-	}
+	audit := policy.New(cfg, time.Now()).Evaluate(inventory)
 	cancelInventory()
 	markdown := report.Markdown(inventory, audit)
 

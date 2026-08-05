@@ -116,47 +116,6 @@ func TestAllConfiguredChecksProduceDeterministicRecords(t *testing.T) {
 	}
 }
 
-func TestApplyExtraSuppressesAndRecomputesCountsWithoutTrippingViolations(t *testing.T) {
-	now := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
-	future := now.Add(time.Hour)
-	cfg := config.Default()
-	cfg.Organization = "example"
-	cfg.Suppressions = []model.Suppression{
-		{Policy: "dependencies.lock_file", Repository: "example/repo", Owner: "sec", Rationale: "tracked", Expires: &future},
-	}
-	audit := New(cfg, now).Evaluate(model.Inventory{Organization: "example", Complete: true})
-	if len(audit.Results) != 0 || audit.Coverage != "complete" {
-		t.Fatalf("expected an empty, complete baseline audit, got %#v (coverage=%s)", audit.Results, audit.Coverage)
-	}
-	extra := []model.PolicyResult{
-		{Repository: "example/repo", PolicyID: "dependencies.lock_file", Status: model.PolicyWarning, Severity: "warning", Evidence: "package.json"},
-		{Repository: "example/other", PolicyID: "dependencies.lock_file", Status: model.PolicyNotice, Severity: "notice", Evidence: "pyproject.toml"},
-	}
-	New(cfg, now).ApplyExtra(&audit, extra)
-	if len(audit.Results) != 2 {
-		t.Fatalf("expected 2 merged results, got %#v", audit.Results)
-	}
-	statuses := map[string]model.PolicyStatus{}
-	for _, result := range audit.Results {
-		statuses[result.Repository] = result.Status
-	}
-	if statuses["example/repo"] != model.PolicyExempt {
-		t.Fatalf("suppressed result status = %s, want exempt", statuses["example/repo"])
-	}
-	if statuses["example/other"] != model.PolicyNotice {
-		t.Fatalf("unsuppressed result status = %s, want notice", statuses["example/other"])
-	}
-	if audit.PolicyCounts[string(model.PolicyExempt)] != 1 || audit.PolicyCounts[string(model.PolicyNotice)] != 1 {
-		t.Fatalf("unexpected counts: %#v", audit.PolicyCounts)
-	}
-	if Violations(audit) {
-		t.Fatal("a warning/notice-only audit must never report violations")
-	}
-	if Partial(audit) || audit.Coverage != "complete" {
-		t.Fatalf("a warning/notice-only audit must not degrade coverage, got %q", audit.Coverage)
-	}
-}
-
 func TestDependencyPoliciesAreIndependentAndFailClosed(t *testing.T) {
 	enabled := true
 	cfg := config.Default()

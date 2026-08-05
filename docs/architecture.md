@@ -31,9 +31,7 @@ Periodic organization source scan
 The organization audit receives a short-lived, read-only GitHub App token. It
 validates configuration before API access, bounds response sizes, retries
 transient failures, and treats unavailable evidence as `unknown` or
-`unsupported`, never as a pass. When lock-file policy is enabled, it reads only
-the default-branch tree and matched manifest content through the REST API; it
-never checks out or executes repository content.
+`unsupported`, never as a pass.
 
 When source scanning is enabled, the same audit execution reuses the collected
 inventory and resolves each selected default branch through the API. It records
