@@ -17,6 +17,28 @@ Periodic organization source scan
   └─ scan-manifest.json + scan-summary.json + repository artifacts
 ```
 
+## Intentional retained boundaries
+
+Two infrastructure-specific components are intentional architecture rather than
+unfinished migration work:
+
+| Boundary | Minimal retained contract | Deliberately outside the boundary |
+| --- | --- | --- |
+| Bounded GitHub REST client | Read-only `GET`; fixed GitHub.com endpoint; response and error-body bounds; bounded retries and backoff; primary and secondary rate-limit handling; cancellable waits and request deadlines; redirect rejection; token redaction; bounded diagnostics; the small error classifications used by current callers | General repository abstractions, generated service layers, GraphQL, credential discovery, persistent caches, telemetry, background processing, and SDK compatibility adapters |
+| Manifest-aware source-scan reconciler | Validate the immutable manifest; discover `status.json`; match repository ID, full name, default branch, and commit SHA exactly; reject missing, duplicate, malformed, unexpected, or mismatched evidence; produce deterministic counts and bounded operator output; preserve findings, incomplete coverage, and runtime errors as distinct outcomes | Repository checkout, scanner execution, repository-level classification, artifact publication, generic aggregation frameworks, and upstream ownership of organization identity reconciliation |
+
+These boundaries may remain while their callers, data fields, comments, tests,
+and surrounding compatibility surface continue to be deleted or simplified.
+Neither boundary is a reason to preserve unused interfaces or broaden `segh`
+into a framework.
+
+Reconsidering either boundary requires both a material scope change and a new
+measured prototype. The prototype must demonstrate a material net reduction in
+production code, directly associated tests, dependencies, and operational
+complexity while preserving every current security and evidence guarantee. A
+replacement is not adopted through a speculative adapter, feature flag, dual
+implementation, or unmeasured SDK substitution.
+
 ## Source-scan responsibility boundary
 
 | Responsibility | Owner |
@@ -45,7 +67,7 @@ pointers make coverage incomplete.
 
 The organization reconciler parses status artifacts as untrusted input. It
 requires the planned repository ID, full name, default branch, and commit SHA to
-match exactly and fails closed on missing, duplicate, malformed, unsupported,
+match exactly and fails closed on missing, duplicate, malformed, unexpected,
 or mismatched evidence. It does not install scanners or reproduce
 repository-level classification.
 
@@ -82,10 +104,10 @@ selection and accessible count. Selection is limited to archived/disabled/fork
 class exclusions and explicit repository include/exclude lists.
 
 Per-repository inventory covers Actions policy, dependency graph, Dependabot,
-effective rulesets, pull-request and status-check/workflow
-requirements, force-push/deletion restrictions, and `SECURITY.md`. There are no
-inventory fields for CodeQL, code-scanning alerts, secret scanning, push
-protection, or GitHub Security Configurations.
+effective rulesets, pull-request and status-check/workflow requirements,
+force-push/deletion restrictions, and `SECURITY.md`. There are no inventory
+fields for CodeQL, code-scanning alerts, secret scanning, push protection, or
+GitHub Security Configurations.
 
 ## Determinism and failure behavior
 
