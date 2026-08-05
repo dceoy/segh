@@ -30,9 +30,9 @@ organization, generation time, repository counts, policy counts, final
 coverage, and sorted policy results. Each result contains repository, policy ID,
 status, severity, observed and expected values, evidence source, remediation,
 and an optional applied suppression. Status is `pass`, `fail`, `unknown`,
-`unsupported`, `exempt`, `warning`, or `notice`; only `fail` counts toward the
-governance findings exit classification, and only `unknown`/`unsupported`
-degrade governance coverage.
+`unsupported`, or `exempt`. Only `fail` counts toward the governance findings
+exit classification, and only `unknown`/`unsupported` degrade governance
+coverage.
 
 ## `report.md`
 

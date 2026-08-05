@@ -78,8 +78,7 @@
           "properties": {
             "dependency_graph": { "type": "boolean" },
             "dependabot_alerts": { "type": "boolean" },
-            "dependabot_security_updates": { "type": "boolean" },
-            "lock_files": { "type": "boolean" }
+            "dependabot_security_updates": { "type": "boolean" }
           }
         },
         "repository": {
@@ -155,8 +154,7 @@
       "anyOf": [
         { "required": ["dependency_graph"] },
         { "required": ["dependabot_alerts"] },
-        { "required": ["dependabot_security_updates"] },
-        { "required": ["lock_files"] }
+        { "required": ["dependabot_security_updates"] }
       ]
     },
     "configuredRepositoryPolicy": {

@@ -178,35 +178,8 @@ func direct(repository, id, severity string, pass bool, observed, expected any, 
 	}
 }
 
-// ApplyExtra merges results produced outside Evaluate (for example, a
-// content-derived check that needs GitHub API calls Evaluate itself never
-// makes) into audit: it applies the same suppression rules, re-sorts the
-// combined result set, and recomputes policy counts and coverage in place.
-func (e *Evaluator) ApplyExtra(audit *model.Audit, results []model.PolicyResult) {
-	for i := range results {
-		e.applySuppression(&results[i])
-	}
-	audit.Results = append(audit.Results, results...)
-	sort.Slice(audit.Results, func(i, j int) bool {
-		if audit.Results[i].Repository != audit.Results[j].Repository {
-			return audit.Results[i].Repository < audit.Results[j].Repository
-		}
-		if audit.Results[i].PolicyID != audit.Results[j].PolicyID {
-			return audit.Results[i].PolicyID < audit.Results[j].PolicyID
-		}
-		return audit.Results[i].Evidence < audit.Results[j].Evidence
-	})
-	audit.PolicyCounts = map[string]int{}
-	for _, result := range audit.Results {
-		audit.PolicyCounts[string(result.Status)]++
-	}
-	if Partial(*audit) {
-		audit.Coverage = "partial"
-	}
-}
-
 func (e *Evaluator) applySuppression(result *model.PolicyResult) {
-	if result.Status != model.PolicyFail && result.Status != model.PolicyWarning && result.Status != model.PolicyNotice {
+	if result.Status != model.PolicyFail {
 		return
 	}
 	for i := range e.cfg.Suppressions {
