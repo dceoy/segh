@@ -75,14 +75,34 @@ jobs:
           REPOSITORY_LIMIT: ${{ inputs.repository_limit || '50' }}
           MAX_PARALLEL: ${{ inputs.max_parallel || '4' }}
         run: |
-          [[ "$REPOSITORY_LIMIT" =~ ^[0-9]+$ ]] && ((REPOSITORY_LIMIT >= 1 && REPOSITORY_LIMIT <= 100))
-          [[ "$MAX_PARALLEL" =~ ^[0-9]+$ ]] && ((MAX_PARALLEL >= 1 && MAX_PARALLEL <= 10))
+          if [[ ! "$REPOSITORY_LIMIT" =~ ^[0-9]+$ ]]; then
+            echo "::error::repository_limit must be an integer from 1 to 100."
+            exit 1
+          fi
+          if [[ ! "$MAX_PARALLEL" =~ ^[0-9]+$ ]]; then
+            echo "::error::max_parallel must be an integer from 1 to 10."
+            exit 1
+          fi
+          repository_limit=$((10#$REPOSITORY_LIMIT))
+          max_parallel=$((10#$MAX_PARALLEL))
+          if ((repository_limit < 1 || repository_limit > 100)); then
+            echo "::error::repository_limit must be an integer from 1 to 100."
+            exit 1
+          fi
+          if ((max_parallel < 1 || max_parallel > 10)); then
+            echo "::error::max_parallel must be an integer from 1 to 10."
+            exit 1
+          fi
           gh api --paginate --slurp /installation/repositories > repositories.json
           jq '[.[].repositories[] | select(.disabled != true)] | unique_by(.id) | sort_by(.full_name)' \
             repositories.json > selected.json
           selected_count=$(jq 'length' selected.json)
-          if ((selected_count > REPOSITORY_LIMIT)); then
-            echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$REPOSITORY_LIMIT; refusing incomplete coverage."
+          if ((selected_count == 0)); then
+            echo "::error::The GitHub App installation selected no enabled repositories; refusing an empty scan."
+            exit 1
+          fi
+          if ((selected_count > repository_limit)); then
+            echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$repository_limit; refusing incomplete coverage."
             exit 1
           fi
           : > targets.jsonl
@@ -111,7 +131,7 @@ jobs:
           jq -sc '{include: .}' targets.jsonl > matrix.json
           printf 'matrix=%s\n' "$(jq -c . matrix.json)" >> "$GITHUB_OUTPUT"
           printf 'has_targets=%s\n' "$(jq -r '.include | length > 0' matrix.json)" >> "$GITHUB_OUTPUT"
-          printf 'max_parallel=%s\n' "$MAX_PARALLEL" >> "$GITHUB_OUTPUT"
+          printf 'max_parallel=%s\n' "$max_parallel" >> "$GITHUB_OUTPUT"
 
   scan:
     name: Source scan / ${{ matrix.full_name }}
@@ -186,7 +206,7 @@ jobs:
           working_directory: _trusted
       - name: Validate target content
         id: preflight
-        run: _trusted/scripts/preflight.sh _target | tee results/preflight.txt
+        run: _trusted/scripts/preflight.sh _target 2>&1 | tee results/preflight.txt
       - name: Run OpenSSF Scorecard
         if: always() && steps.preflight.outcome == 'success'
         env:
