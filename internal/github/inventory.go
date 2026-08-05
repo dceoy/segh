@@ -415,21 +415,33 @@ func (s *InventoryService) collectBranchGovernance(ctx context.Context, base, br
 		repo.DeletionRestricted = observed
 	}
 
-	var effectiveRules []struct {
+	type effectiveRule struct {
 		Type string `json:"type"`
 	}
-	if err := s.client.Get(ctx, base+"/rules/branches/"+pathEscape(branch), &effectiveRules); err != nil {
-		s.notePermissionFailure(err)
-		state, reason := ErrorState(err)
-		setAll(model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason})
-		return
-	}
-	if effectiveRules == nil {
-		setAll(model.Observed[bool]{
-			State: model.Unknown, Source: source,
-			Reason: "malformed effective-rules response: expected an array",
-		})
-		return
+	var effectiveRules []effectiveRule
+	for page := 1; ; page++ {
+		var batch []effectiveRule
+		apiPath := fmt.Sprintf(
+			"%s/rules/branches/%s?per_page=100&page=%d",
+			base, pathEscape(branch), page,
+		)
+		if err := s.client.Get(ctx, apiPath, &batch); err != nil {
+			s.notePermissionFailure(err)
+			state, reason := ErrorState(err)
+			setAll(model.Observed[bool]{State: model.Availability(state), Source: source, Reason: reason})
+			return
+		}
+		if batch == nil {
+			setAll(model.Observed[bool]{
+				State: model.Unknown, Source: source,
+				Reason: "malformed effective-rules response: expected an array",
+			})
+			return
+		}
+		effectiveRules = append(effectiveRules, batch...)
+		if len(batch) < 100 {
+			break
+		}
 	}
 
 	ruleTypes := make(map[string]bool, len(effectiveRules))
