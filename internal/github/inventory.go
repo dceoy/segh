@@ -14,6 +14,11 @@ import (
 	"github.com/dceoy/segh/internal/model"
 )
 
+const (
+	effectiveRulesPageSize = 100
+	maxEffectiveRules      = 1000
+)
+
 type InventoryService struct {
 	cfg            config.Config
 	client         API
@@ -422,8 +427,8 @@ func (s *InventoryService) collectBranchGovernance(ctx context.Context, base, br
 	for page := 1; ; page++ {
 		var batch []effectiveRule
 		apiPath := fmt.Sprintf(
-			"%s/rules/branches/%s?per_page=100&page=%d",
-			base, pathEscape(branch), page,
+			"%s/rules/branches/%s?per_page=%d&page=%d",
+			base, pathEscape(branch), effectiveRulesPageSize, page,
 		)
 		if err := s.client.Get(ctx, apiPath, &batch); err != nil {
 			s.notePermissionFailure(err)
@@ -438,8 +443,15 @@ func (s *InventoryService) collectBranchGovernance(ctx context.Context, base, br
 			})
 			return
 		}
+		if len(effectiveRules)+len(batch) > maxEffectiveRules {
+			setAll(model.Observed[bool]{
+				State: model.Unknown, Source: source,
+				Reason: fmt.Sprintf("effective-rules response exceeds %d rules", maxEffectiveRules),
+			})
+			return
+		}
 		effectiveRules = append(effectiveRules, batch...)
-		if len(batch) < 100 {
+		if len(batch) < effectiveRulesPageSize {
 			break
 		}
 	}
