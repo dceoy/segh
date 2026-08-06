@@ -6,14 +6,54 @@ on:
     branches:
       - main
 
-permissions:
-  contents: read
-  checks: read
-  issues: read
-  pull-requests: read
+permissions: {}
 
 jobs:
+  static:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: false
+          submodules: false
+      - name: Install checksum-verified tools
+        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
+        with:
+          aqua_version: v2.62.1
+      - name: Validate credential boundaries
+        run: ruby scripts/test-workflow-security.rb
+      - name: Run actionlint
+        run: |
+          actionlint \
+            -ignore 'property "workflow_repository" is not defined' \
+            -ignore 'property "workflow_sha" is not defined' \
+            -ignore 'shellcheck reported issue.*SC2129' \
+            -ignore 'shellcheck reported issue.*SC2016' \
+            .github/workflows/*.yml
+      - name: Run zizmor
+        run: >-
+          zizmor --offline --no-config
+          --min-severity high --min-confidence high
+          .github/workflows
+      - name: Run ShellCheck
+        run: shellcheck scripts/*.sh
+      - name: Validate YAML and JSON
+        run: |
+          ruby -e 'require "yaml"; Dir["**/*.{yml,yaml}"].sort.each { |path| YAML.load_file(path) }'
+          ruby -e 'require "json"; JSON.parse(File.read("aqua-checksums.json"))'
+      - name: Verify Aqua checksums
+        run: aqua i
+
   production-workflow:
+    permissions:
+      contents: read
+      checks: read
+      issues: read
+      pull-requests: read
     uses: ./.github/workflows/organization-scan.yml
     with:
       validation_mode: true

@@ -20,9 +20,9 @@ on:
         type: boolean
         default: false
     secrets:
-      SEGH_READ_APP_ID:
+      SEGH_ORG_SCAN_APP_ID:
         required: false
-      SEGH_READ_APP_PRIVATE_KEY:
+      SEGH_ORG_SCAN_APP_PRIVATE_KEY:
         required: false
   workflow_dispatch:
     inputs:
@@ -39,8 +39,7 @@ on:
   schedule:
     - cron: "17 3 * * 0"
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: segh-organization-source-scan-${{ github.repository }}
@@ -48,6 +47,7 @@ concurrency:
 
 jobs:
   plan:
+    permissions: {}
     if: github.event_name != 'schedule' || github.event.repository.private
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -68,11 +68,11 @@ jobs:
       - name: Require GitHub App credentials
         if: inputs.validation_mode != true
         env:
-          APP_ID: ${{ secrets.SEGH_READ_APP_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+          APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
         run: |
           if [[ -z "$APP_ID" || -z "$APP_PRIVATE_KEY" ]]; then
-            echo "::error::SEGH_READ_APP_ID and SEGH_READ_APP_PRIVATE_KEY are required."
+            echo "::error::SEGH_ORG_SCAN_APP_ID and SEGH_ORG_SCAN_APP_PRIVATE_KEY are required."
             exit 1
           fi
       - name: Create installation read token
@@ -80,8 +80,8 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.SEGH_READ_APP_ID }}
-          private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
+          private-key: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }} # zizmor: ignore[github-app]
           permission-contents: read
           permission-metadata: read
@@ -93,10 +93,13 @@ jobs:
           CALLER_REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SEGH_PLAN_TOKEN: ${{ steps.app-token.outputs.token }}
           REPOSITORY_LIMIT: ${{ inputs.repository_limit || '50' }}
           MAX_PARALLEL: ${{ inputs.max_parallel || '4' }}
         run: |
+          echo "::add-mask::$SEGH_PLAN_TOKEN"
+          export GH_TOKEN="$SEGH_PLAN_TOKEN"
+
           enforce_selection_bound() {
             local count=$1
             local limit=$2
@@ -401,6 +404,22 @@ jobs:
              .trusted_workflow_sha == $trusted_workflow_sha and
              (.validation_case // "") == $validation_case' \
             results/target.json > /dev/null
+          cat > results/scorecard-permissions.json <<'EOF'
+          {
+            "granted": [
+              "metadata:read",
+              "contents:read",
+              "checks:read",
+              "issues:read",
+              "pull_requests:read"
+            ],
+            "not_granted": ["actions", "administration"],
+            "limitations": [
+              "Classic branch-protection administrator-only settings are not measured.",
+              "The experimental Webhooks check is not supported."
+            ]
+          }
+          EOF
       - name: Check out trusted scanner configuration
         id: trusted
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -414,8 +433,8 @@ jobs:
         id: target-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.SEGH_READ_APP_ID }}
-          private-key: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
+          private-key: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
           owner: ${{ matrix.owner }}
           repositories: ${{ matrix.name }}
           permission-checks: read
@@ -625,12 +644,13 @@ jobs:
         id: scorecard
         continue-on-error: ${{ inputs.validation_mode }}
         env:
-          GITHUB_AUTH_TOKEN: ${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}
+          SEGH_TARGET_SCORECARD_TOKEN: ${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}
           REPOSITORY: ${{ matrix.full_name }}
           COMMIT_SHA: ${{ matrix.commit_sha }}
         run: |
           set +e
-          scorecard --repo="$REPOSITORY" --commit="$COMMIT_SHA" --show-details --format=json \
+          echo "::add-mask::$SEGH_TARGET_SCORECARD_TOKEN"
+          GITHUB_AUTH_TOKEN="$SEGH_TARGET_SCORECARD_TOKEN" scorecard --repo="$REPOSITORY" --commit="$COMMIT_SHA" --show-details --format=json \
             > results/scorecard.json 2> results/scorecard.log
           status=$?
           set -e
