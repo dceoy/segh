@@ -100,7 +100,13 @@ jobs:
             koalaman/shellcheck
             aquasecurity/trivy
           )
-          mapfile -t actual_scanners < <(sed -nE 's/^  - name: ([^@]+)@.+$/\1/p' aqua.yaml)
+          mapfile -t actual_scanners < <(
+            ruby -ryaml -e '
+              YAML.load_file("aqua.yaml").fetch("packages").each do |package|
+                puts package.fetch("name").sub(/@[^@]+\z/, "")
+              end
+            '
+          )
           if ((${#actual_scanners[@]} != ${#expected_scanners[@]})); then
             echo "::error::The trusted Aqua profile must contain exactly five scanners."
             exit 1
@@ -112,7 +118,7 @@ jobs:
             fi
           done
 
-          while IFS= read -r -d '' workflow; do
+          while IFS= read -r -d '' action_file; do
             while IFS= read -r action; do
               [[ "$action" == ./* ]] && continue
               ref=${action##*@}
@@ -120,8 +126,14 @@ jobs:
                 echo "::error::Remote action is not pinned to a full commit SHA: $action"
                 exit 1
               fi
-            done < <(sed -nE 's/^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]+([^#[:space:]]+).*$/\2/p' "$workflow")
-          done < <(git ls-files -z -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+            done < <(sed -nE 's/^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]+([^#[:space:]]+).*$/\2/p' "$action_file")
+          done < <(
+            git ls-files -z -- \
+              '.github/workflows/*.yml' \
+              '.github/workflows/*.yaml' \
+              ':(glob)**/action.yml' \
+              ':(glob)**/action.yaml'
+          )
 
           permission_pattern="^[[:space:]]*permissions:[[:space:]]*['\"]?write-all['\"]?([[:space:]]*(#.*)?)?$|(^|[,{[:space:]])['\"]?[A-Za-z-]+['\"]?[[:space:]]*:[[:space:]]*['\"]?write['\"]?([[:space:],}#]|$)"
           if grep -nE "$permission_pattern" .github/workflows/organization-scan.yml; then
