@@ -1,7 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
-const {list, managedDashboard, repositoryId} = require("./dashboard-github-common.js");
+const {list, managedDashboard, repositoryId, retryable} = require("./dashboard-github-common.js");
 const {idempotentCreate} = require("./dashboard-idempotent-issue.js");
 const {idempotentComment} = require("./dashboard-idempotent-comment.js");
 
@@ -82,6 +82,39 @@ async function findIssue(github, params) {
   return issues.find((issue) => !issue.pull_request && issue.number === params.issue_number) || null;
 }
 
+function sameLabel(left, right) {
+  return String(left || "").toLowerCase() === String(right || "").toLowerCase();
+}
+
+async function findLabel(github, params) {
+  const labels = await list(github.rest.issues.listLabelsForRepo, {owner: params.owner, repo: params.repo});
+  return labels.find((label) => sameLabel(label.name, params.name)) || null;
+}
+
+function labelAlreadyExists(error) {
+  const status = error?.status || error?.response?.status;
+  if (status !== 422) return false;
+  const errors = error?.response?.data?.errors;
+  return /already.?exists/i.test(String(error?.message || "")) ||
+    (Array.isArray(errors) && errors.some((item) => item?.code === "already_exists" || /already.?exists/i.test(String(item?.message || ""))));
+}
+
+function idempotentLabel(github) {
+  const create = github.rest.issues.createLabel.bind(github.rest.issues);
+  return async (params) => {
+    const existing = await findLabel(github, params);
+    if (existing) return {data: existing};
+    try {
+      return await create(params);
+    } catch (error) {
+      if (!retryable(error) && !labelAlreadyExists(error)) throw error;
+      const reconciled = await findLabel(github, params);
+      if (reconciled) return {data: reconciled};
+      throw error;
+    }
+  };
+}
+
 function idempotentGitHub(github) {
   const hardened = disableOctokitRetries(github);
   const issues = {...hardened.rest.issues};
@@ -94,6 +127,7 @@ function idempotentGitHub(github) {
   const createComment = idempotentComment(hardened);
   const pendingUpdates = new Map();
 
+  issues.createLabel = idempotentLabel(hardened);
   issues.create = idempotentCreate(hardened);
   issues.update = async (params) => {
     if (typeof params.body !== "string" || !managedDashboard(params.body)) return persistUpdate(params);
