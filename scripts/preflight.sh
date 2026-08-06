@@ -3,7 +3,8 @@
 set -euo pipefail
 
 readonly target=${1:?target checkout is required}
-readonly index=$(mktemp)
+index=$(mktemp)
+readonly index
 trap 'rm -f "$index"' EXIT
 
 git -C "$target" rev-parse --is-inside-work-tree > /dev/null
