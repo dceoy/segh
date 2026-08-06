@@ -59,7 +59,7 @@ const firstFingerprint = findings.findings.fingerprint;
 writeJson(path.join(root, "scorecard.json"), {
   checks: [
     {Name: "Token-Permissions", Score: 10},
-    {Name: "Pinned-Dependencies", Score: 9},
+    {Name: "Pinned-Dependencies", Score: 6},
   ],
 });
 const changed = buildSummary({resultsDir: root, env});
@@ -68,7 +68,7 @@ assert.notEqual(changed.findings.fingerprint, firstFingerprint);
 writeJson(path.join(root, "scorecard.json"), {
   checks: [
     {Name: "Token-Permissions", Score: 10},
-    {Name: "Pinned-Dependencies", Score: 10},
+    {Name: "Pinned-Dependencies", Score: 7},
   ],
 });
 const pass = buildSummary({resultsDir: root, env});
