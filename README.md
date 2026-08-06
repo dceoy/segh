@@ -8,13 +8,13 @@ The repository intentionally contains no CLI, Go implementation, governance poli
 
 The workflow installs exactly five checksum-pinned tools through trusted Aqua configuration:
 
-- OpenSSF Scorecard for informational supply-chain posture evidence;
+- OpenSSF Scorecard for selected supply-chain posture checks and bounded dashboard findings;
 - zizmor for tracked GitHub Actions workflows and action definitions;
 - actionlint for tracked workflow validation with trusted ShellCheck configuration;
 - ShellCheck for tracked regular shell files and supported shell shebangs;
 - Trivy for independent vulnerability, secret, and misconfiguration scans.
 
-Scorecard runs against the immutable repository and commit with `--show-details`. Its aggregate score is not a gate. The repository job fails when Scorecard cannot execute or does not produce valid non-empty JSON. No SARIF is uploaded and no custom score threshold is implemented.
+Scorecard runs against the immutable repository and commit with `--show-details`. Its aggregate score is not a gate. Each available selected check below 7/10 contributes one bounded `scorecard` finding and affects the privacy-preserving finding fingerprint; unavailable negative scores are excluded rather than converted into findings. The repository job fails when Scorecard cannot execute or does not produce valid non-empty JSON.
 
 ## Repository selection
 
@@ -112,7 +112,7 @@ Tokens are not job outputs, are not persisted in Git configuration, and are mask
 
 ## Issue-backed dashboard
 
-The private control repository contains exactly one managed issue for each immutable repository ID. Managed issues include stable hidden markers for the repository ID, current status, previous status, finding fingerprint, and result digest.
+The private control repository contains exactly one managed issue for each immutable repository ID. Managed issues include stable hidden markers for the repository ID, current status, previous status, finding fingerprint, semantic result digest, renderer version/digest, and complete body integrity.
 
 - `pass` closes the issue with `scan:pass`;
 - `findings`, `incomplete`, and `error` keep the issue open with the corresponding status label;
@@ -120,7 +120,8 @@ The private control repository contains exactly one managed issue for each immut
 - repository renames update the existing issue by repository ID;
 - unchanged normalized results perform no issue or comment write;
 - status or finding-fingerprint changes append one bounded history comment;
-- missing, duplicate, malformed, or identity-mismatched summaries fail closed as `scan:error`.
+- missing, duplicate, malformed, or identity-mismatched summaries fail closed as `scan:error`;
+- incrementing the renderer version migrates existing trusted issue bodies without making scan timestamps or run URLs part of no-op detection.
 
 The publisher manages only a fixed label set: five `scan:*` state labels and six bounded `finding:*` category labels. It preserves operator-owned labels.
 
