@@ -64,30 +64,33 @@ jobs:
         run: |
           set -euo pipefail
 
-          lint_config_path=.golang""ci.yml
-          forbidden_paths=(
-            cmd
-            internal
-            schema
-            config
-            go.mod
-            go.sum
-            go.work
-            go.work.sum
-            "$lint_config_path"
-            segh.example.yaml
-            Makefile
+          expected_paths=(
+            .github/workflows/organization-scan.yml
+            .github/workflows/validation.yml
+            CREDENTIALS.md
+            LICENSE
+            README.md
+            SECURITY.md
+            aqua-checksums.json
+            aqua.yaml
+            scripts/preflight.sh
+            scripts/test-workflow-security.rb
           )
-          for path in "${forbidden_paths[@]}"; do
-            if git ls-files -- "$path" "$path/**" | grep -q .; then
-              echo "::error::Removed product path is tracked again: $path"
+          mapfile -d '' -t actual_paths < <(git ls-files -z)
+          if ((${#actual_paths[@]} != ${#expected_paths[@]})); then
+            echo "::error::Tracked path set differs from the workflow-only product allowlist."
+            printf 'Expected paths:\n'
+            printf '  %s\n' "${expected_paths[@]}"
+            printf 'Actual paths:\n'
+            printf '  %s\n' "${actual_paths[@]}"
+            exit 1
+          fi
+          for index in "${!expected_paths[@]}"; do
+            if [[ "${actual_paths[$index]}" != "${expected_paths[$index]}" ]]; then
+              echo "::error::Unexpected tracked path at position $index: ${actual_paths[$index]}"
               exit 1
             fi
           done
-          if git ls-files -- '*.go' | grep -q .; then
-            echo "::error::Go source files are not part of the workflow-only product."
-            exit 1
-          fi
 
           mapfile -d '' -t action_files < <(
             git ls-files -z -- \
