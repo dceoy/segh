@@ -9,7 +9,7 @@ function requireNoOctokitRetry(params) {
 class GitHub {
   constructor() {
     this.labels = []; this.issues = []; this.comments = []; this.next = 1;
-    this.failCreate = false; this.failComment = false; this.failUpdate = false;
+    this.failCreate = false; this.failCreateLabel = false; this.failComment = false; this.failUpdate = false;
     this.rest = {issues: {
       listLabelsForRepo: async (params) => {
         requireNoOctokitRetry(params);
@@ -18,7 +18,10 @@ class GitHub {
       createLabel: async (params) => {
         requireNoOctokitRetry(params);
         const {name} = params;
-        return {data: this.labels[this.labels.push({name}) - 1]};
+        const label = {name};
+        this.labels.push(label);
+        if (this.failCreateLabel) { this.failCreateLabel = false; const error = new Error("ambiguous label create"); error.status = 502; throw error; }
+        return {data: label};
       },
       listForRepo: async (params) => {
         requireNoOctokitRetry(params);
