@@ -64,6 +64,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          lint_config_path=.golang""ci.yml
           forbidden_paths=(
             cmd
             internal
@@ -73,7 +74,7 @@ jobs:
             go.sum
             go.work
             go.work.sum
-            .golangci.yml
+            "$lint_config_path"
             segh.example.yaml
             Makefile
           )
@@ -87,19 +88,117 @@ jobs:
             echo "::error::Go source files are not part of the workflow-only product."
             exit 1
           fi
-          if git grep -nE \
-            'dceoy/gha-for-devops|(^|[[:space:]])package[[:space:]]|golangci|inventory\.json|audit\.json|scan-manifest\.json|scan-summary\.json|scan-report\.md|reconcile-source-scan|status\.json' \
-            -- .github scripts aqua.yaml aqua-checksums.json \
-            ':(exclude).github/workflows/validation.yml'; then
-            echo "::error::Removed Go, governance, delegation, or reconciliation surface reappeared."
-            exit 1
-          fi
-          if git grep -nE \
-            '(^|[;&|()[:space:]])go[[:space:]]+(test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)([[:space:]]|$)' \
-            -- scripts; then
-            echo "::error::Go toolchain commands are not part of the workflow-only product."
-            exit 1
-          fi
+
+          mapfile -d '' -t action_files < <(
+            git ls-files -z -- \
+              '.github/workflows/*.yml' \
+              '.github/workflows/*.yaml' \
+              ':(glob)**/action.yml' \
+              ':(glob)**/action.yaml'
+          )
+          ruby -ryaml -e '
+            tracked_files = IO.popen(["git", "ls-files", "-z"], &:read).split("\0")
+            action_files = ARGV
+            forbidden_literals = [
+              ["dceoy/gha-for-", "devops"].join,
+              ["golang", "ci"].join,
+              ["inventory.", "json"].join,
+              ["audit.", "json"].join,
+              ["scan-manifest.", "json"].join,
+              ["scan-summary.", "json"].join,
+              ["scan-report.", "md"].join,
+              ["reconcile-source-", "scan"].join,
+              ["status.", "json"].join
+            ]
+            package_declaration = /(^|\s)pack#{"age"}\s/
+            go_command = /(?:^|[;&|()\s])(?:["\x27]?(?:\$\(\s*(?:command\s+-v|which)\s+go\s*\)|[^\s;&|()"\x27`]*\/go|go)["\x27]?)\s+(?:test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)(?:\s|$)/
+
+            tracked_files.each do |path|
+              content = File.binread(path)
+              next if content.include?("\0")
+
+              forbidden_literals.each do |literal|
+                if content.include?(literal)
+                  warn "::error file=#{path}::Removed product surface reappeared: #{literal}"
+                  exit 1
+                end
+              end
+              if content.match?(package_declaration)
+                warn "::error file=#{path}::Go source declarations are not part of the workflow-only product."
+                exit 1
+              end
+              if content.match?(go_command)
+                warn "::error file=#{path}::Go toolchain commands are not part of the workflow-only product."
+                exit 1
+              end
+            end
+
+            expected_permissions = {
+              "issues" => "write",
+              "contents" => "read",
+              "actions" => "read"
+            }
+            validate_permissions = lambda do |permissions, path, scope, publisher|
+              return if permissions.nil? || permissions == {}
+
+              unless permissions.is_a?(Hash)
+                if permissions == "write-all"
+                  warn "::error file=#{path}::#{scope} must not request write-all permissions."
+                  exit 1
+                end
+                next
+              end
+
+              if publisher
+                unless permissions["issues"] == "write" &&
+                       permissions.all? { |name, access| expected_permissions[name] == access }
+                  warn "::error file=#{path}::publish-dashboard permissions exceed the isolated publisher contract."
+                  exit 1
+                end
+              elsif permissions.any? { |_, access| access == "write" }
+                warn "::error file=#{path}::#{scope} must not request write permissions."
+                exit 1
+              end
+            end
+
+            validate_action = lambda do |action, path|
+              unless action.is_a?(String)
+                warn "::error file=#{path}::Action reference must be a string."
+                exit 1
+              end
+              return if action.start_with?("./")
+
+              name = action.sub(/@[^@]+\z/, "")
+              if name == "actions/setup-go"
+                warn "::error file=#{path}::The Go toolchain action is not part of the workflow-only product: #{action}"
+                exit 1
+              end
+              unless action.match?(/\A[^@\s]+@[0-9a-f]{40}\z/)
+                warn "::error file=#{path}::Remote action is not pinned to a full commit SHA: #{action}"
+                exit 1
+              end
+            end
+
+            validate_step = lambda do |step, path|
+              validate_action.call(step["uses"], path) if step.key?("uses")
+            end
+
+            action_files.each do |path|
+              document = YAML.load_file(path)
+              if path.start_with?(".github/workflows/")
+                validate_permissions.call(document["permissions"], path, "workflow", false)
+                document.fetch("jobs", {}).each do |job_name, job|
+                  publisher = path == ".github/workflows/organization-scan.yml" &&
+                              job_name == "publish-dashboard"
+                  validate_permissions.call(job["permissions"], path, "job #{job_name}", publisher)
+                  validate_action.call(job["uses"], path) if job.key?("uses")
+                  Array(job["steps"]).each { |step| validate_step.call(step, path) }
+                end
+              else
+                Array(document.dig("runs", "steps")).each { |step| validate_step.call(step, path) }
+              end
+            end
+          ' "${action_files[@]}"
 
           expected_scanners=(
             ossf/scorecard
@@ -125,62 +224,6 @@ jobs:
               exit 1
             fi
           done
-
-          mapfile -d '' -t action_files < <(
-            git ls-files -z -- \
-              '.github/workflows/*.yml' \
-              '.github/workflows/*.yaml' \
-              ':(glob)**/action.yml' \
-              ':(glob)**/action.yaml'
-          )
-          ruby -ryaml -e '
-            go_command = /(^|[;&|()\s])go\s+(test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)(\s|$)/
-
-            validate_action = lambda do |action, path|
-              unless action.is_a?(String)
-                warn "::error file=#{path}::Action reference must be a string."
-                exit 1
-              end
-              return if action.start_with?("./")
-
-              name = action.sub(/@[^@]+\z/, "")
-              if name == "actions/setup-go"
-                warn "::error file=#{path}::The Go toolchain action is not part of the workflow-only product: #{action}"
-                exit 1
-              end
-              unless action.match?(/\A[^@\s]+@[0-9a-f]{40}\z/)
-                warn "::error file=#{path}::Remote action is not pinned to a full commit SHA: #{action}"
-                exit 1
-              end
-            end
-
-            validate_step = lambda do |step, path|
-              validate_action.call(step["uses"], path) if step.key?("uses")
-              command = step["run"]
-              if command.is_a?(String) && command.match?(go_command)
-                warn "::error file=#{path}::Go toolchain commands are not part of the workflow-only product."
-                exit 1
-              end
-            end
-
-            ARGV.each do |path|
-              document = YAML.load_file(path)
-              if path.start_with?(".github/workflows/")
-                document.fetch("jobs", {}).each_value do |job|
-                  validate_action.call(job["uses"], path) if job.key?("uses")
-                  Array(job["steps"]).each { |step| validate_step.call(step, path) }
-                end
-              else
-                Array(document.dig("runs", "steps")).each { |step| validate_step.call(step, path) }
-              end
-            end
-          ' "${action_files[@]}"
-
-          permission_pattern="^[[:space:]]*permissions:[[:space:]]*['\"]?write-all['\"]?([[:space:]]*(#.*)?)?$|(^|[,{[:space:]])['\"]?[A-Za-z-]+['\"]?[[:space:]]*:[[:space:]]*['\"]?write['\"]?([[:space:],}#]|$)"
-          if grep -nE "$permission_pattern" .github/workflows/organization-scan.yml; then
-            echo "::error::The scanner workflow must not request write permissions."
-            exit 1
-          fi
 
   production-workflow:
     needs: workflow-only-boundary
