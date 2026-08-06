@@ -1,0 +1,53 @@
+---
+name: Trusted workflow-only boundary
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    branches:
+      - main
+
+permissions: {}
+
+jobs:
+  trusted-workflow-only-boundary:
+    name: Trusted workflow-only boundary
+    if: github.repository == 'dceoy/segh'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: _trusted
+          persist-credentials: false
+          lfs: false
+          submodules: false
+      - name: Check out candidate revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: _candidate
+          persist-credentials: false
+          lfs: false
+          submodules: false
+      - name: Protect the trusted policy source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp --silent \
+            _trusted/.github/workflows/trusted-boundary.yml \
+            _candidate/.github/workflows/trusted-boundary.yml || {
+              echo "::error file=.github/workflows/trusted-boundary.yml::The trusted boundary workflow cannot be changed by an ordinary pull request."
+              exit 1
+            }
+          cmp --silent \
+            _trusted/scripts/validate-workflow-boundary.rb \
+            _candidate/scripts/validate-workflow-boundary.rb || {
+              echo "::error file=scripts/validate-workflow-boundary.rb::The trusted boundary validator cannot be changed by an ordinary pull request."
+              exit 1
+            }
+      - name: Validate candidate product boundary
+        run: ruby _trusted/scripts/validate-workflow-boundary.rb _candidate
