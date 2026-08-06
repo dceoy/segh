@@ -10,7 +10,7 @@ scan matrix
   └─ one repository-scoped installation token per matrix target, read-only
 
 publish-dashboard (future #74 implementation)
-  └─ private control-repository GITHUB_TOKEN with issues: write
+  └─ same private control repository's GITHUB_TOKEN with issues: write
 ```
 
 No job may receive both a scan credential and an issue-write credential. The workflow does not currently implement `publish-dashboard`; this document defines the contract that #74 must follow without adding a placeholder or no-op job.
@@ -72,22 +72,17 @@ The scanner job has no write permission. Target-controlled scripts, actions, hoo
 
 ## Future dashboard publisher
 
-#74 should prefer the private control repository's built-in `GITHUB_TOKEN` with job-level `issues: write`. The publisher may additionally request `contents: read` or `actions: read` only when its implementation demonstrably needs repository files or workflow/artifact metadata.
+#74 must use the private control repository's built-in `GITHUB_TOKEN` with job-level `issues: write` and publish only to that same repository. The job must bind `SEGH_DASHBOARD_REPOSITORY` to `${{ github.repository }}`. It may additionally request `contents: read` or `actions: read` only when its implementation demonstrably needs repository files or workflow/artifact metadata.
 
-If the local `GITHUB_TOKEN` cannot publish to the selected private control repository, #74 may introduce a separate GitHub App installed only on that repository, using these names:
+Cross-repository dashboard publication, personal access tokens, generic configured tokens, and a separate publisher GitHub App are outside this credential contract. If a later change needs a separately configured dashboard repository, it must first add a runtime API check of that repository's actual visibility and structural tests that fail when private or internal scan results could reach a public target.
 
-- `SEGH_PUBLISH_APP_ID`
-- `SEGH_PUBLISH_APP_PRIVATE_KEY`
-
-The publisher must never receive `SEGH_ORG_SCAN_APP_ID`, `SEGH_ORG_SCAN_APP_PRIVATE_KEY`, a planning token, or a per-target token. Scanner jobs must never receive publisher credentials.
-
-Do not add personal access token discovery or a generic token input shared by phases.
+The publisher must never receive configured secrets, `SEGH_ORG_SCAN_APP_ID`, `SEGH_ORG_SCAN_APP_PRIVATE_KEY`, a planning token, or a per-target token. Scanner jobs must never receive publisher credentials.
 
 ## Public/private safety boundary
 
 The source repository `dceoy/segh` is public. Organization scans and raw evidence must run in a private execution or control repository.
 
-The workflow fails closed when invoked from a public caller. A future dashboard publisher must also reject a public dashboard target whenever the authoritative plan contains any private or internal repository. Private repository names, paths, source excerpts, scanner logs, and finding details must not be placed in public issues, job summaries, or artifacts belonging to the public source repository.
+The workflow fails closed when invoked from a public caller. Because the future dashboard target is fixed to the caller repository, this visibility check also validates the actual issue-publication target. Private repository names, paths, source excerpts, scanner logs, and finding details must not be placed in public issues, job summaries, or artifacts belonging to the public source repository.
 
 ## Removed names and migration
 
@@ -95,6 +90,8 @@ After migration, remove these obsolete secrets or variables from control reposit
 
 - `SEGH_READ_APP_ID`
 - `SEGH_READ_APP_PRIVATE_KEY`
+- `SEGH_PUBLISH_APP_ID`
+- `SEGH_PUBLISH_APP_PRIVATE_KEY`
 - any generic `GH_TOKEN`, `GITHUB_TOKEN`, `TARGET_TOKEN`, or `SCAN_TOKEN` secret created for cross-phase reuse
 - any issue-write token installed on target repositories
 
