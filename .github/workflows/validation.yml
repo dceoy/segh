@@ -36,7 +36,7 @@ jobs:
             .github/workflows/*.yml
       - name: Run zizmor
         run: >-
-          zizmor --offline --no-config --no-ignores
+          zizmor --offline --no-config
           --min-severity high --min-confidence high
           .github/workflows
       - name: Run ShellCheck
