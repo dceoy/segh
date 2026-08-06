@@ -9,6 +9,19 @@ const OVERALL_STATUS = /<!-- segh-overall-status: (pass|findings|incomplete|erro
 const FINDING_FINGERPRINT = /<!-- segh-finding-fingerprint: (sha256:[0-9a-f]{64}) -->/;
 const RESULT_DIGEST = /<!-- segh-result-digest: sha256:[0-9a-f]{64} -->/;
 const BODY_INTEGRITY = /<!-- segh-body-integrity: sha256:([0-9a-f]{64}) -->\n?$/;
+const MANAGED_LABELS = new Set([
+  "scan:pass",
+  "scan:findings",
+  "scan:incomplete",
+  "scan:error",
+  "scan:retired",
+  "finding:scorecard",
+  "finding:actions",
+  "finding:shell",
+  "finding:vulnerability",
+  "finding:secret",
+  "finding:misconfiguration",
+]);
 
 function marker(body, pattern) {
   return String(body || "").match(pattern)?.[1] || "none";
@@ -42,6 +55,24 @@ function invalidateUntrustedDigest(issue) {
   };
 }
 
+function canonicalManagedLabel(name) {
+  const canonical = String(name || "").toLowerCase();
+  return MANAGED_LABELS.has(canonical) ? canonical : null;
+}
+
+function normalizeManagedLabels(issue) {
+  if (!Array.isArray(issue?.labels)) return issue;
+  return {
+    ...issue,
+    labels: issue.labels.map((label) => {
+      const name = typeof label === "string" ? label : label?.name;
+      const canonical = canonicalManagedLabel(name);
+      if (!canonical) return label;
+      return typeof label === "string" ? canonical : {...label, name: canonical};
+    }),
+  };
+}
+
 function withManagedBodyIntegrity(params) {
   if (typeof params.body !== "string" || !managedDashboard(params.body)) return params;
   return {...params, body: withBodyIntegrity(params.body)};
@@ -62,7 +93,7 @@ function disableOctokitRetries(github) {
   issues.listForRepo = async (params) => {
     const response = await listForRepo(params);
     if (!Array.isArray(response?.data)) return response;
-    return {...response, data: response.data.map(invalidateUntrustedDigest)};
+    return {...response, data: response.data.map(normalizeManagedLabels).map(invalidateUntrustedDigest)};
   };
   return {...github, rest: {...github.rest, issues}};
 }
@@ -137,9 +168,12 @@ function idempotentGitHub(github) {
     return {data: current};
   };
   issues.createComment = async (params) => {
-    const result = await createComment(params);
     const key = issueKey(params);
     const pending = pendingUpdates.get(key);
+    const result = await createComment({
+      ...params,
+      event_identity: pending ? `desired-body:sha256:${sha256(pending.body)}` : "",
+    });
     if (pending) {
       await persistUpdate(pending);
       pendingUpdates.delete(key);

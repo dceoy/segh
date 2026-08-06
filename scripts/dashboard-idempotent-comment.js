@@ -12,13 +12,16 @@ async function hasComment(github, params, marker) {
 function idempotentComment(github) {
   const create = github.rest.issues.createComment.bind(github.rest.issues);
   return async (params) => {
-    const hash = crypto.createHash("sha256").update(`${params.issue_number}\n${params.body}`).digest("hex");
+    const {event_identity: eventIdentity = "", ...request} = params;
+    const hash = crypto.createHash("sha256")
+      .update(`${request.issue_number}\n${eventIdentity}\n${request.body}`)
+      .digest("hex");
     const marker = `<!-- segh-history-event: sha256:${hash} -->`;
-    const query = {owner: params.owner, repo: params.repo, issue_number: params.issue_number};
-    const body = `${marker}\n${params.body}`;
+    const query = {owner: request.owner, repo: request.repo, issue_number: request.issue_number};
+    const body = `${marker}\n${request.body}`;
     if (await hasComment(github, query, marker)) return {data: {body}};
     try {
-      return await create({...params, body});
+      return await create({...request, body});
     } catch (error) {
       if (!retryable(error)) throw error;
       if (await hasComment(github, query, marker)) return {data: {body}};
