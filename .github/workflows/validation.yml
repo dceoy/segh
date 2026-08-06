@@ -1,0 +1,20 @@
+---
+name: Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  checks: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  production-workflow:
+    uses: ./.github/workflows/organization-scan.yml
+    with:
+      validation_mode: true
+      max_parallel: "5"

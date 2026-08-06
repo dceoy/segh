@@ -1,23 +1,17 @@
-# Security policy
+# Security Policy
 
-Report suspected vulnerabilities privately through the repository's GitHub
-security-advisory interface.
+## Supported version
 
-The periodic organization workflow treats every target checkout as untrusted
-data. It grants only `contents: read`, uses the pinned trusted scanner from
-`dceoy/gha-for-devops`, disables target-provided scanner configuration and
-exclusions, installs checksum-verified scanner versions, and retains reports as
-ordinary workflow artifacts.
+Only the current `main` branch is supported. The workflow and every action or scanner dependency must be consumed at a reviewed immutable revision.
 
-Keep the App private key in Actions secrets, install the read-only inventory App
-on every organization repository, and run organization audits only from a
-private control repository. Pull-request and merge-queue enforcement are
-outside `segh` and require an independently managed control where needed.
+## Reporting a vulnerability
 
-Periodic scan artifacts can include detected secrets and sensitive repository
-paths. Keep them private, use bounded retention, and do not copy their contents
-into public issues or job summaries.
+Report vulnerabilities through GitHub private vulnerability reporting for this repository. Do not include credentials, private scanner artifacts, repository source, or undisclosed findings in a public issue.
 
-Scanner gates reduce risk but do not provide pre-receive secret blocking,
-CodeQL-equivalent deep SAST, or a managed security-alert lifecycle. Rotate any
-committed secret immediately.
+## Operational requirements
+
+Organization scans must run from a private control repository. Store `SEGH_READ_APP_PRIVATE_KEY` only as an Actions secret and grant the GitHub App only read access to repository metadata, contents, issues, pull requests, and checks.
+
+The workflow treats selected repositories as untrusted input. It resolves immutable commits, uses repository-scoped read-only tokens, disables credential persistence, Git LFS, and submodules, removes tracked symlinks, rejects incomplete content, ignores target-owned scanner configuration where supported, and never executes target repository code.
+
+Raw scanner artifacts can expose source paths, dependency details, secrets, and security findings. Keep them private, restrict Actions access, use the shortest practical retention period, and delete affected artifacts after credential rotation or incident response.
