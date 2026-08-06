@@ -71,6 +71,8 @@ jobs:
             config
             go.mod
             go.sum
+            go.work
+            go.work.sum
             .golangci.yml
             segh.example.yaml
             Makefile
@@ -86,10 +88,16 @@ jobs:
             exit 1
           fi
           if git grep -nE \
-            'dceoy/gha-for-devops|(^|[[:space:]])package[[:space:]]|go (test|build|vet)|golangci|inventory\.json|audit\.json|scan-manifest\.json|scan-summary\.json|scan-report\.md|reconcile-source-scan|status\.json' \
+            'dceoy/gha-for-devops|(^|[[:space:]])package[[:space:]]|golangci|inventory\.json|audit\.json|scan-manifest\.json|scan-summary\.json|scan-report\.md|reconcile-source-scan|status\.json' \
             -- .github scripts aqua.yaml aqua-checksums.json \
             ':(exclude).github/workflows/validation.yml'; then
             echo "::error::Removed Go, governance, delegation, or reconciliation surface reappeared."
+            exit 1
+          fi
+          if git grep -nE \
+            '(^|[;&|()[:space:]])go[[:space:]]+(test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)([[:space:]]|$)' \
+            -- scripts; then
+            echo "::error::Go toolchain commands are not part of the workflow-only product."
             exit 1
           fi
 
@@ -118,22 +126,55 @@ jobs:
             fi
           done
 
-          while IFS= read -r -d '' action_file; do
-            while IFS= read -r action; do
-              [[ "$action" == ./* ]] && continue
-              ref=${action##*@}
-              if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "::error::Remote action is not pinned to a full commit SHA: $action"
-                exit 1
-              fi
-            done < <(sed -nE 's/^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]+([^#[:space:]]+).*$/\2/p' "$action_file")
-          done < <(
+          mapfile -d '' -t action_files < <(
             git ls-files -z -- \
               '.github/workflows/*.yml' \
               '.github/workflows/*.yaml' \
               ':(glob)**/action.yml' \
               ':(glob)**/action.yaml'
           )
+          ruby -ryaml -e '
+            go_command = /(^|[;&|()\s])go\s+(test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)(\s|$)/
+
+            validate_action = lambda do |action, path|
+              unless action.is_a?(String)
+                warn "::error file=#{path}::Action reference must be a string."
+                exit 1
+              end
+              return if action.start_with?("./")
+
+              name = action.sub(/@[^@]+\z/, "")
+              if name == "actions/setup-go"
+                warn "::error file=#{path}::The Go toolchain action is not part of the workflow-only product: #{action}"
+                exit 1
+              end
+              unless action.match?(/\A[^@\s]+@[0-9a-f]{40}\z/)
+                warn "::error file=#{path}::Remote action is not pinned to a full commit SHA: #{action}"
+                exit 1
+              end
+            end
+
+            validate_step = lambda do |step, path|
+              validate_action.call(step["uses"], path) if step.key?("uses")
+              command = step["run"]
+              if command.is_a?(String) && command.match?(go_command)
+                warn "::error file=#{path}::Go toolchain commands are not part of the workflow-only product."
+                exit 1
+              end
+            end
+
+            ARGV.each do |path|
+              document = YAML.load_file(path)
+              if path.start_with?(".github/workflows/")
+                document.fetch("jobs", {}).each_value do |job|
+                  validate_action.call(job["uses"], path) if job.key?("uses")
+                  Array(job["steps"]).each { |step| validate_step.call(step, path) }
+                end
+              else
+                Array(document.dig("runs", "steps")).each { |step| validate_step.call(step, path) }
+              end
+            end
+          ' "${action_files[@]}"
 
           permission_pattern="^[[:space:]]*permissions:[[:space:]]*['\"]?write-all['\"]?([[:space:]]*(#.*)?)?$|(^|[,{[:space:]])['\"]?[A-Za-z-]+['\"]?[[:space:]]*:[[:space:]]*['\"]?write['\"]?([[:space:],}#]|$)"
           if grep -nE "$permission_pattern" .github/workflows/organization-scan.yml; then
