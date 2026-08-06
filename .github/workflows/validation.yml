@@ -13,7 +13,87 @@ permissions:
   pull-requests: read
 
 jobs:
+  workflow-only-boundary:
+    name: Workflow-only boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out candidate revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Reject removed product surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          forbidden_paths=(
+            cmd
+            internal
+            schema
+            config
+            go.mod
+            go.sum
+            .golangci.yml
+            segh.example.yaml
+            Makefile
+          )
+          for path in "${forbidden_paths[@]}"; do
+            if git ls-files -- "$path" "$path/**" | grep -q .; then
+              echo "::error::Removed product path is tracked again: $path"
+              exit 1
+            fi
+          done
+          if git ls-files -- '*.go' | grep -q .; then
+            echo "::error::Go source files are not part of the workflow-only product."
+            exit 1
+          fi
+          if git grep -nE \
+            'dceoy/gha-for-devops|(^|[[:space:]])package[[:space:]]|go (test|build|vet)|golangci|inventory\.json|audit\.json|scan-manifest\.json|scan-summary\.json|scan-report\.md|reconcile-source-scan|status\.json' \
+            -- .github scripts aqua.yaml aqua-checksums.json \
+            ':(exclude).github/workflows/validation.yml'; then
+            echo "::error::Removed Go, governance, delegation, or reconciliation surface reappeared."
+            exit 1
+          fi
+
+          expected_scanners=(
+            ossf/scorecard
+            zizmorcore/zizmor
+            rhysd/actionlint
+            koalaman/shellcheck
+            aquasecurity/trivy
+          )
+          mapfile -t actual_scanners < <(sed -nE 's/^  - name: ([^@]+)@.+$/\1/p' aqua.yaml)
+          if ((${#actual_scanners[@]} != ${#expected_scanners[@]})); then
+            echo "::error::The trusted Aqua profile must contain exactly five scanners."
+            exit 1
+          fi
+          for index in "${!expected_scanners[@]}"; do
+            if [[ "${actual_scanners[$index]}" != "${expected_scanners[$index]}" ]]; then
+              echo "::error::Unexpected scanner at position $index: ${actual_scanners[$index]}"
+              exit 1
+            fi
+          done
+
+          while IFS= read -r action; do
+            [[ "$action" == ./* ]] && continue
+            ref=${action##*@}
+            if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Remote action is not pinned to a full commit SHA: $action"
+              exit 1
+            fi
+          done < <(sed -nE 's/^[[:space:]]*uses:[[:space:]]+([^#[:space:]]+).*$/\1/p' .github/workflows/*.yml)
+
+          if grep -nE '^[[:space:]]+[A-Za-z-]+:[[:space:]]+write([[:space:]]|$)' \
+            .github/workflows/organization-scan.yml; then
+            echo "::error::The scanner workflow must not request write permissions."
+            exit 1
+          fi
+
   production-workflow:
+    needs: workflow-only-boundary
     uses: ./.github/workflows/organization-scan.yml
     with:
       validation_mode: true
