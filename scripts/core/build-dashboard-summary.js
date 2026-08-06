@@ -15,7 +15,6 @@ const SCORECARD_CHECKS = new Set([
   "Token-Permissions",
   "Vulnerabilities",
 ]);
-const MAX_FINDINGS = 100000;
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -37,24 +36,7 @@ function sha256(value) {
   return `sha256:${crypto.createHash("sha256").update(value).digest("hex")}`;
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function findingFingerprints(name, findings) {
-  if (!Array.isArray(findings) || findings.length > MAX_FINDINGS) {
-    throw new Error(`${name} finding set exceeds the bounded fingerprint contract`);
-  }
-  return findings
-    .map((finding) => sha256(`${name}\0${canonicalJson(finding)}`))
-    .sort();
-}
-
-function scanner(name, status, findings, category = null, selectedChecks = [], fingerprints = []) {
+function scanner(name, status, findings, category = null, selectedChecks = []) {
   if (!STATUS.has(status)) throw new Error(`invalid scanner status: ${status}`);
   const result = {
     name,
@@ -63,10 +45,6 @@ function scanner(name, status, findings, category = null, selectedChecks = [], f
   };
   if (category) result.category = category;
   if (selectedChecks.length > 0) result.selected_checks = selectedChecks;
-  Object.defineProperty(result, "findingFingerprints", {
-    value: [...fingerprints],
-    enumerable: false,
-  });
   return result;
 }
 
@@ -101,9 +79,8 @@ function parseZizmor(resultsDir, outcome) {
     const data = readJson(file);
     if (!Array.isArray(data)) return scanner("zizmor", "error", 0, "actions");
     const count = data.length;
-    const fingerprints = findingFingerprints("zizmor", data);
-    if (outcome === "success" && count === 0) return scanner("zizmor", "pass", 0, "actions", [], fingerprints);
-    if (count > 0) return scanner("zizmor", "findings", count, "actions", [], fingerprints);
+    if (outcome === "success" && count === 0) return scanner("zizmor", "pass", 0, "actions");
+    if (count > 0) return scanner("zizmor", "findings", count, "actions");
     return scanner("zizmor", "error", 0, "actions");
   } catch {
     return scanner("zizmor", "error", 0, "actions");
@@ -116,14 +93,9 @@ function parseActionlint(resultsDir, outcome) {
   if (!fileExists(file)) return scanner("actionlint", "error", 0, "actions");
   try {
     const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean);
-    const findings = lines.map((line) => JSON.parse(line));
-    const fingerprints = findingFingerprints("actionlint", findings);
-    if (outcome === "success" && findings.length === 0) {
-      return scanner("actionlint", "pass", 0, "actions", [], fingerprints);
-    }
-    if (findings.length > 0) {
-      return scanner("actionlint", "findings", findings.length, "actions", [], fingerprints);
-    }
+    for (const line of lines) JSON.parse(line);
+    if (outcome === "success" && lines.length === 0) return scanner("actionlint", "pass", 0, "actions");
+    if (lines.length > 0) return scanner("actionlint", "findings", lines.length, "actions");
     return scanner("actionlint", "error", 0, "actions");
   } catch {
     return scanner("actionlint", "error", 0, "actions");
@@ -140,12 +112,11 @@ function parseShellcheck(resultsDir, outcome) {
     const data = readJson(file);
     const comments = Array.isArray(data) ? data : data.comments;
     if (!Array.isArray(comments) || !Number.isInteger(status)) return scanner("shellcheck", "error", 0, "shell");
-    const fingerprints = findingFingerprints("shellcheck", comments);
     if (status === 0 && outcome === "success" && comments.length === 0) {
-      return scanner("shellcheck", "pass", 0, "shell", [], fingerprints);
+      return scanner("shellcheck", "pass", 0, "shell");
     }
     if (status === 1 && comments.length > 0) {
-      return scanner("shellcheck", "findings", comments.length, "shell", [], fingerprints);
+      return scanner("shellcheck", "findings", comments.length, "shell");
     }
     return scanner("shellcheck", "error", 0, "shell");
   } catch {
@@ -163,19 +134,12 @@ function parseTrivy(resultsDir, outcome, kind, property, category) {
     if (!data || typeof data !== "object" || !Array.isArray(data.Results)) {
       return scanner(name, "error", 0, category);
     }
-    const findings = data.Results.flatMap((result) => {
+    const count = data.Results.reduce((sum, result) => {
       const entries = result && Array.isArray(result[property]) ? result[property] : [];
-      return entries.map((finding) => ({
-        target: result.Target ?? "",
-        class: result.Class ?? "",
-        type: result.Type ?? "",
-        finding,
-      }));
-    });
-    const count = findings.length;
-    const fingerprints = findingFingerprints(name, findings);
-    if (outcome === "success" && count === 0) return scanner(name, "pass", 0, category, [], fingerprints);
-    if (count > 0) return scanner(name, "findings", count, category, [], fingerprints);
+      return sum + entries.length;
+    }, 0);
+    if (outcome === "success" && count === 0) return scanner(name, "pass", 0, category);
+    if (count > 0) return scanner(name, "findings", count, category);
     return scanner(name, "error", 0, category);
   } catch {
     return scanner(name, "error", 0, category);
@@ -266,10 +230,7 @@ function buildSummary({resultsDir, env = process.env, now = new Date()}) {
   const categories = [...new Set(scanners.filter((item) => item.findings > 0 && item.category).map((item) => item.category))].sort();
   const totalFindings = scanners.reduce((sum, item) => sum + item.findings, 0);
   const fingerprintInput = scanners
-    .flatMap((item) => [
-      `${item.name}:status:${item.status}:${item.findings}:${item.category ?? ""}`,
-      ...item.findingFingerprints.map((fingerprint) => `${item.name}:finding:${fingerprint}`),
-    ])
+    .map((item) => `${item.name}:${item.status}:${item.findings}:${item.category ?? ""}`)
     .sort()
     .join("\n");
 
@@ -299,7 +260,7 @@ function buildSummary({resultsDir, env = process.env, now = new Date()}) {
     findings: {
       total: totalFindings,
       categories,
-      fingerprint: sha256(`${target.repository_id}\n${fingerprintInput}`),
+      fingerprint: sha256(fingerprintInput),
     },
     remediation_categories: remediationCategories(scanners),
   };
