@@ -77,17 +77,19 @@ jobs:
             fi
           done
 
-          while IFS= read -r action; do
-            [[ "$action" == ./* ]] && continue
-            ref=${action##*@}
-            if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "::error::Remote action is not pinned to a full commit SHA: $action"
-              exit 1
-            fi
-          done < <(sed -nE 's/^[[:space:]]*uses:[[:space:]]+([^#[:space:]]+).*$/\1/p' .github/workflows/*.yml)
+          while IFS= read -r -d '' workflow; do
+            while IFS= read -r action; do
+              [[ "$action" == ./* ]] && continue
+              ref=${action##*@}
+              if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "::error::Remote action is not pinned to a full commit SHA: $action"
+                exit 1
+              fi
+            done < <(sed -nE 's/^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]+([^#[:space:]]+).*$/\2/p' "$workflow")
+          done < <(git ls-files -z -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
 
-          if grep -nE '^[[:space:]]+[A-Za-z-]+:[[:space:]]+write([[:space:]]|$)' \
-            .github/workflows/organization-scan.yml; then
+          permission_pattern="^[[:space:]]*permissions:[[:space:]]*['\"]?write-all['\"]?([[:space:]]*(#.*)?)?$|(^|[,{[:space:]])['\"]?[A-Za-z-]+['\"]?[[:space:]]*:[[:space:]]*['\"]?write['\"]?([[:space:],}#]|$)"
+          if grep -nE "$permission_pattern" .github/workflows/organization-scan.yml; then
             echo "::error::The scanner workflow must not request write permissions."
             exit 1
           fi
