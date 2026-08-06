@@ -13,7 +13,24 @@ function completeScannerSet(summary) {
   if (!Array.isArray(summary?.scanners) || summary.scanners.length !== REQUIRED.size) return false;
   const names = new Set(summary.scanners.map((scanner) => scanner?.name));
   if (names.size !== REQUIRED.size || [...REQUIRED].some((name) => !names.has(name))) return false;
-  return summary.overall_status !== "pass" || summary.scanners.every((scanner) => scanner.status === "pass");
+  if (summary.scanners.some((scanner) => !Number.isSafeInteger(scanner?.findings) || scanner.findings < 0)) return false;
+
+  const statuses = summary.scanners.map((scanner) => scanner.status);
+  const totalFindings = summary.scanners.reduce((sum, scanner) => sum + scanner.findings, 0);
+  switch (summary.overall_status) {
+    case "pass":
+      return totalFindings === 0 && statuses.every((status) => status === "pass");
+    case "findings":
+      return totalFindings > 0 && statuses.some((status) => status === "findings") &&
+        statuses.every((status) => status === "pass" || status === "findings");
+    case "incomplete":
+      return statuses.some((status) => status === "incomplete" || status === "skipped") &&
+        statuses.every((status) => status !== "error");
+    case "error":
+      return statuses.some((status) => status === "error") || statuses.every((status) => status === "skipped");
+    default:
+      return false;
+  }
 }
 
 function findSummaries(root) {
