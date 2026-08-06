@@ -1,6 +1,7 @@
 ---
 name: Trusted workflow-only boundary
 
+# Configure this check as required after the bootstrap merge.
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers]
     branches:
