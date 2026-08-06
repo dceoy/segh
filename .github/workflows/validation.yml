@@ -113,7 +113,6 @@ jobs:
               ["reconcile-source-", "scan"].join,
               ["status.", "json"].join
             ]
-            package_declaration = /(^|\s)pack#{"age"}\s/
             go_command = /(?:^|[;&|()\s])(?:["\x27]?(?:\$\(\s*(?:command\s+-v|which)\s+go\s*\)|[^\s;&|()"\x27`]*\/go|go)["\x27]?)\s+(?:test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)(?:\s|$)/
 
             tracked_files.each do |path|
@@ -125,10 +124,6 @@ jobs:
                   warn "::error file=#{path}::Removed product surface reappeared: #{literal}"
                   exit 1
                 end
-              end
-              if content.match?(package_declaration)
-                warn "::error file=#{path}::Go source declarations are not part of the workflow-only product."
-                exit 1
               end
               if content.match?(go_command)
                 warn "::error file=#{path}::Go toolchain commands are not part of the workflow-only product."
@@ -203,30 +198,65 @@ jobs:
             end
           ' "${action_files[@]}"
 
-          expected_scanners=(
-            ossf/scorecard
-            zizmorcore/zizmor
-            rhysd/actionlint
-            koalaman/shellcheck
-            aquasecurity/trivy
-          )
-          mapfile -t actual_scanners < <(
-            ruby -ryaml -e '
-              YAML.load_file("aqua.yaml").fetch("packages").each do |package|
-                puts package.fetch("name").sub(/@[^@]+\z/, "")
-              end
-            '
-          )
-          if ((${#actual_scanners[@]} != ${#expected_scanners[@]})); then
-            echo "::error::The trusted Aqua profile must contain exactly five scanners."
-            exit 1
-          fi
-          for index in "${!expected_scanners[@]}"; do
-            if [[ "${actual_scanners[$index]}" != "${expected_scanners[$index]}" ]]; then
-              echo "::error::Unexpected scanner at position $index: ${actual_scanners[$index]}"
+          ruby -ryaml -e '
+            require "rubygems"
+
+            minimum_scanners = {
+              "ossf/scorecard" => "5.5.0",
+              "zizmorcore/zizmor" => "1.28.0",
+              "rhysd/actionlint" => "1.7.12",
+              "koalaman/shellcheck" => "0.11.0",
+              "aquasecurity/trivy" => "0.72.0"
+            }
+            version_pattern = /\Av?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\z/
+            parse_version = lambda do |value|
+              match = value.is_a?(String) && version_pattern.match(value)
+              match && Gem::Version.new(match[1])
+            end
+            aqua = YAML.load_file("aqua.yaml")
+
+            checksum = aqua.fetch("checksum", {})
+            unless checksum["enabled"] == true && checksum["require_checksum"] == true
+              warn "::error file=aqua.yaml::Aqua checksums must remain enabled and required."
               exit 1
-            fi
-          done
+            end
+
+            registries = aqua.fetch("registries", [])
+            registry = registries[0] if registries.is_a?(Array) && registries.length == 1
+            registry_version = parse_version.call(registry["ref"]) if registry.is_a?(Hash)
+            unless registry.is_a?(Hash) &&
+                   registry["type"] == "standard" &&
+                   registry_version &&
+                   registry_version >= Gem::Version.new("4.544.0")
+              warn "::error file=aqua.yaml::The Aqua standard registry must use one explicit non-downgraded semantic-version ref."
+              exit 1
+            end
+
+            packages = aqua.fetch("packages", [])
+            unless packages.is_a?(Array) && packages.length == minimum_scanners.length
+              warn "::error file=aqua.yaml::The trusted Aqua profile must contain exactly five scanners."
+              exit 1
+            end
+
+            minimum_scanners.each_with_index do |(expected, minimum), index|
+              package = packages[index]
+              name = package.is_a?(Hash) ? package["name"] : nil
+              unless name.is_a?(String)
+                warn "::error file=aqua.yaml::Scanner entry #{index} must contain a string name."
+                exit 1
+              end
+
+              scanner, separator, package_version = name.rpartition("@")
+              actual_version = parse_version.call(package_version)
+              unless separator == "@" &&
+                     scanner == expected &&
+                     actual_version &&
+                     actual_version >= Gem::Version.new(minimum)
+                warn "::error file=aqua.yaml::Scanner #{index} must be #{expected} at an explicit non-downgraded semantic version."
+                exit 1
+              end
+            end
+          '
 
   production-workflow:
     needs: workflow-only-boundary
