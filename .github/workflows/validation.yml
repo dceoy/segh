@@ -99,286 +99,298 @@ jobs:
               ':(glob)**/action.yml' \
               ':(glob)**/action.yaml'
           )
-          ruby -ryaml -e '
-            tracked_files = IO.popen(["git", "ls-files", "-z"], &:read).split("\0")
-            action_files = ARGV
-            documents = action_files.to_h { |path| [path, YAML.load_file(path)] }
-            forbidden_literals = [
-              ["dceoy/gha-for-", "devops"].join,
-              ["golang", "ci"].join,
-              ["inventory.", "json"].join,
-              ["audit.", "json"].join,
-              ["scan-manifest.", "json"].join,
-              ["scan-summary.", "json"].join,
-              ["scan-report.", "md"].join,
-              ["reconcile-source-", "scan"].join,
-              ["status.", "json"].join
-            ]
-            go_command = /(?:^|[;&|()\s])(?:["\x27]?(?:\$\(\s*(?:command\s+-v|which)\s+go\s*\)|[^\s;&|()"\x27`]*\/go|go)["\x27]?)\s+(?:test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)(?:\s|$)/
+          ruby -ryaml - "${action_files[@]}" <<'RUBY'
+          tracked_files = IO.popen(["git", "ls-files", "-z"], &:read).split("\0")
+          action_files = ARGV
+          documents = action_files.to_h { |path| [path, YAML.load_file(path)] }
 
-            tracked_files.each do |path|
-              content = File.binread(path)
-              next if content.include?("\0")
+          fail_boundary = lambda do |path, message|
+            warn "::error file=#{path}::#{message}"
+            exit 1
+          end
 
-              forbidden_literals.each do |literal|
-                if content.include?(literal)
-                  warn "::error file=#{path}::Removed product surface reappeared: #{literal}"
-                  exit 1
+          walk_strings = lambda do |node, path = [], &block|
+            case node
+            when Hash
+              node.each { |key, value| walk_strings.call(value, path + [key], &block) }
+            when Array
+              node.each_with_index { |value, index| walk_strings.call(value, path + [index], &block) }
+            when String
+              block.call(path, node)
+            end
+          end
+
+          forbidden_literals = [
+            ["dceoy/gha-for-", "devops"].join,
+            ["golang", "ci"].join,
+            ["inventory.", "json"].join,
+            ["audit.", "json"].join,
+            ["scan-manifest.", "json"].join,
+            ["scan-summary.", "json"].join,
+            ["scan-report.", "md"].join,
+            ["reconcile-source-", "scan"].join,
+            ["status.", "json"].join
+          ]
+          go_command = /(?:^|[;&|()\s])(?:["\x27]?(?:\$\(\s*(?:command\s+-v|which)\s+go\s*\)|[^\s;&|()"\x27`]*\/go|go)["\x27]?)\s+(?:test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)(?:\s|$)/
+          alternate_network_client = %r{
+            (?:
+              \b(?:curl|wget|aria2c|httpie|xh|nc|ncat|netcat|socat)\b |
+              \bopenssl\s+s_client\b |
+              \bgit\s+(?:clone|fetch|pull|ls-remote)\b |
+              \bNet::HTTP\b | \bnet/http\b | \bOpenURI\b | \bURI\.(?:open|parse)\b |
+              \b(?:requests|urllib3?|httpx|aiohttp)\b |
+              \b(?:axios|node-fetch)\b | \bfetch\s*\( |
+              https?://(?:api\.)?github\.com | \bapi\.github\.com\b
+            )
+          }x
+
+          tracked_files.each do |path|
+            content = File.binread(path)
+            next if content.include?("\0")
+
+            forbidden_literals.each do |literal|
+              fail_boundary.call(path, "Removed product surface reappeared: #{literal}") if content.include?(literal)
+            end
+          end
+
+          executable_surfaces = []
+          documents.each do |path, document|
+            walk_strings.call(document) do |node_path, value|
+              executable_surfaces << [path, node_path, value] if node_path.last == "run"
+            end
+          end
+          Dir["scripts/*"].sort.each do |path|
+            next unless File.file?(path)
+
+            content = File.binread(path)
+            next if content.include?("\0")
+            executable_surfaces << [path, ["script"], content]
+          end
+          executable_surfaces.each do |path, node_path, command|
+            if command.match?(go_command)
+              fail_boundary.call(path, "Executable surface #{node_path.join("/")} invokes the removed Go toolchain.")
+            end
+            if command.match?(alternate_network_client)
+              fail_boundary.call(path, "Executable surface #{node_path.join("/")} uses an unapproved network client.")
+            end
+          end
+
+          publisher_permissions = {
+            "issues" => "write",
+            "contents" => "read",
+            "actions" => "read"
+          }
+          validate_permissions = lambda do |permissions, path, scope, publisher|
+            return if permissions.nil? || permissions == {}
+
+            unless permissions.is_a?(Hash)
+              fail_boundary.call(path, "#{scope} must not request #{permissions} permissions.") if permissions == "write-all"
+              return
+            end
+
+            if publisher
+              unless permissions["issues"] == "write" &&
+                     permissions.all? { |name, access| publisher_permissions[name] == access }
+                fail_boundary.call(path, "publish-dashboard permissions exceed the isolated publisher contract.")
+              end
+            elsif permissions.any? { |_, access| access == "write" }
+              fail_boundary.call(path, "#{scope} must not request write permissions.")
+            end
+          end
+
+          validate_action = lambda do |action, path|
+            fail_boundary.call(path, "Action reference must be a string.") unless action.is_a?(String)
+            return if action.start_with?("./")
+
+            name = action.sub(/@[^@]+\z/, "")
+            if name == "actions/setup-go"
+              fail_boundary.call(path, "The Go toolchain action is not part of the workflow-only product: #{action}")
+            end
+            unless action.match?(/\A[^@\s]+@[0-9a-f]{40}\z/)
+              fail_boundary.call(path, "Remote action is not pinned to a full commit SHA: #{action}")
+            end
+          end
+
+          documents.each do |path, document|
+            if path.start_with?(".github/workflows/")
+              validate_permissions.call(document["permissions"], path, "workflow", false)
+              document.fetch("jobs", {}).each do |job_name, job|
+                unless job.is_a?(Hash)
+                  fail_boundary.call(path, "Job #{job_name} must be a mapping.")
+                end
+                publisher = path == ".github/workflows/organization-scan.yml" && job_name == "publish-dashboard"
+                validate_permissions.call(job["permissions"], path, "job #{job_name}", publisher)
+                validate_action.call(job["uses"], path) if job.key?("uses")
+                Array(job["steps"]).each do |step|
+                  fail_boundary.call(path, "Every workflow step must be a mapping.") unless step.is_a?(Hash)
+                  validate_action.call(step["uses"], path) if step.key?("uses")
                 end
               end
-            end
-
-            executable_surfaces = Dir["scripts/*"].select { |path| File.file?(path) }
-            documents.each do |path, document|
-              runs = []
-              collect_runs = lambda do |node|
-                case node
-                when Hash
-                  node.each do |key, value|
-                    runs << value if key == "run" && value.is_a?(String)
-                    collect_runs.call(value)
-                  end
-                when Array
-                  node.each { |value| collect_runs.call(value) }
-                end
-              end
-              collect_runs.call(document)
-              runs.each_with_index do |run, index|
-                if run.match?(go_command)
-                  warn "::error file=#{path}::Executable run block #{index + 1} invokes the removed Go toolchain."
-                  exit 1
-                end
+            else
+              Array(document.dig("runs", "steps")).each do |step|
+                fail_boundary.call(path, "Every composite-action step must be a mapping.") unless step.is_a?(Hash)
+                validate_action.call(step["uses"], path) if step.key?("uses")
               end
             end
-            executable_surfaces.each do |path|
-              content = File.binread(path)
-              next if content.include?("\0")
-              if content.match?(go_command)
-                warn "::error file=#{path}::Executable script invokes the removed Go toolchain."
-                exit 1
-              end
+          end
+
+          organization_path = ".github/workflows/organization-scan.yml"
+          organization = documents.fetch(organization_path)
+          jobs = organization.fetch("jobs")
+          plan_steps = Array(jobs.fetch("plan")["steps"])
+          scan_steps = Array(jobs.fetch("scan")["steps"])
+          targets = plan_steps.find { |step| step["id"] == "targets" }
+          unless targets && targets["run"].is_a?(String)
+            fail_boundary.call(organization_path, "The immutable target-planning step is missing.")
+          end
+
+          run_steps = []
+          jobs.each do |job_name, job|
+            Array(job["steps"]).each do |step|
+              run_steps << [job_name, step["id"], step["run"]] if step["run"].is_a?(String)
             end
+          end
+          gh_api_steps = run_steps.select { |_, _, run| run.match?(/\bgh\s+api\b/) }
+          unless gh_api_steps.length == 1 && gh_api_steps[0][0, 2] == ["plan", "targets"]
+            fail_boundary.call(organization_path, "Only plan/targets may call gh api.")
+          end
 
-            expected_permissions = {
-              "issues" => "write",
-              "contents" => "read",
-              "actions" => "read"
-            }
-            validate_permissions = lambda do |permissions, path, scope, publisher|
-              return if permissions.nil? || permissions == {}
-
-              unless permissions.is_a?(Hash)
-                if permissions == "write-all"
-                  warn "::error file=#{path}::#{scope} must not request write-all permissions."
-                  exit 1
-                end
-                next
-              end
-
-              if publisher
-                unless permissions["issues"] == "write" &&
-                       permissions.all? { |name, access| expected_permissions[name] == access }
-                  warn "::error file=#{path}::publish-dashboard permissions exceed the isolated publisher contract."
-                  exit 1
-                end
-              elsif permissions.any? { |_, access| access == "write" }
-                warn "::error file=#{path}::#{scope} must not request write permissions."
-                exit 1
-              end
+          targets_run = targets["run"].dup
+          approved_api_calls = [
+            /gh\s+api\s+--paginate\s+--slurp\s+\/installation\/repositories/,
+            /gh\s+api\s+--method\s+GET\s+"repos\/\$full_name\/commits"\s*\\\s*-f\s+sha="\$default_branch"\s+-f\s+per_page=1/m
+          ]
+          approved_api_calls.each do |pattern|
+            unless targets_run.sub!(pattern, "")
+              fail_boundary.call(organization_path, "The target planner must retain the approved GitHub API calls.")
             end
+          end
+          if targets_run.match?(/\bgh\s+api\b/)
+            fail_boundary.call(organization_path, "An unapproved GitHub API call was added to the target planner.")
+          end
 
-            validate_action = lambda do |action, path|
-              unless action.is_a?(String)
-                warn "::error file=#{path}::Action reference must be a string."
-                exit 1
-              end
-              return if action.start_with?("./")
+          target_token_expression = "${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}"
+          target_step_index = scan_steps.index { |step| step["id"] == "target-token" }
+          checkout_step_index = scan_steps.index { |step| step["id"] == "checkout" }
+          scorecard_step_index = scan_steps.index { |step| step["id"] == "scorecard" }
+          unless target_step_index && checkout_step_index && scorecard_step_index
+            fail_boundary.call(organization_path, "The target token, checkout, and Scorecard steps must remain present.")
+          end
 
-              name = action.sub(/@[^@]+\z/, "")
-              if name == "actions/setup-go"
-                warn "::error file=#{path}::The Go toolchain action is not part of the workflow-only product: #{action}"
-                exit 1
-              end
-              unless action.match?(/\A[^@\s]+@[0-9a-f]{40}\z/)
-                warn "::error file=#{path}::Remote action is not pinned to a full commit SHA: #{action}"
-                exit 1
-              end
+          expected_target_token_nodes = {
+            ["jobs", "scan", "steps", target_step_index, "id"] => "target-token",
+            ["jobs", "scan", "steps", checkout_step_index, "with", "token"] => target_token_expression,
+            ["jobs", "scan", "steps", scorecard_step_index, "env", "SEGH_TARGET_SCORECARD_TOKEN"] => target_token_expression
+          }
+          actual_target_token_nodes = {}
+          walk_strings.call(organization) do |path, value|
+            actual_target_token_nodes[path] = value if value.include?("target-token")
+          end
+          unless actual_target_token_nodes == expected_target_token_nodes
+            fail_boundary.call(organization_path, "Target credentials must remain limited to the token step, target checkout, and Scorecard environment.")
+          end
+
+          allowed_results = %w[
+            results/actionlint.jsonl
+            results/actionlint.log
+            results/preflight.txt
+            results/scanner-versions.log
+            results/scanner-versions.txt
+            results/scorecard-permissions.json
+            results/scorecard-status.txt
+            results/scorecard.json
+            results/scorecard.log
+            results/shellcheck-status.txt
+            results/shellcheck.json
+            results/shellcheck.log
+            results/target.json
+            results/trivy-misconfiguration.json
+            results/trivy-misconfiguration.log
+            results/trivy-secret.json
+            results/trivy-secret.log
+            results/trivy-vulnerability.json
+            results/trivy-vulnerability.log
+            results/zizmor.json
+            results/zizmor.log
+          ].sort_by { |path| -path.length }
+          artifact_step_index = scan_steps.index { |step| step["id"] == "artifact" }
+          artifact = artifact_step_index && scan_steps[artifact_step_index]
+          unless artifact&.dig("with", "path") == "results"
+            fail_boundary.call(organization_path, "Artifact upload must remain limited to the results directory.")
+          end
+
+          walk_strings.call(organization) do |path, value|
+            next unless value.match?(/\bresults\b/)
+            next if path == ["jobs", "scan", "steps", artifact_step_index, "with", "path"] && value == "results"
+
+            remaining = value.dup
+            allowed_results.each { |approved| remaining.gsub!(approved, "") }
+            remaining.gsub!(/\bmkdir\s+-p\s+["\x27]?results["\x27]?/, "")
+            if remaining.match?(/\bresults\b/)
+              fail_boundary.call(
+                organization_path,
+                "Unapproved or dynamically constructed results artifact path at #{path.join("/")}.")
             end
+          end
+          RUBY
 
-            validate_step = lambda do |step, path|
-              validate_action.call(step["uses"], path) if step.key?("uses")
-            end
+          ruby -ryaml -rrubygems - <<'RUBY'
+          minimum_scanners = {
+            "ossf/scorecard" => "5.5.0",
+            "zizmorcore/zizmor" => "1.28.0",
+            "rhysd/actionlint" => "1.7.12",
+            "koalaman/shellcheck" => "0.11.0",
+            "aquasecurity/trivy" => "0.72.0"
+          }
+          version_pattern = /\Av?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\z/
+          parse_version = lambda do |value|
+            match = value.is_a?(String) && version_pattern.match(value)
+            match && Gem::Version.new(match[1])
+          end
+          aqua = YAML.load_file("aqua.yaml")
 
-            documents.each do |path, document|
-              if path.start_with?(".github/workflows/")
-                validate_permissions.call(document["permissions"], path, "workflow", false)
-                document.fetch("jobs", {}).each do |job_name, job|
-                  publisher = path == ".github/workflows/organization-scan.yml" &&
-                              job_name == "publish-dashboard"
-                  validate_permissions.call(job["permissions"], path, "job #{job_name}", publisher)
-                  validate_action.call(job["uses"], path) if job.key?("uses")
-                  Array(job["steps"]).each { |step| validate_step.call(step, path) }
-                end
-              else
-                Array(document.dig("runs", "steps")).each { |step| validate_step.call(step, path) }
-              end
-            end
+          checksum = aqua.fetch("checksum", {})
+          unless checksum["enabled"] == true && checksum["require_checksum"] == true
+            warn "::error file=aqua.yaml::Aqua checksums must remain enabled and required."
+            exit 1
+          end
 
-            organization_path = ".github/workflows/organization-scan.yml"
-            organization = documents.fetch(organization_path)
-            jobs = organization.fetch("jobs")
-            plan_steps = Array(jobs.fetch("plan")["steps"])
-            scan_steps = Array(jobs.fetch("scan")["steps"])
-            targets = plan_steps.find { |step| step["id"] == "targets" }
-            unless targets && targets["run"].is_a?(String)
-              warn "::error file=#{organization_path}::The immutable target-planning step is missing."
+          registries = aqua.fetch("registries", [])
+          registry = registries[0] if registries.is_a?(Array) && registries.length == 1
+          registry_version = parse_version.call(registry["ref"]) if registry.is_a?(Hash)
+          unless registry.is_a?(Hash) &&
+                 registry["type"] == "standard" &&
+                 registry_version &&
+                 registry_version >= Gem::Version.new("4.544.0")
+            warn "::error file=aqua.yaml::The Aqua standard registry must use one explicit non-downgraded semantic-version ref."
+            exit 1
+          end
+
+          packages = aqua.fetch("packages", [])
+          unless packages.is_a?(Array) && packages.length == minimum_scanners.length
+            warn "::error file=aqua.yaml::The trusted Aqua profile must contain exactly five scanners."
+            exit 1
+          end
+
+          minimum_scanners.each_with_index do |(expected, minimum), index|
+            package = packages[index]
+            name = package.is_a?(Hash) ? package["name"] : nil
+            unless name.is_a?(String)
+              warn "::error file=aqua.yaml::Scanner entry #{index} must contain a string name."
               exit 1
             end
 
-            gh_api_calls = []
-            jobs.each do |job_name, job|
-              Array(job["steps"]).each do |step|
-                run = step["run"]
-                gh_api_calls << [job_name, step["id"], run] if run.is_a?(String) && run.match?(/\bgh\s+api\b/)
-              end
-            end
-            unless gh_api_calls.length == 1 && gh_api_calls[0][0, 2] == ["plan", "targets"]
-              warn "::error file=#{organization_path}::Only plan/targets may call gh api."
+            scanner, separator, package_version = name.rpartition("@")
+            actual_version = parse_version.call(package_version)
+            unless separator == "@" &&
+                   scanner == expected &&
+                   actual_version &&
+                   actual_version >= Gem::Version.new(minimum)
+              warn "::error file=aqua.yaml::Scanner #{index} must be #{expected} at an explicit non-downgraded semantic version."
               exit 1
             end
-
-            targets_run = targets["run"].dup
-            allowed_calls = [
-              /gh\s+api\s+--paginate\s+--slurp\s+\/installation\/repositories/,
-              /gh\s+api\s+--method\s+GET\s+"repos\/\$full_name\/commits"\s*\\\s*-f\s+sha="\$default_branch"\s+-f\s+per_page=1/m
-            ]
-            allowed_calls.each do |pattern|
-              unless targets_run.sub!(pattern, "")
-                warn "::error file=#{organization_path}::The target planner must retain only the approved GitHub API calls."
-                exit 1
-              end
-            end
-            if targets_run.match?(/\bgh\s+api\b/)
-              warn "::error file=#{organization_path}::An unapproved GitHub API call was added to the target planner."
-              exit 1
-            end
-
-            target_token = "${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}"
-            checkout = scan_steps.find { |step| step["id"] == "checkout" }
-            scorecard = scan_steps.find { |step| step["id"] == "scorecard" }
-            unless checkout&.dig("with", "token") == target_token &&
-                   scorecard&.dig("env", "SEGH_TARGET_SCORECARD_TOKEN") == target_token
-              warn "::error file=#{organization_path}::Target credentials must remain limited to checkout and Scorecard."
-              exit 1
-            end
-            token_reference_count = 0
-            count_token_references = lambda do |node|
-              case node
-              when Hash
-                node.each_value { |value| count_token_references.call(value) }
-              when Array
-                node.each { |value| count_token_references.call(value) }
-              when String
-                token_reference_count += node.scan("steps.target-token.outputs.token").length
-              end
-            end
-            count_token_references.call(organization)
-            unless token_reference_count == 2
-              warn "::error file=#{organization_path}::Additional target-token consumers are not allowed."
-              exit 1
-            end
-
-            allowed_results = %w[
-              results/actionlint.jsonl
-              results/actionlint.log
-              results/preflight.txt
-              results/scanner-versions.log
-              results/scanner-versions.txt
-              results/scorecard-permissions.json
-              results/scorecard-status.txt
-              results/scorecard.json
-              results/scorecard.log
-              results/shellcheck-status.txt
-              results/shellcheck.json
-              results/shellcheck.log
-              results/target.json
-              results/trivy-misconfiguration.json
-              results/trivy-misconfiguration.log
-              results/trivy-secret.json
-              results/trivy-secret.log
-              results/trivy-vulnerability.json
-              results/trivy-vulnerability.log
-              results/zizmor.json
-              results/zizmor.log
-            ]
-            organization_source = File.read(organization_path)
-            remaining_result_paths = organization_source.dup
-            allowed_results.each { |path| remaining_result_paths.gsub!(path, "") }
-            if remaining_result_paths.include?("results/")
-              warn "::error file=#{organization_path}::An unapproved or dynamic result artifact path was added."
-              exit 1
-            end
-          ' "${action_files[@]}"
-
-          ruby -ryaml -e '
-            require "rubygems"
-
-            minimum_scanners = {
-              "ossf/scorecard" => "5.5.0",
-              "zizmorcore/zizmor" => "1.28.0",
-              "rhysd/actionlint" => "1.7.12",
-              "koalaman/shellcheck" => "0.11.0",
-              "aquasecurity/trivy" => "0.72.0"
-            }
-            version_pattern = /\Av?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\z/
-            parse_version = lambda do |value|
-              match = value.is_a?(String) && version_pattern.match(value)
-              match && Gem::Version.new(match[1])
-            end
-            aqua = YAML.load_file("aqua.yaml")
-
-            checksum = aqua.fetch("checksum", {})
-            unless checksum["enabled"] == true && checksum["require_checksum"] == true
-              warn "::error file=aqua.yaml::Aqua checksums must remain enabled and required."
-              exit 1
-            end
-
-            registries = aqua.fetch("registries", [])
-            registry = registries[0] if registries.is_a?(Array) && registries.length == 1
-            registry_version = parse_version.call(registry["ref"]) if registry.is_a?(Hash)
-            unless registry.is_a?(Hash) &&
-                   registry["type"] == "standard" &&
-                   registry_version &&
-                   registry_version >= Gem::Version.new("4.544.0")
-              warn "::error file=aqua.yaml::The Aqua standard registry must use one explicit non-downgraded semantic-version ref."
-              exit 1
-            end
-
-            packages = aqua.fetch("packages", [])
-            unless packages.is_a?(Array) && packages.length == minimum_scanners.length
-              warn "::error file=aqua.yaml::The trusted Aqua profile must contain exactly five scanners."
-              exit 1
-            end
-
-            minimum_scanners.each_with_index do |(expected, minimum), index|
-              package = packages[index]
-              name = package.is_a?(Hash) ? package["name"] : nil
-              unless name.is_a?(String)
-                warn "::error file=aqua.yaml::Scanner entry #{index} must contain a string name."
-                exit 1
-              end
-
-              scanner, separator, package_version = name.rpartition("@")
-              actual_version = parse_version.call(package_version)
-              unless separator == "@" &&
-                     scanner == expected &&
-                     actual_version &&
-                     actual_version >= Gem::Version.new(minimum)
-                warn "::error file=aqua.yaml::Scanner #{index} must be #{expected} at an explicit non-downgraded semantic version."
-                exit 1
-              end
-            end
-          '
+          end
+          RUBY
 
   production-workflow:
     needs: workflow-only-boundary
