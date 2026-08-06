@@ -21,7 +21,7 @@ The planning job receives a short-lived installation token with only Metadata an
 
 Target tokens have no write permission. Tokens are not job outputs, are not persisted by checkout, and are exposed only through phase-specific step-local environment variables. Scanner jobs cannot receive an issue-write credential.
 
-A future dashboard publisher from #74 must prefer the private control repository's built-in `GITHUB_TOKEN` with job-level `issues: write`. It must not receive the organization App identity, planning token, or per-target scan token. A separate publisher App is permitted only when the local token is insufficient and must be installed only on the private control repository.
+A future dashboard publisher from #74 must use the private control repository's built-in `GITHUB_TOKEN` with job-level `issues: write` and publish only to that same repository. It must bind `SEGH_DASHBOARD_REPOSITORY` to `${{ github.repository }}` and must not receive configured secrets, the organization App identity, a planning token, or a per-target scan token. Cross-repository publication and a separate publisher App are not supported by this credential contract.
 
 See [CREDENTIALS.md](CREDENTIALS.md) for the full trust-boundary and migration contract.
 
@@ -58,7 +58,7 @@ Authentication headers and secret values must remain masked. Do not add environm
 
 `dceoy/segh` is public. Production scans and raw evidence must remain in a private execution context whenever any selected target is private or internal.
 
-A future dashboard publisher must fail closed rather than publish private target names, paths, source excerpts, logs, or findings to a public issue repository. The public source repository must not be used as a dashboard target for private scan results.
+A future dashboard publisher must fail closed rather than publish private target names, paths, source excerpts, logs, or findings to public issues. The dashboard target is fixed to the private caller repository, so the caller visibility guard validates the actual publication target. The public source repository must not be used as an execution or dashboard repository for private scan results.
 
 ## Deployment validation
 
