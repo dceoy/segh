@@ -270,7 +270,7 @@ jobs:
             fail_boundary.call(organization_path, "An unapproved GitHub API call was added to the target planner.")
           end
 
-          target_token_expression = "${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}"
+          target_token_expression = "$" + "{{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}"
           target_step_index = scan_steps.index { |step| step["id"] == "target-token" }
           checkout_step_index = scan_steps.index { |step| step["id"] == "checkout" }
           scorecard_step_index = scan_steps.index { |step| step["id"] == "scorecard" }
