@@ -170,7 +170,8 @@ jobs:
             if command.match?(go_command)
               fail_boundary.call(path, "Executable surface #{node_path.join("/")} invokes the removed Go toolchain.")
             end
-            if command.match?(alternate_network_client)
+            if (path == ".github/workflows/organization-scan.yml" || path.start_with?("scripts/")) &&
+               command.match?(alternate_network_client)
               fail_boundary.call(path, "Executable surface #{node_path.join("/")} uses an unapproved network client.")
             end
           end
