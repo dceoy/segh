@@ -303,6 +303,14 @@ jobs:
           printf 'matrix=%s\n' "$(jq -c . matrix.json)" >> "$GITHUB_OUTPUT"
           printf 'has_targets=true\n' >> "$GITHUB_OUTPUT"
           printf 'max_parallel=%s\n' "$max_parallel" >> "$GITHUB_OUTPUT"
+      - name: Retain bounded publication plan
+        if: steps.targets.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: organization-scan-plan
+          path: matrix.json
+          if-no-files-found: error
+          retention-days: 1
 
   scan:
     name: Source scan / ${{ matrix.full_name }}${{ matrix.validation_case && format(' / {0}', matrix.validation_case) || '' }}
@@ -814,6 +822,32 @@ jobs:
             --exit-code 1 --format json --output results/trivy-misconfiguration.json \
             --skip-dirs _target/.git --skip-version-check _target \
             2> results/trivy-misconfiguration.log
+      - name: Build bounded dashboard summary
+        if: always() && steps.target.outcome == 'success' && steps.trusted.outcome == 'success'
+        id: summary
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          TOOLS_OUTCOME: ${{ steps.tools.outcome }}
+          VERSIONS_OUTCOME: ${{ steps.versions.outcome }}
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          SCORECARD_OUTCOME: ${{ steps.scorecard.outcome }}
+          ZIZMOR_OUTCOME: ${{ steps.zizmor.outcome }}
+          ACTIONLINT_OUTCOME: ${{ steps.actionlint.outcome }}
+          SHELLCHECK_OUTCOME: ${{ steps.shellcheck.outcome }}
+          TRIVY_VULNERABILITY_OUTCOME: ${{ steps.trivy-vulnerability.outcome }}
+          TRIVY_SECRET_OUTCOME: ${{ steps.trivy-secret.outcome }}
+          TRIVY_MISCONFIGURATION_OUTCOME: ${{ steps.trivy-misconfiguration.outcome }}
+          DASHBOARD_REPOSITORY: ${{ github.repository }}
+        run: node _trusted/scripts/build-dashboard-summary.js results results/summary.json
+      - name: Retain bounded dashboard summary
+        if: always() && hashFiles('results/summary.json') != ''
+        id: summary-artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repository-summary-${{ matrix.id }}
+          path: results/summary.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Retain private raw scanner artifacts
         if: always() && hashFiles('results/target.json') != ''
         id: artifact
@@ -840,6 +874,8 @@ jobs:
           TRIVY_VULNERABILITY: ${{ steps.trivy-vulnerability.outcome }}
           TRIVY_SECRET: ${{ steps.trivy-secret.outcome }}
           TRIVY_MISCONFIGURATION: ${{ steps.trivy-misconfiguration.outcome }}
+          SUMMARY: ${{ steps.summary.outcome }}
+          SUMMARY_ARTIFACT: ${{ steps.summary-artifact.outcome }}
           ARTIFACT: ${{ steps.artifact.outcome }}
         run: |
           expect() {
@@ -859,8 +895,20 @@ jobs:
           }
           expect target "$TARGET" success
           expect trusted "$TRUSTED" success
+          expect summary "$SUMMARY" success
+          expect summary-artifact "$SUMMARY_ARTIFACT" success
           expect artifact "$ARTIFACT" success
           require_file results/target.json
+          require_file results/summary.json
+          case "$CASE" in
+            clean|no-relevant|symlink|no-exec) expected_summary=pass ;;
+            zizmor-finding|actionlint-syntax|actionlint-shell|shellcheck-finding|trivy-vulnerability|trivy-secret|trivy-misconfiguration) expected_summary=findings ;;
+            submodule|lfs) expected_summary=incomplete ;;
+            scanner-runtime-error|checkout-failure) expected_summary=error ;;
+            *) echo "::error::Unknown summary validation case: $CASE"; exit 1 ;;
+          esac
+          actual_summary=$(jq -er '.overall_status' results/summary.json)
+          expect dashboard-summary "$actual_summary" "$expected_summary"
 
           if [[ "$CASE" == checkout-failure ]]; then
             expect checkout "$CHECKOUT" failure
@@ -1003,3 +1051,67 @@ jobs:
               exit 1
               ;;
           esac
+
+  publish-dashboard:
+    name: Publish security dashboards
+    needs:
+      - plan
+      - scan
+    if: >-
+      always() &&
+      inputs.validation_mode != true &&
+      needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    env:
+      SEGH_DASHBOARD_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Require a private dashboard repository
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          if [[ "$REPOSITORY_PRIVATE" != true ]]; then
+            echo "::error::Dashboard publication requires a private control repository."
+            exit 1
+          fi
+      - name: Check out trusted publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: _trusted
+          persist-credentials: false
+          lfs: false
+          submodules: false
+      - name: Download authoritative plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: organization-scan-plan
+          path: dashboard-input/plan
+      - name: Download normalized summaries
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: repository-summary-*
+          path: dashboard-input/summaries
+      - name: Publish dashboards sequentially
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        with:
+          retries: 3
+          script: |
+            const publish = require('./_trusted/scripts/publish-dashboard.js');
+            await publish({
+              github,
+              context,
+              core,
+              planPath: 'dashboard-input/plan/matrix.json',
+              summariesPath: 'dashboard-input/summaries',
+              repositoryPrivate: process.env.REPOSITORY_PRIVATE,
+            });
+
