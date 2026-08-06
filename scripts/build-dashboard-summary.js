@@ -15,6 +15,7 @@ const SCORECARD_CHECKS = new Set([
   "Token-Permissions",
   "Vulnerabilities",
 ]);
+const SCORECARD_PASS_SCORE = 10;
 const MAX_FINDINGS = 100000;
 
 function readJson(file) {
@@ -56,11 +57,7 @@ function findingFingerprints(name, findings) {
 
 function scanner(name, status, findings, category = null, selectedChecks = [], fingerprints = []) {
   if (!STATUS.has(status)) throw new Error(`invalid scanner status: ${status}`);
-  const result = {
-    name,
-    status,
-    findings: finiteInteger(findings),
-  };
+  const result = {name, status, findings: finiteInteger(findings)};
   if (category) result.category = category;
   if (selectedChecks.length > 0) result.selected_checks = selectedChecks;
   Object.defineProperty(result, "findingFingerprints", {
@@ -80,14 +77,21 @@ function parseScorecard(resultsDir, outcome) {
       return scanner("scorecard", "error", 0);
     }
     const selected = data.checks
-      .map((check) => ({
-        name: check.Name ?? check.name,
-        score: check.Score ?? check.score,
-      }))
+      .map((check) => ({name: check.Name ?? check.name, score: check.Score ?? check.score}))
       .filter((check) => SCORECARD_CHECKS.has(check.name) && Number.isFinite(check.score))
       .map((check) => ({name: check.name, score: Math.max(0, Math.min(10, check.score))}))
       .sort((a, b) => a.name.localeCompare(b.name));
-    return scanner("scorecard", "pass", 0, null, selected);
+    if (selected.length === 0) return scanner("scorecard", "error", 0);
+    const findings = selected.filter((check) => check.score < SCORECARD_PASS_SCORE);
+    const fingerprints = findingFingerprints("scorecard", findings);
+    return scanner(
+      "scorecard",
+      findings.length > 0 ? "findings" : "pass",
+      findings.length,
+      "scorecard",
+      selected,
+      fingerprints,
+    );
   } catch {
     return scanner("scorecard", "error", 0);
   }
@@ -100,10 +104,9 @@ function parseZizmor(resultsDir, outcome) {
   try {
     const data = readJson(file);
     if (!Array.isArray(data)) return scanner("zizmor", "error", 0, "actions");
-    const count = data.length;
     const fingerprints = findingFingerprints("zizmor", data);
-    if (outcome === "success" && count === 0) return scanner("zizmor", "pass", 0, "actions", [], fingerprints);
-    if (count > 0) return scanner("zizmor", "findings", count, "actions", [], fingerprints);
+    if (outcome === "success" && data.length === 0) return scanner("zizmor", "pass", 0, "actions", [], fingerprints);
+    if (data.length > 0) return scanner("zizmor", "findings", data.length, "actions", [], fingerprints);
     return scanner("zizmor", "error", 0, "actions");
   } catch {
     return scanner("zizmor", "error", 0, "actions");
@@ -115,15 +118,10 @@ function parseActionlint(resultsDir, outcome) {
   if (outcome === "skipped") return scanner("actionlint", "skipped", 0, "actions");
   if (!fileExists(file)) return scanner("actionlint", "error", 0, "actions");
   try {
-    const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean);
-    const findings = lines.map((line) => JSON.parse(line));
+    const findings = fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     const fingerprints = findingFingerprints("actionlint", findings);
-    if (outcome === "success" && findings.length === 0) {
-      return scanner("actionlint", "pass", 0, "actions", [], fingerprints);
-    }
-    if (findings.length > 0) {
-      return scanner("actionlint", "findings", findings.length, "actions", [], fingerprints);
-    }
+    if (outcome === "success" && findings.length === 0) return scanner("actionlint", "pass", 0, "actions", [], fingerprints);
+    if (findings.length > 0) return scanner("actionlint", "findings", findings.length, "actions", [], fingerprints);
     return scanner("actionlint", "error", 0, "actions");
   } catch {
     return scanner("actionlint", "error", 0, "actions");
@@ -141,12 +139,8 @@ function parseShellcheck(resultsDir, outcome) {
     const comments = Array.isArray(data) ? data : data.comments;
     if (!Array.isArray(comments) || !Number.isInteger(status)) return scanner("shellcheck", "error", 0, "shell");
     const fingerprints = findingFingerprints("shellcheck", comments);
-    if (status === 0 && outcome === "success" && comments.length === 0) {
-      return scanner("shellcheck", "pass", 0, "shell", [], fingerprints);
-    }
-    if (status === 1 && comments.length > 0) {
-      return scanner("shellcheck", "findings", comments.length, "shell", [], fingerprints);
-    }
+    if (status === 0 && outcome === "success" && comments.length === 0) return scanner("shellcheck", "pass", 0, "shell", [], fingerprints);
+    if (status === 1 && comments.length > 0) return scanner("shellcheck", "findings", comments.length, "shell", [], fingerprints);
     return scanner("shellcheck", "error", 0, "shell");
   } catch {
     return scanner("shellcheck", "error", 0, "shell");
@@ -160,22 +154,14 @@ function parseTrivy(resultsDir, outcome, kind, property, category) {
   if (!fileExists(file)) return scanner(name, "error", 0, category);
   try {
     const data = readJson(file);
-    if (!data || typeof data !== "object" || !Array.isArray(data.Results)) {
-      return scanner(name, "error", 0, category);
-    }
+    if (!data || typeof data !== "object" || !Array.isArray(data.Results)) return scanner(name, "error", 0, category);
     const findings = data.Results.flatMap((result) => {
       const entries = result && Array.isArray(result[property]) ? result[property] : [];
-      return entries.map((finding) => ({
-        target: result.Target ?? "",
-        class: result.Class ?? "",
-        type: result.Type ?? "",
-        finding,
-      }));
+      return entries.map((finding) => ({target: result.Target ?? "", class: result.Class ?? "", type: result.Type ?? "", finding}));
     });
-    const count = findings.length;
     const fingerprints = findingFingerprints(name, findings);
-    if (outcome === "success" && count === 0) return scanner(name, "pass", 0, category, [], fingerprints);
-    if (count > 0) return scanner(name, "findings", count, category, [], fingerprints);
+    if (outcome === "success" && findings.length === 0) return scanner(name, "pass", 0, category, [], fingerprints);
+    if (findings.length > 0) return scanner(name, "findings", findings.length, category, [], fingerprints);
     return scanner(name, "error", 0, category);
   } catch {
     return scanner(name, "error", 0, category);
@@ -185,21 +171,13 @@ function parseTrivy(resultsDir, outcome, kind, property, category) {
 function validateTarget(target) {
   const requiredStrings = ["repository", "visibility", "default_branch", "commit_sha"];
   if (!target || typeof target !== "object") throw new Error("target.json must contain an object");
-  if (!Number.isInteger(target.repository_id) || target.repository_id <= 0) {
-    throw new Error("target.json contains an invalid repository_id");
-  }
+  if (!Number.isInteger(target.repository_id) || target.repository_id <= 0) throw new Error("target.json contains an invalid repository_id");
   for (const field of requiredStrings) {
-    if (typeof target[field] !== "string" || target[field].length === 0) {
-      throw new Error(`target.json contains an invalid ${field}`);
-    }
+    if (typeof target[field] !== "string" || target[field].length === 0) throw new Error(`target.json contains an invalid ${field}`);
   }
   if (!/^[0-9a-f]{40}$/.test(target.commit_sha)) throw new Error("target.json contains an invalid commit_sha");
-  if (!Number.isInteger(target.workflow_run_id) || target.workflow_run_id <= 0) {
-    throw new Error("target.json contains an invalid workflow_run_id");
-  }
-  if (!Number.isInteger(target.workflow_run_attempt) || target.workflow_run_attempt <= 0) {
-    throw new Error("target.json contains an invalid workflow_run_attempt");
-  }
+  if (!Number.isInteger(target.workflow_run_id) || target.workflow_run_id <= 0) throw new Error("target.json contains an invalid workflow_run_id");
+  if (!Number.isInteger(target.workflow_run_attempt) || target.workflow_run_attempt <= 0) throw new Error("target.json contains an invalid workflow_run_attempt");
 }
 
 function normalizeOutcome(value) {
@@ -225,82 +203,48 @@ function remediationCategories(scanners) {
 function buildSummary({resultsDir, env = process.env, now = new Date()}) {
   const target = readJson(path.join(resultsDir, "target.json"));
   validateTarget(target);
-
   const outcomes = {
-    checkout: normalizeOutcome(env.CHECKOUT_OUTCOME),
-    tools: normalizeOutcome(env.TOOLS_OUTCOME),
-    versions: normalizeOutcome(env.VERSIONS_OUTCOME),
-    preflight: normalizeOutcome(env.PREFLIGHT_OUTCOME),
-    scorecard: normalizeOutcome(env.SCORECARD_OUTCOME),
-    zizmor: normalizeOutcome(env.ZIZMOR_OUTCOME),
-    actionlint: normalizeOutcome(env.ACTIONLINT_OUTCOME),
-    shellcheck: normalizeOutcome(env.SHELLCHECK_OUTCOME),
+    checkout: normalizeOutcome(env.CHECKOUT_OUTCOME), tools: normalizeOutcome(env.TOOLS_OUTCOME),
+    versions: normalizeOutcome(env.VERSIONS_OUTCOME), preflight: normalizeOutcome(env.PREFLIGHT_OUTCOME),
+    scorecard: normalizeOutcome(env.SCORECARD_OUTCOME), zizmor: normalizeOutcome(env.ZIZMOR_OUTCOME),
+    actionlint: normalizeOutcome(env.ACTIONLINT_OUTCOME), shellcheck: normalizeOutcome(env.SHELLCHECK_OUTCOME),
     trivyVulnerability: normalizeOutcome(env.TRIVY_VULNERABILITY_OUTCOME),
     trivySecret: normalizeOutcome(env.TRIVY_SECRET_OUTCOME),
     trivyMisconfiguration: normalizeOutcome(env.TRIVY_MISCONFIGURATION_OUTCOME),
   };
-
   const scanners = [
-    parseScorecard(resultsDir, outcomes.scorecard),
-    parseZizmor(resultsDir, outcomes.zizmor),
-    parseActionlint(resultsDir, outcomes.actionlint),
-    parseShellcheck(resultsDir, outcomes.shellcheck),
+    parseScorecard(resultsDir, outcomes.scorecard), parseZizmor(resultsDir, outcomes.zizmor),
+    parseActionlint(resultsDir, outcomes.actionlint), parseShellcheck(resultsDir, outcomes.shellcheck),
     parseTrivy(resultsDir, outcomes.trivyVulnerability, "vulnerability", "Vulnerabilities", "vulnerability"),
     parseTrivy(resultsDir, outcomes.trivySecret, "secret", "Secrets", "secret"),
     parseTrivy(resultsDir, outcomes.trivyMisconfiguration, "misconfiguration", "Misconfigurations", "misconfiguration"),
   ];
-
   let overallStatus = "pass";
-  if (outcomes.checkout !== "success" || outcomes.tools === "failure" || outcomes.versions === "failure") {
-    overallStatus = "error";
-  } else if (outcomes.preflight === "failure") {
-    overallStatus = "incomplete";
-  } else if (scanners.some((item) => item.status === "error")) {
-    overallStatus = "error";
-  } else if (scanners.some((item) => item.status === "findings")) {
-    overallStatus = "findings";
-  } else if (scanners.every((item) => item.status === "skipped")) {
-    overallStatus = "error";
-  }
+  if (outcomes.checkout !== "success" || outcomes.tools === "failure" || outcomes.versions === "failure") overallStatus = "error";
+  else if (outcomes.preflight === "failure") overallStatus = "incomplete";
+  else if (scanners.some((item) => item.status === "error")) overallStatus = "error";
+  else if (scanners.some((item) => item.status === "findings")) overallStatus = "findings";
+  else if (scanners.every((item) => item.status === "skipped")) overallStatus = "error";
 
   const categories = [...new Set(scanners.filter((item) => item.findings > 0 && item.category).map((item) => item.category))].sort();
   const totalFindings = scanners.reduce((sum, item) => sum + item.findings, 0);
-  const fingerprintInput = scanners
-    .flatMap((item) => [
-      `${item.name}:status:${item.status}:${item.findings}:${item.category ?? ""}`,
-      ...item.findingFingerprints.map((fingerprint) => `${item.name}:finding:${fingerprint}`),
-    ])
-    .sort()
-    .join("\n");
-
-  const scannedAt = now.toISOString();
+  const fingerprintInput = scanners.flatMap((item) => [
+    `${item.name}:status:${item.status}:${item.findings}:${item.category ?? ""}`,
+    ...item.findingFingerprints.map((fingerprint) => `${item.name}:finding:${fingerprint}`),
+  ]).sort().join("\n");
   const workflowRepository = target.trusted_workflow_repository || env.WORKFLOW_REPOSITORY || "";
-  const runUrl = `https://github.com/${env.DASHBOARD_REPOSITORY || target.repository}/actions/runs/${target.workflow_run_id}`;
-
   return {
     schema_version: 1,
-    repository: {
-      id: target.repository_id,
-      full_name: target.repository,
-      visibility: target.visibility,
-      default_branch: target.default_branch,
-      commit_sha: target.commit_sha,
-    },
+    repository: {id: target.repository_id, full_name: target.repository, visibility: target.visibility, default_branch: target.default_branch, commit_sha: target.commit_sha},
     scan: {
-      timestamp: scannedAt,
-      workflow_run_id: target.workflow_run_id,
-      workflow_run_attempt: target.workflow_run_attempt,
-      workflow_repository: workflowRepository,
-      workflow_url: runUrl,
+      timestamp: now.toISOString(), workflow_run_id: target.workflow_run_id,
+      workflow_run_attempt: target.workflow_run_attempt, workflow_repository: workflowRepository,
+      workflow_url: `https://github.com/${env.DASHBOARD_REPOSITORY || target.repository}/actions/runs/${target.workflow_run_id}`,
       evidence_artifact: `repository-scan-${target.repository_id}`,
     },
     overall_status: overallStatus,
     scanners,
-    findings: {
-      total: totalFindings,
-      categories,
-      fingerprint: sha256(`${target.repository_id}\n${fingerprintInput}`),
-    },
+    findings: {total: totalFindings, categories, fingerprint: sha256(`${target.repository_id}\n${fingerprintInput}`)},
     remediation_categories: remediationCategories(scanners),
   };
 }
@@ -308,29 +252,13 @@ function buildSummary({resultsDir, env = process.env, now = new Date()}) {
 function main() {
   const resultsDir = process.argv[2] || "results";
   const output = process.argv[3] || path.join(resultsDir, "summary.json");
-  const summary = buildSummary({resultsDir});
-  const serialized = `${JSON.stringify(summary, null, 2)}\n`;
-  if (Buffer.byteLength(serialized, "utf8") > 32 * 1024) {
-    throw new Error("normalized summary exceeds the 32 KiB limit");
-  }
+  const serialized = `${JSON.stringify(buildSummary({resultsDir}), null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > 32 * 1024) throw new Error("normalized summary exceeds the 32 KiB limit");
   fs.writeFileSync(output, serialized, {encoding: "utf8", mode: 0o600});
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
-    console.error(`build-dashboard-summary: ${error.message}`);
-    process.exit(1);
-  }
+  try { main(); } catch (error) { console.error(`build-dashboard-summary: ${error.message}`); process.exit(1); }
 }
 
-module.exports = {
-  buildSummary,
-  parseActionlint,
-  parseScorecard,
-  parseShellcheck,
-  parseTrivy,
-  parseZizmor,
-  sha256,
-};
+module.exports = {buildSummary, parseActionlint, parseScorecard, parseShellcheck, parseTrivy, parseZizmor, sha256};
