@@ -15,7 +15,7 @@ on:
         type: string
         default: "4"
       validation_mode:
-        description: Internal end-to-end validation; accepted only for dceoy/segh pull requests
+        description: Internal production-path validation; accepted only for dceoy/segh pull requests
         required: false
         type: boolean
         default: false
@@ -50,7 +50,7 @@ jobs:
   plan:
     if: github.event_name != 'schedule' || github.event.repository.private
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
       has_targets: ${{ steps.targets.outputs.has_targets }}
@@ -75,7 +75,7 @@ jobs:
             echo "::error::SEGH_READ_APP_ID and SEGH_READ_APP_PRIVATE_KEY are required."
             exit 1
           fi
-      - name: Create read-only GitHub App token
+      - name: Create installation read token
         if: inputs.validation_mode != true
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -85,8 +85,9 @@ jobs:
           owner: ${{ github.repository_owner }} # zizmor: ignore[github-app]
           permission-contents: read
           permission-metadata: read
-      - name: Resolve immutable scan targets
+      - name: Resolve complete immutable target plan
         id: targets
+        shell: bash
         env:
           VALIDATION_MODE: ${{ inputs.validation_mode }}
           CALLER_REPOSITORY: ${{ github.repository }}
@@ -96,6 +97,26 @@ jobs:
           REPOSITORY_LIMIT: ${{ inputs.repository_limit || '50' }}
           MAX_PARALLEL: ${{ inputs.max_parallel || '4' }}
         run: |
+          enforce_selection_bound() {
+            local count=$1
+            local limit=$2
+            ((count > 0 && count <= limit))
+          }
+
+          validate_repository_pages() {
+            jq -e '
+              . as $pages |
+              ($pages | type == "array" and length > 0) and
+              all($pages[];
+                type == "object" and
+                (.total_count | type == "number" and floor == . and . >= 0) and
+                (.repositories | type == "array")
+              ) and
+              (($pages | map(.total_count) | unique | length) == 1) and
+              (($pages | map(.repositories | length) | add) == $pages[0].total_count)
+            ' "$1" > /dev/null
+          }
+
           if [[ ! "$REPOSITORY_LIMIT" =~ ^[0-9]+$ ]]; then
             echo "::error::repository_limit must be an integer from 1 to 100."
             exit 1
@@ -124,61 +145,160 @@ jobs:
               echo "::error::The validation pull request head must resolve to an immutable commit SHA."
               exit 1
             fi
+            if enforce_selection_bound 2 1 || ! enforce_selection_bound 1 1; then
+              echo "::error::The production repository-limit predicate did not reject an oversized selection."
+              exit 1
+            fi
+            if ! validate_repository_pages <(printf '%s\n' \
+              '[{"total_count":2,"repositories":[{"id":1}]},{"total_count":2,"repositories":[{"id":2}]}]') || \
+               validate_repository_pages <(printf '%s\n' \
+              '[{"total_count":2,"repositories":[{"id":1}]}]'); then
+              echo "::error::The production pagination predicate accepted incomplete repository data."
+              exit 1
+            fi
             jq -n --arg commit_sha "$HEAD_SHA" '
+              def target($id; $case; $sha): {
+                id: $id,
+                full_name: "dceoy/segh",
+                owner: "dceoy",
+                name: "segh",
+                visibility: "public",
+                fork: false,
+                default_branch: "main",
+                commit_sha: $sha,
+                validation_case: $case
+              };
               {include: [
-                {id: "validation-clean", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
-                 default_branch: "main", commit_sha: $commit_sha, resolution_error: "", validation_case: "clean"},
-                {id: "validation-finding", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
-                 default_branch: "main", commit_sha: $commit_sha, resolution_error: "", validation_case: "finding"},
-                {id: "validation-incomplete-content", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
-                 default_branch: "main", commit_sha: $commit_sha, resolution_error: "", validation_case: "incomplete-content"},
-                {id: "validation-scanner-runtime-error", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
-                 default_branch: "main", commit_sha: $commit_sha, resolution_error: "", validation_case: "scanner-runtime-error"},
-                {id: "validation-checkout-failure", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
-                 default_branch: "main", commit_sha: "0000000000000000000000000000000000000000",
-                 resolution_error: "", validation_case: "checkout-failure"}
+                target(900001; "clean"; $commit_sha),
+                target(900002; "no-relevant"; $commit_sha),
+                target(900003; "zizmor-finding"; $commit_sha),
+                target(900004; "actionlint-syntax"; $commit_sha),
+                target(900005; "actionlint-shell"; $commit_sha),
+                target(900006; "shellcheck-finding"; $commit_sha),
+                target(900007; "trivy-vulnerability"; $commit_sha),
+                target(900008; "trivy-secret"; $commit_sha),
+                target(900009; "trivy-misconfiguration"; $commit_sha),
+                target(900010; "symlink"; $commit_sha),
+                target(900011; "submodule"; $commit_sha),
+                target(900012; "lfs"; $commit_sha),
+                target(900013; "scanner-runtime-error"; $commit_sha),
+                target(900014; "no-exec"; $commit_sha),
+                target(900015; "checkout-failure"; "0000000000000000000000000000000000000000")
               ]}' > matrix.json
           else
-            gh api --paginate --slurp /installation/repositories > repositories.json
-            jq '[.[].repositories[] | select(.disabled != true)] | unique_by(.id) | sort_by(.full_name)' \
-              repositories.json > selected.json
+            if ! gh api --paginate --slurp /installation/repositories > repositories.json; then
+              echo "::error::GitHub App installation repository enumeration failed."
+              exit 1
+            fi
+            if ! validate_repository_pages repositories.json; then
+              echo "::error::GitHub App repository pagination returned incomplete or malformed data."
+              exit 1
+            fi
+            if ! jq -e '
+              [.[].repositories[]] as $repositories |
+              ($repositories | length) == ($repositories | map(.id) | unique | length)
+            ' repositories.json > /dev/null; then
+              echo "::error::GitHub App repository pagination returned duplicate repository IDs."
+              exit 1
+            fi
+            jq '[
+              .[].repositories[]
+              | select(.disabled != true and .archived != true)
+              | {
+                  id,
+                  full_name,
+                  owner: .owner.login,
+                  name,
+                  visibility,
+                  fork,
+                  default_branch
+                }
+            ] | sort_by(.full_name)' repositories.json > selected.json
+            if ! jq -e '
+              type == "array" and
+              all(.[];
+                (.id | type == "number" and floor == . and . > 0) and
+                (.owner | type == "string" and length > 0 and (contains("/") | not)) and
+                (.name | type == "string" and length > 0 and (contains("/") | not)) and
+                (.full_name | type == "string") and
+                (.full_name == (.owner + "/" + .name)) and
+                (.visibility == "public" or .visibility == "private" or .visibility == "internal") and
+                (.fork | type == "boolean") and
+                (.default_branch | type == "string" and length > 0)
+              )
+            ' selected.json > /dev/null; then
+              echo "::error::At least one selected repository has malformed or missing identity metadata."
+              exit 1
+            fi
             selected_count=$(jq 'length' selected.json)
-            if ((selected_count == 0)); then
-              echo "::error::The GitHub App installation selected no enabled repositories; refusing an empty scan."
+            if ! enforce_selection_bound "$selected_count" "$repository_limit"; then
+              if ((selected_count == 0)); then
+                echo "::error::The GitHub App installation selected no enabled, non-archived repositories; refusing an empty scan."
+              else
+                echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$repository_limit; refusing incomplete coverage."
+              fi
               exit 1
             fi
-            if ((selected_count > repository_limit)); then
-              echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$repository_limit; refusing incomplete coverage."
-              exit 1
-            fi
+
             : > targets.jsonl
             while IFS= read -r repository; do
               id=$(jq -r '.id' <<<"$repository")
               full_name=$(jq -r '.full_name' <<<"$repository")
-              owner=$(jq -r '.owner.login' <<<"$repository")
+              owner=$(jq -r '.owner' <<<"$repository")
               name=$(jq -r '.name' <<<"$repository")
-              default_branch=$(jq -r '.default_branch // empty' <<<"$repository")
-              commit_sha=''
-              resolution_error=''
-              if [[ -z "$default_branch" ]]; then
-                resolution_error='repository has no default branch'
-              elif ! commit_sha=$(gh api --method GET "repos/$full_name/commits" \
-                -f sha="$default_branch" -f per_page=1 --jq '.[0].sha' 2> resolve.log); then
-                resolution_error=$(<resolve.log)
-              elif [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                resolution_error='default branch did not resolve to a commit SHA'
-                commit_sha=''
+              visibility=$(jq -r '.visibility' <<<"$repository")
+              fork=$(jq -r '.fork' <<<"$repository")
+              default_branch=$(jq -r '.default_branch' <<<"$repository")
+              if ! gh api --method GET "repos/$full_name/commits" \
+                -f sha="$default_branch" -f per_page=1 > resolved.json; then
+                echo "::error::$full_name: failed to resolve default branch $default_branch."
+                exit 1
               fi
-              jq -cn --arg id "$id" --arg full_name "$full_name" --arg owner "$owner" \
-                --arg name "$name" --arg default_branch "$default_branch" --arg commit_sha "$commit_sha" \
-                --arg resolution_error "$resolution_error" \
-                '{id, full_name, owner, name, default_branch, commit_sha, resolution_error}' >> targets.jsonl
+              if ! commit_sha=$(jq -er '
+                if type == "array" and length == 1 and
+                   (.[0].sha | type == "string" and test("^[0-9a-f]{40}$"))
+                then .[0].sha else error("invalid commit response") end
+              ' resolved.json); then
+                echo "::error::$full_name: default branch did not resolve to exactly one lowercase immutable commit SHA."
+                exit 1
+              fi
+              jq -cn \
+                --argjson id "$id" \
+                --arg full_name "$full_name" \
+                --arg owner "$owner" \
+                --arg name "$name" \
+                --arg visibility "$visibility" \
+                --argjson fork "$fork" \
+                --arg default_branch "$default_branch" \
+                --arg commit_sha "$commit_sha" \
+                '{id, full_name, owner, name, visibility, fork, default_branch, commit_sha}' \
+                >> targets.jsonl
             done < <(jq -c '.[]' selected.json)
             jq -sc '{include: .}' targets.jsonl > matrix.json
           fi
 
+          if ! jq -e '
+            type == "object" and (.include | type == "array" and length > 0) and
+            all(.include[];
+              (.id | type == "number" and floor == . and . > 0) and
+              (.full_name | type == "string") and
+              (.full_name == (.owner + "/" + .name)) and
+              (.visibility == "public" or .visibility == "private" or .visibility == "internal") and
+              (.fork | type == "boolean") and
+              (.default_branch | type == "string" and length > 0) and
+              (.commit_sha | type == "string" and test("^[0-9a-f]{40}$"))
+            )
+          ' matrix.json > /dev/null; then
+            echo "::error::Refusing to emit a malformed or incomplete scan matrix."
+            exit 1
+          fi
+          matrix_count=$(jq '.include | length' matrix.json)
+          if ! enforce_selection_bound "$matrix_count" "$repository_limit"; then
+            echo "::error::Resolved scan matrix violates repository_limit=$repository_limit."
+            exit 1
+          fi
           printf 'matrix=%s\n' "$(jq -c . matrix.json)" >> "$GITHUB_OUTPUT"
-          printf 'has_targets=%s\n' "$(jq -r '.include | length > 0' matrix.json)" >> "$GITHUB_OUTPUT"
+          printf 'has_targets=true\n' >> "$GITHUB_OUTPUT"
           printf 'max_parallel=%s\n' "$max_parallel" >> "$GITHUB_OUTPUT"
 
   scan:
@@ -190,7 +310,7 @@ jobs:
       max-parallel: ${{ fromJSON(needs.plan.outputs.max_parallel) }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 50
     permissions:
       contents: read
       checks: read
@@ -205,21 +325,82 @@ jobs:
         env:
           REPOSITORY_ID: ${{ matrix.id }}
           REPOSITORY: ${{ matrix.full_name }}
+          REPOSITORY_OWNER: ${{ matrix.owner }}
+          REPOSITORY_NAME: ${{ matrix.name }}
+          VISIBILITY: ${{ matrix.visibility }}
+          FORK: ${{ matrix.fork }}
           DEFAULT_BRANCH: ${{ matrix.default_branch }}
           COMMIT_SHA: ${{ matrix.commit_sha }}
-          RESOLUTION_ERROR: ${{ matrix.resolution_error }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
           VALIDATION_CASE: ${{ matrix.validation_case }}
         run: |
           mkdir -p results
-          jq -n --arg repository_id "$REPOSITORY_ID" --arg repository "$REPOSITORY" \
-            --arg default_branch "$DEFAULT_BRANCH" --arg commit_sha "$COMMIT_SHA" \
-            --arg resolution_error "$RESOLUTION_ERROR" --arg validation_case "$VALIDATION_CASE" \
-            '{repository_id, repository, default_branch, commit_sha, resolution_error}
-             + if $validation_case == "" then {} else {validation_case: $validation_case} end' > results/target.json
-          if [[ -n "$RESOLUTION_ERROR" || ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::$REPOSITORY: ${RESOLUTION_ERROR:-invalid immutable commit SHA}"
+          if [[ ! "$REPOSITORY_ID" =~ ^[0-9]+$ || ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ || \
+                ! "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::$REPOSITORY: invalid immutable identity metadata."
             exit 1
           fi
+          jq -n \
+            --argjson repository_id "$REPOSITORY_ID" \
+            --arg repository "$REPOSITORY" \
+            --arg owner "$REPOSITORY_OWNER" \
+            --arg name "$REPOSITORY_NAME" \
+            --arg visibility "$VISIBILITY" \
+            --argjson fork "$FORK" \
+            --arg default_branch "$DEFAULT_BRANCH" \
+            --arg commit_sha "$COMMIT_SHA" \
+            --argjson workflow_run_id "$WORKFLOW_RUN_ID" \
+            --argjson workflow_run_attempt "$WORKFLOW_RUN_ATTEMPT" \
+            --arg trusted_workflow_repository "$TRUSTED_WORKFLOW_REPOSITORY" \
+            --arg trusted_workflow_sha "$TRUSTED_WORKFLOW_SHA" \
+            --arg validation_case "$VALIDATION_CASE" \
+            '{
+              repository_id: $repository_id,
+              repository: $repository,
+              owner: $owner,
+              name: $name,
+              visibility: $visibility,
+              fork: $fork,
+              default_branch: $default_branch,
+              commit_sha: $commit_sha,
+              workflow_run_id: $workflow_run_id,
+              workflow_run_attempt: $workflow_run_attempt,
+              trusted_workflow_repository: $trusted_workflow_repository,
+              trusted_workflow_sha: $trusted_workflow_sha
+            } + if $validation_case == "" then {} else {validation_case: $validation_case} end' \
+            > results/target.json
+          jq -e \
+            --argjson repository_id "$REPOSITORY_ID" \
+            --arg repository "$REPOSITORY" \
+            --arg owner "$REPOSITORY_OWNER" \
+            --arg name "$REPOSITORY_NAME" \
+            --arg visibility "$VISIBILITY" \
+            --argjson fork "$FORK" \
+            --arg default_branch "$DEFAULT_BRANCH" \
+            --arg commit_sha "$COMMIT_SHA" \
+            --argjson workflow_run_id "$WORKFLOW_RUN_ID" \
+            --argjson workflow_run_attempt "$WORKFLOW_RUN_ATTEMPT" \
+            --arg trusted_workflow_repository "$TRUSTED_WORKFLOW_REPOSITORY" \
+            --arg trusted_workflow_sha "$TRUSTED_WORKFLOW_SHA" \
+            --arg validation_case "$VALIDATION_CASE" \
+            'type == "object" and
+             .repository_id == $repository_id and
+             .repository == $repository and
+             .owner == $owner and
+             .name == $name and
+             .visibility == $visibility and
+             .fork == $fork and
+             .default_branch == $default_branch and
+             .commit_sha == $commit_sha and
+             .workflow_run_id == $workflow_run_id and
+             .workflow_run_attempt == $workflow_run_attempt and
+             .trusted_workflow_repository == $trusted_workflow_repository and
+             .trusted_workflow_sha == $trusted_workflow_sha and
+             (.validation_case // "") == $validation_case' \
+            results/target.json > /dev/null
       - name: Check out trusted scanner configuration
         id: trusted
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -255,15 +436,17 @@ jobs:
           fetch-depth: 1
           lfs: false
           submodules: false
-      - name: Prepare controlled validation fixture
+      - name: Prepare deterministic validation fixture
         if: inputs.validation_mode && steps.checkout.outcome == 'success'
         env:
           CASE: ${{ matrix.validation_case }}
         run: |
           git -C _target rm -qr --cached -- .
           find _target -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
-          mkdir -p _target/.github/workflows
-          cat > _target/.github/workflows/fixture.yml <<'EOF'
+          case "$CASE" in
+            clean|scanner-runtime-error|symlink)
+              mkdir -p _target/.github/workflows
+              cat > _target/.github/workflows/fixture.yml <<'EOF'
           ---
           name: Fixture
           on:
@@ -276,22 +459,139 @@ jobs:
               steps:
                 - run: "true"
           EOF
-          case "$CASE" in
-            clean|scanner-runtime-error)
-              printf '#!/bin/sh\ntrue\n' > _target/test.sh
+              cat > _target/test.sh <<'EOF'
+          #!/bin/sh
+          printf '%s\n' clean > /dev/null
+          EOF
               ;;
-            finding)
-              printf '#!/bin/sh\nvalue="$1"\necho $value\n' > _target/test.sh
+            no-relevant)
+              printf '# fixture\n' > _target/README.md
               ;;
-            incomplete-content)
-              printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 1\n' 0 > _target/payload.bin
+            zizmor-finding)
+              mkdir -p _target/.github/workflows
+              cat > _target/.github/workflows/fixture.yml <<'EOF'
+          ---
+          name: Fixture
+          on:
+            issues:
+          permissions:
+            contents: read
+          jobs:
+            test:
+              runs-on: ubuntu-24.04
+              steps:
+          EOF
+              printf '%s%s\n' '                - run: echo "${' '{ github.event.issue.title }}"' \
+                >> _target/.github/workflows/fixture.yml
+              ;;
+            actionlint-syntax)
+              mkdir -p _target/.github/workflows
+              printf '%s\n' 'jobs: [' > _target/.github/workflows/fixture.yml
+              ;;
+            actionlint-shell)
+              mkdir -p _target/.github/workflows
+              cat > _target/.github/workflows/fixture.yml <<'EOF'
+          ---
+          name: Fixture
+          on:
+            push:
+          permissions:
+            contents: read
+          jobs:
+            test:
+              runs-on: ubuntu-24.04
+              steps:
+                - run: |
+                    value=$1
+                    echo $value
+          EOF
+              ;;
+            shellcheck-finding)
+              printf '#!/usr/bin/env -S dash -eu\nvalue=$1\necho $value\n' > _target/test
+              ;;
+            trivy-vulnerability)
+              printf 'urllib3==1.26.4\n' > _target/requirements.txt
+              ;;
+            trivy-secret)
+              access_key=$(printf '%s%s%s' 'AK' 'IA7JXQ2W6R' '8T1Y4U5P')
+              secret_key=$(printf '%s%s%s' 'aBcDeFgHiJ' 'kLmNoPqRsT' 'uVwXyZ0123456789ABCD')
+              printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
+                "$access_key" "$secret_key" > _target/credentials.txt
+              ;;
+            trivy-misconfiguration)
+              cat > _target/pod.yml <<'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: privileged
+          spec:
+            hostNetwork: true
+            containers:
+              - name: nginx
+                image: nginx:latest
+                securityContext:
+                  privileged: true
+          EOF
+              ;;
+            submodule)
+              printf '# fixture\n' > _target/README.md
+              git -C _target add README.md
+              git -C _target update-index --add --cacheinfo \
+                160000,"$(git -C _target rev-parse HEAD)",vendor/dependency
+              ;;
+            lfs)
+              printf '# fixture\n' > _target/README.md
+              printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 1\n' 0 \
+                > _target/payload.bin
+              ;;
+            no-exec)
+              mkdir -p _target/.github/actions/owned _target/.githooks
+              printf '{"scripts":{"install":"touch executed.marker","build":"touch executed.marker","test":"touch executed.marker"}}\n' \
+                > _target/package.json
+              printf 'all:\n\ttouch executed.marker\n' > _target/Makefile
+              printf '#!/bin/sh\ntouch executed.marker\n' > _target/install.sh
+              printf '#!/bin/sh\ntouch executed.marker\n' > _target/.githooks/post-checkout
+              {
+                printf '#!'
+                printf '%300s' '' | tr ' ' x
+                printf '/bin/sh\nvalue=$1\necho $value\n'
+              } > _target/oversized-shebang
+              cat > _target/.github/actions/owned/action.yml <<'EOF'
+          ---
+          name: Untrusted action
+          runs:
+            using: composite
+            steps:
+              - shell: bash
+                run: touch executed.marker
+          EOF
+              cat > _target/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              external = { source = "hashicorp/external" }
+            }
+          }
+          data "external" "untrusted" {
+            program = ["./install.sh"]
+          }
+          EOF
+              ;;
+            checkout-failure)
+              echo "::error::checkout-failure must not reach fixture preparation."
+              exit 1
               ;;
             *)
               echo "::error::Unknown validation case: $CASE"
               exit 1
               ;;
           esac
-          git -C _target add .
+          if [[ "$CASE" == symlink ]]; then
+            printf 'safe\n' > _target/real.txt
+            ln -s real.txt _target/link.txt
+          fi
+          if [[ "$CASE" != submodule ]]; then
+            git -C _target add .
+          fi
       - name: Install checksum-verified scanners
         if: steps.checkout.outcome == 'success'
         id: tools
@@ -300,6 +600,18 @@ jobs:
         with:
           aqua_version: v2.62.1
           working_directory: _trusted
+      - name: Record scanner versions
+        if: steps.tools.outcome == 'success'
+        id: versions
+        continue-on-error: ${{ inputs.validation_mode }}
+        run: |
+          {
+            printf 'scorecard: '; scorecard version
+            printf 'zizmor: '; zizmor --version
+            printf 'actionlint: '; actionlint -version
+            printf 'shellcheck: '; shellcheck --version | head -n 2 | tail -n 1
+            printf 'trivy: '; trivy --version | head -n 1
+          } > results/scanner-versions.txt 2> results/scanner-versions.log
       - name: Validate target content
         if: steps.checkout.outcome == 'success' && steps.tools.outcome == 'success'
         id: preflight
@@ -307,16 +619,31 @@ jobs:
         shell: bash
         run: _trusted/scripts/preflight.sh _target 2>&1 | tee results/preflight.txt
       - name: Run OpenSSF Scorecard
-        if: always() && steps.preflight.outcome == 'success' && (!inputs.validation_mode || matrix.validation_case == 'clean')
+        if: >-
+          always() && steps.preflight.outcome == 'success' &&
+          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant"]'), matrix.validation_case))
         id: scorecard
         continue-on-error: ${{ inputs.validation_mode }}
         env:
           GITHUB_AUTH_TOKEN: ${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}
           REPOSITORY: ${{ matrix.full_name }}
           COMMIT_SHA: ${{ matrix.commit_sha }}
-        run: scorecard --repo="$REPOSITORY" --commit="$COMMIT_SHA" --format=json > results/scorecard.json 2> results/scorecard.log
+        run: |
+          set +e
+          scorecard --repo="$REPOSITORY" --commit="$COMMIT_SHA" --show-details --format=json \
+            > results/scorecard.json 2> results/scorecard.log
+          status=$?
+          set -e
+          printf '%s\n' "$status" > results/scorecard-status.txt
+          if ((status != 0)); then
+            exit "$status"
+          fi
+          jq -e 'type == "object" and (.checks | type == "array" and length > 0)' \
+            results/scorecard.json > /dev/null
       - name: Run zizmor
-        if: always() && steps.preflight.outcome == 'success'
+        if: >-
+          always() && steps.preflight.outcome == 'success' &&
+          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","zizmor-finding","symlink","scanner-runtime-error","no-exec"]'), matrix.validation_case))
         id: zizmor
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
@@ -328,12 +655,18 @@ jobs:
             esac
           done < <(git -C _target ls-files --stage -z -- '.github/workflows/*.yml' \
             '.github/workflows/*.yaml' ':(glob)**/action.yml' ':(glob)**/action.yaml')
-          if ((${#files[@]} == 0)); then printf '[]\n' > results/zizmor.json; exit 0; fi
+          if ((${#files[@]} == 0)); then
+            printf '[]\n' > results/zizmor.json
+            : > results/zizmor.log
+            exit 0
+          fi
           (cd _target && zizmor --offline --no-config --no-ignores --strict-collection --persona regular \
             --min-severity medium --min-confidence high --format json "${files[@]}") \
             > results/zizmor.json 2> results/zizmor.log
       - name: Run actionlint
-        if: always() && steps.preflight.outcome == 'success'
+        if: >-
+          always() && steps.preflight.outcome == 'success' &&
+          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","actionlint-syntax","actionlint-shell","symlink","scanner-runtime-error","no-exec"]'), matrix.validation_case))
         id: actionlint
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
@@ -344,27 +677,76 @@ jobs:
               100644|100755) files+=("${entry#*$'\t'}") ;;
             esac
           done < <(git -C _target ls-files --stage -z -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
-          if ((${#files[@]} == 0)); then : > results/actionlint.jsonl; exit 0; fi
+          if ((${#files[@]} == 0)); then
+            : > results/actionlint.jsonl
+            : > results/actionlint.log
+            exit 0
+          fi
           (cd _target && SHELLCHECK_OPTS='--rcfile=/dev/null' actionlint --no-color --config-file /dev/null \
             --shellcheck shellcheck --format '{{json .}}' "${files[@]}") \
             > results/actionlint.jsonl 2> results/actionlint.log
       - name: Run ShellCheck
-        if: always() && steps.preflight.outcome == 'success'
+        if: >-
+          always() && steps.preflight.outcome == 'success' &&
+          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","shellcheck-finding","symlink","scanner-runtime-error","no-exec"]'), matrix.validation_case))
         id: shellcheck
         continue-on-error: ${{ inputs.validation_mode }}
         env:
           VALIDATION_MODE: ${{ inputs.validation_mode }}
           VALIDATION_CASE: ${{ matrix.validation_case }}
         run: |
+          has_supported_shell_shebang() {
+            local line=$1
+            local command rest interpreter
+            [[ "$line" == '#!'* ]] || return 1
+            line=${line#\#!}
+            line=${line#"${line%%[![:space:]]*}"}
+            read -r command rest <<< "$line"
+            interpreter=${command##*/}
+            case "$interpreter" in
+              sh|bash|dash|ksh) return 0 ;;
+              env)
+                read -r command rest <<< "$rest"
+                if [[ "$command" == -S ]]; then
+                  read -r command rest <<< "$rest"
+                fi
+                interpreter=${command##*/}
+                case "$interpreter" in
+                  sh|bash|dash|ksh) return 0 ;;
+                esac
+                ;;
+            esac
+            return 1
+          }
+
           files=()
+          declare -A seen=()
           while IFS= read -r -d '' entry; do
             mode=${entry%% *}
             case "$mode" in
-              100644|100755) files+=("${entry#*$'\t'}") ;;
+              100644|100755) ;;
+              *) continue ;;
             esac
-          done < <(git -C _target ls-files --stage -z -- '*.sh' '*.bash' '*.bats')
+            path=${entry#*$'\t'}
+            include=false
+            case "$path" in
+              *.sh|*.bash|*.bats) include=true ;;
+            esac
+            if [[ "$include" == false ]]; then
+              first_line=''
+              IFS= LC_ALL=C read -r -n 256 first_line < "_target/$path" || true
+              if has_supported_shell_shebang "$first_line"; then
+                include=true
+              fi
+            fi
+            if [[ "$include" == true && -z "${seen[$path]:-}" ]]; then
+              files+=("$path")
+              seen[$path]=1
+            fi
+          done < <(git -C _target ls-files --stage -z)
           if ((${#files[@]} == 0)); then
             printf '[]\n' > results/shellcheck.json
+            : > results/shellcheck.log
             printf '0\n' > results/shellcheck-status.txt
             exit 0
           fi
@@ -379,16 +761,41 @@ jobs:
           set -e
           printf '%s\n' "$status" > results/shellcheck-status.txt
           exit "$status"
-      - name: Run Trivy
-        if: always() && steps.preflight.outcome == 'success' && (!inputs.validation_mode || matrix.validation_case == 'clean')
-        id: trivy
+      - name: Run Trivy vulnerability scan
+        if: >-
+          always() && steps.preflight.outcome == 'success' &&
+          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","trivy-vulnerability","scanner-runtime-error","no-exec"]'), matrix.validation_case))
+        id: trivy-vulnerability
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
-          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners vuln,secret,misconfig \
-            --exit-code 1 --format json --output results/trivy.json --skip-dirs _target/.git \
-            --skip-version-check _target 2> results/trivy.log
+          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners vuln \
+            --exit-code 1 --format json --output results/trivy-vulnerability.json \
+            --skip-dirs _target/.git --skip-version-check _target \
+            2> results/trivy-vulnerability.log
+      - name: Run Trivy secret scan
+        if: >-
+          always() && steps.preflight.outcome == 'success' &&
+          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","trivy-secret","no-exec"]'), matrix.validation_case))
+        id: trivy-secret
+        continue-on-error: ${{ inputs.validation_mode }}
+        run: |
+          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners secret \
+            --exit-code 1 --format json --output results/trivy-secret.json \
+            --skip-dirs _target/.git --skip-version-check _target \
+            2> results/trivy-secret.log
+      - name: Run Trivy misconfiguration scan
+        if: >-
+          always() && steps.preflight.outcome == 'success' &&
+          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","trivy-misconfiguration","no-exec"]'), matrix.validation_case))
+        id: trivy-misconfiguration
+        continue-on-error: ${{ inputs.validation_mode }}
+        run: |
+          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners misconfig \
+            --exit-code 1 --format json --output results/trivy-misconfiguration.json \
+            --skip-dirs _target/.git --skip-version-check _target \
+            2> results/trivy-misconfiguration.log
       - name: Retain private raw scanner artifacts
-        if: always()
+        if: always() && hashFiles('results/target.json') != ''
         id: artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -404,38 +811,172 @@ jobs:
           TRUSTED: ${{ steps.trusted.outcome }}
           CHECKOUT: ${{ steps.checkout.outcome }}
           TOOLS: ${{ steps.tools.outcome }}
+          VERSIONS: ${{ steps.versions.outcome }}
           PREFLIGHT: ${{ steps.preflight.outcome }}
           SCORECARD: ${{ steps.scorecard.outcome }}
           ZIZMOR: ${{ steps.zizmor.outcome }}
           ACTIONLINT: ${{ steps.actionlint.outcome }}
           SHELLCHECK: ${{ steps.shellcheck.outcome }}
-          TRIVY: ${{ steps.trivy.outcome }}
+          TRIVY_VULNERABILITY: ${{ steps.trivy-vulnerability.outcome }}
+          TRIVY_SECRET: ${{ steps.trivy-secret.outcome }}
+          TRIVY_MISCONFIGURATION: ${{ steps.trivy-misconfiguration.outcome }}
           ARTIFACT: ${{ steps.artifact.outcome }}
         run: |
-          common="$TARGET:$TRUSTED:$ARTIFACT"
+          expect() {
+            local label=$1
+            local actual=$2
+            local expected=$3
+            if [[ "$actual" != "$expected" ]]; then
+              echo "::error::$CASE: $label outcome was $actual, expected $expected."
+              exit 1
+            fi
+          }
+          require_file() {
+            if [[ ! -f "$1" ]]; then
+              echo "::error::$CASE: missing expected artifact file $1."
+              exit 1
+            fi
+          }
+          expect target "$TARGET" success
+          expect trusted "$TRUSTED" success
+          expect artifact "$ARTIFACT" success
+          require_file results/target.json
+
+          if [[ "$CASE" == checkout-failure ]]; then
+            expect checkout "$CHECKOUT" failure
+            expect tools "$TOOLS" skipped
+            expect preflight "$PREFLIGHT" skipped
+            expect scorecard "$SCORECARD" skipped
+            expect zizmor "$ZIZMOR" skipped
+            expect actionlint "$ACTIONLINT" skipped
+            expect shellcheck "$SHELLCHECK" skipped
+            expect trivy-vulnerability "$TRIVY_VULNERABILITY" skipped
+            expect trivy-secret "$TRIVY_SECRET" skipped
+            expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" skipped
+            exit 0
+          fi
+
+          expect checkout "$CHECKOUT" success
+          expect tools "$TOOLS" success
+          expect versions "$VERSIONS" success
+          require_file results/scanner-versions.txt
+          require_file results/preflight.txt
           case "$CASE" in
-            clean)
-              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
-                == success:success:success:success:success:success:success:success:success:success:success ]]
-              [[ "$(cat results/shellcheck-status.txt)" == 0 ]]
+            submodule|lfs)
+              expect preflight "$PREFLIGHT" failure
+              expect scorecard "$SCORECARD" skipped
+              expect zizmor "$ZIZMOR" skipped
+              expect actionlint "$ACTIONLINT" skipped
+              expect shellcheck "$SHELLCHECK" skipped
+              expect trivy-vulnerability "$TRIVY_VULNERABILITY" skipped
+              expect trivy-secret "$TRIVY_SECRET" skipped
+              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" skipped
               ;;
-            finding)
-              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
-                == success:success:success:success:success:success:skipped:success:success:failure:skipped ]]
+            clean|no-relevant)
+              expect preflight "$PREFLIGHT" success
+              expect scorecard "$SCORECARD" success
+              expect zizmor "$ZIZMOR" success
+              expect actionlint "$ACTIONLINT" success
+              expect shellcheck "$SHELLCHECK" success
+              expect trivy-vulnerability "$TRIVY_VULNERABILITY" success
+              expect trivy-secret "$TRIVY_SECRET" success
+              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" success
+              require_file results/scorecard.json
+              require_file results/scorecard.log
+              require_file results/zizmor.json
+              require_file results/zizmor.log
+              require_file results/actionlint.jsonl
+              require_file results/actionlint.log
+              require_file results/shellcheck.json
+              require_file results/shellcheck.log
+              require_file results/trivy-vulnerability.json
+              require_file results/trivy-vulnerability.log
+              require_file results/trivy-secret.json
+              require_file results/trivy-secret.log
+              require_file results/trivy-misconfiguration.json
+              require_file results/trivy-misconfiguration.log
+              jq empty results/scorecard.json results/trivy-vulnerability.json \
+                results/trivy-secret.json results/trivy-misconfiguration.json
+              ;;
+            zizmor-finding)
+              expect preflight "$PREFLIGHT" success
+              expect zizmor "$ZIZMOR" failure
+              require_file results/zizmor.json
+              require_file results/zizmor.log
+              jq -e 'type == "array" and length > 0' results/zizmor.json > /dev/null
+              ;;
+            actionlint-syntax|actionlint-shell)
+              expect preflight "$PREFLIGHT" success
+              expect actionlint "$ACTIONLINT" failure
+              require_file results/actionlint.jsonl
+              require_file results/actionlint.log
+              ;;
+            shellcheck-finding)
+              expect preflight "$PREFLIGHT" success
+              expect shellcheck "$SHELLCHECK" failure
               [[ "$(cat results/shellcheck-status.txt)" == 1 ]]
+              require_file results/shellcheck.json
+              require_file results/shellcheck.log
               ;;
-            incomplete-content)
-              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
-                == success:success:success:success:success:failure:skipped:skipped:skipped:skipped:skipped ]]
+            trivy-vulnerability)
+              expect preflight "$PREFLIGHT" success
+              expect trivy-vulnerability "$TRIVY_VULNERABILITY" failure
+              require_file results/trivy-vulnerability.json
+              require_file results/trivy-vulnerability.log
+              jq -e '[.Results[]?.Vulnerabilities[]?] | length > 0' results/trivy-vulnerability.json > /dev/null
+              ;;
+            trivy-secret)
+              expect preflight "$PREFLIGHT" success
+              expect trivy-secret "$TRIVY_SECRET" failure
+              require_file results/trivy-secret.json
+              require_file results/trivy-secret.log
+              jq -e '[.Results[]?.Secrets[]?] | length > 0' results/trivy-secret.json > /dev/null
+              ;;
+            trivy-misconfiguration)
+              expect preflight "$PREFLIGHT" success
+              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" failure
+              require_file results/trivy-misconfiguration.json
+              require_file results/trivy-misconfiguration.log
+              jq -e '[.Results[]?.Misconfigurations[]?] | length > 0' results/trivy-misconfiguration.json > /dev/null
+              ;;
+            symlink)
+              expect preflight "$PREFLIGHT" success
+              [[ ! -L _target/link.txt ]]
+              expect zizmor "$ZIZMOR" success
+              expect actionlint "$ACTIONLINT" success
+              expect shellcheck "$SHELLCHECK" success
               ;;
             scanner-runtime-error)
-              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
-                == success:success:success:success:success:success:skipped:success:success:failure:skipped ]]
+              expect preflight "$PREFLIGHT" success
+              expect zizmor "$ZIZMOR" success
+              expect actionlint "$ACTIONLINT" success
+              expect shellcheck "$SHELLCHECK" failure
+              expect trivy-vulnerability "$TRIVY_VULNERABILITY" success
+              expect trivy-secret "$TRIVY_SECRET" skipped
+              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" skipped
               [[ "$(cat results/shellcheck-status.txt)" -ge 2 ]]
+              require_file results/zizmor.json
+              require_file results/actionlint.jsonl
+              require_file results/shellcheck.log
+              require_file results/trivy-vulnerability.json
+              require_file results/trivy-vulnerability.log
+              jq empty results/trivy-vulnerability.json
               ;;
-            checkout-failure)
-              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
-                == success:success:success:failure:skipped:skipped:skipped:skipped:skipped:skipped:skipped ]]
+            no-exec)
+              expect preflight "$PREFLIGHT" success
+              expect zizmor "$ZIZMOR" success
+              expect actionlint "$ACTIONLINT" success
+              expect shellcheck "$SHELLCHECK" success
+              expect trivy-vulnerability "$TRIVY_VULNERABILITY" success
+              expect trivy-secret "$TRIVY_SECRET" success
+              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" success
+              require_file results/trivy-vulnerability.json
+              require_file results/trivy-vulnerability.log
+              require_file results/trivy-secret.json
+              require_file results/trivy-secret.log
+              require_file results/trivy-misconfiguration.json
+              require_file results/trivy-misconfiguration.log
+              [[ ! -e _target/executed.marker && ! -e executed.marker ]]
               ;;
             *)
               echo "::error::Unknown validation case: $CASE"
