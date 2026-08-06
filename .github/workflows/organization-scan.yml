@@ -825,7 +825,7 @@ jobs:
               ;;
             zizmor-finding)
               expect preflight "$PREFLIGHT" success
-              expect zizmor "$ZIZMOR" success
+              expect zizmor "$ZIZMOR" failure
               require_file results/zizmor.json
               require_file results/zizmor.log
               jq -e 'type == "array" and length > 0' results/zizmor.json > /dev/null
