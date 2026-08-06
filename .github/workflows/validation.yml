@@ -8,113 +8,13 @@ on:
 
 permissions:
   contents: read
+  checks: read
+  issues: read
+  pull-requests: read
 
 jobs:
-  fixture:
-    name: Fixture / ${{ matrix.case }}
-    strategy:
-      fail-fast: false
-      matrix:
-        case:
-          - clean
-          - finding
-          - incomplete-content
-          - scanner-runtime-error
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      AQUA_CONFIG: ${{ github.workspace }}/aqua.yaml
-    steps:
-      - name: Check out trusted scanner configuration
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install checksum-verified scanners
-        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
-        with:
-          aqua_version: v2.62.1
-      - name: Prepare tracked fixture
-        env:
-          CASE: ${{ matrix.case }}
-        run: |
-          mkdir -p target results
-          git -C target init -q
-          git -C target config user.name validation
-          git -C target config user.email validation@example.invalid
-          case "$CASE" in
-            clean|scanner-runtime-error) printf '#!/bin/sh\ntrue\n' > target/test.sh ;;
-            finding) printf '#!/bin/sh\nvalue="$1"\necho $value\n' > target/test.sh ;;
-            incomplete-content) printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 1\n' 0 > target/payload.bin ;;
-          esac
-          git -C target add .
-          git -C target commit -qm fixture
-      - name: Validate target content
-        id: preflight
-        continue-on-error: true
-        run: scripts/preflight.sh target > results/preflight.txt 2>&1
-      - name: Run representative scanner
-        id: scanner
-        if: steps.preflight.outcome == 'success'
-        continue-on-error: true
-        env:
-          CASE: ${{ matrix.case }}
-        run: |
-          set +e
-          if [[ "$CASE" == scanner-runtime-error ]]; then
-            shellcheck --format=invalid -- target/test.sh > results/shellcheck.json 2> results/shellcheck.log
-          else
-            shellcheck --format=json1 --severity=style -- target/test.sh > results/shellcheck.json 2> results/shellcheck.log
-          fi
-          status=$?
-          printf '%s\n' "$status" > results/scanner-status.txt
-          exit "$status"
-      - name: Retain validation evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: validation-${{ matrix.case }}
-          path: results
-          if-no-files-found: error
-          retention-days: 14
-      - name: Assert expected native outcomes
-        if: always()
-        env:
-          CASE: ${{ matrix.case }}
-          PREFLIGHT: ${{ steps.preflight.outcome }}
-          SCANNER: ${{ steps.scanner.outcome }}
-        run: |
-          status=$(cat results/scanner-status.txt 2>/dev/null || printf 'none')
-          case "$CASE" in
-            clean) [[ "$PREFLIGHT:$SCANNER:$status" == success:success:0 ]] ;;
-            finding) [[ "$PREFLIGHT:$SCANNER:$status" == success:failure:1 ]] ;;
-            incomplete-content) [[ "$PREFLIGHT:$SCANNER:$status" == failure:skipped:none ]] ;;
-            scanner-runtime-error) [[ "$PREFLIGHT:$SCANNER" == success:failure && "$status" -ge 2 ]] ;;
-          esac
-
-  checkout-failure:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Exercise immutable checkout failure
-        id: checkout
-        continue-on-error: true
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: 0000000000000000000000000000000000000000
-          path: target
-          persist-credentials: false
-          fetch-depth: 1
-      - name: Record checkout outcome
-        if: always()
-        run: mkdir -p results && printf '%s\n' '${{ steps.checkout.outcome }}' > results/checkout-outcome.txt
-      - name: Retain checkout failure evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: validation-checkout-failure
-          path: results
-          if-no-files-found: error
-          retention-days: 14
-      - name: Assert checkout failed closed
-        if: always()
-        run: test '${{ steps.checkout.outcome }}' = failure
+  production-workflow:
+    uses: ./.github/workflows/organization-scan.yml
+    with:
+      validation_mode: true
+      max_parallel: "5"
