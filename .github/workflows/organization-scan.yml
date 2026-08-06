@@ -14,11 +14,16 @@ on:
         required: false
         type: string
         default: "4"
+      validation_mode:
+        description: Internal end-to-end validation; accepted only for dceoy/segh pull requests
+        required: false
+        type: boolean
+        default: false
     secrets:
       SEGH_READ_APP_ID:
-        required: true
+        required: false
       SEGH_READ_APP_PRIVATE_KEY:
-        required: true
+        required: false
   workflow_dispatch:
     inputs:
       repository_limit:
@@ -52,6 +57,7 @@ jobs:
       max_parallel: ${{ steps.targets.outputs.max_parallel }}
     steps:
       - name: Require a private control repository
+        if: inputs.validation_mode != true
         env:
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
         run: |
@@ -59,7 +65,18 @@ jobs:
             echo "::error::Run organization scans only from a private control repository so findings remain private."
             exit 1
           fi
+      - name: Require GitHub App credentials
+        if: inputs.validation_mode != true
+        env:
+          APP_ID: ${{ secrets.SEGH_READ_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$APP_ID" || -z "$APP_PRIVATE_KEY" ]]; then
+            echo "::error::SEGH_READ_APP_ID and SEGH_READ_APP_PRIVATE_KEY are required."
+            exit 1
+          fi
       - name: Create read-only GitHub App token
+        if: inputs.validation_mode != true
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -71,6 +88,10 @@ jobs:
       - name: Resolve immutable scan targets
         id: targets
         env:
+          VALIDATION_MODE: ${{ inputs.validation_mode }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPOSITORY_LIMIT: ${{ inputs.repository_limit || '50' }}
           MAX_PARALLEL: ${{ inputs.max_parallel || '4' }}
@@ -93,48 +114,75 @@ jobs:
             echo "::error::max_parallel must be an integer from 1 to 10."
             exit 1
           fi
-          gh api --paginate --slurp /installation/repositories > repositories.json
-          jq '[.[].repositories[] | select(.disabled != true)] | unique_by(.id) | sort_by(.full_name)' \
-            repositories.json > selected.json
-          selected_count=$(jq 'length' selected.json)
-          if ((selected_count == 0)); then
-            echo "::error::The GitHub App installation selected no enabled repositories; refusing an empty scan."
-            exit 1
-          fi
-          if ((selected_count > repository_limit)); then
-            echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$repository_limit; refusing incomplete coverage."
-            exit 1
-          fi
-          : > targets.jsonl
-          while IFS= read -r repository; do
-            id=$(jq -r '.id' <<<"$repository")
-            full_name=$(jq -r '.full_name' <<<"$repository")
-            owner=$(jq -r '.owner.login' <<<"$repository")
-            name=$(jq -r '.name' <<<"$repository")
-            default_branch=$(jq -r '.default_branch // empty' <<<"$repository")
-            commit_sha=''
-            resolution_error=''
-            if [[ -z "$default_branch" ]]; then
-              resolution_error='repository has no default branch'
-            elif ! commit_sha=$(gh api --method GET "repos/$full_name/commits" \
-              -f sha="$default_branch" -f per_page=1 --jq '.[0].sha' 2> resolve.log); then
-              resolution_error=$(<resolve.log)
-            elif [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              resolution_error='default branch did not resolve to a commit SHA'
-              commit_sha=''
+
+          if [[ "$VALIDATION_MODE" == true ]]; then
+            if [[ "$CALLER_REPOSITORY" != dceoy/segh || "$EVENT_NAME" != pull_request ]]; then
+              echo "::error::validation_mode is restricted to pull requests in dceoy/segh."
+              exit 1
             fi
-            jq -cn --arg id "$id" --arg full_name "$full_name" --arg owner "$owner" \
-              --arg name "$name" --arg default_branch "$default_branch" --arg commit_sha "$commit_sha" \
-              --arg resolution_error "$resolution_error" \
-              '{id, full_name, owner, name, default_branch, commit_sha, resolution_error}' >> targets.jsonl
-          done < <(jq -c '.[]' selected.json)
-          jq -sc '{include: .}' targets.jsonl > matrix.json
+            if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::The validation pull request head must resolve to an immutable commit SHA."
+              exit 1
+            fi
+            jq -n --arg commit_sha "$HEAD_SHA" '
+              {include: [
+                {id: "validation-clean", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
+                 default_branch: "main", commit_sha: $commit_sha, resolution_error: "", validation_case: "clean"},
+                {id: "validation-finding", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
+                 default_branch: "main", commit_sha: $commit_sha, resolution_error: "", validation_case: "finding"},
+                {id: "validation-incomplete-content", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
+                 default_branch: "main", commit_sha: $commit_sha, resolution_error: "", validation_case: "incomplete-content"},
+                {id: "validation-scanner-runtime-error", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
+                 default_branch: "main", commit_sha: $commit_sha, resolution_error: "", validation_case: "scanner-runtime-error"},
+                {id: "validation-checkout-failure", full_name: "dceoy/segh", owner: "dceoy", name: "segh",
+                 default_branch: "main", commit_sha: "0000000000000000000000000000000000000000",
+                 resolution_error: "", validation_case: "checkout-failure"}
+              ]}' > matrix.json
+          else
+            gh api --paginate --slurp /installation/repositories > repositories.json
+            jq '[.[].repositories[] | select(.disabled != true)] | unique_by(.id) | sort_by(.full_name)' \
+              repositories.json > selected.json
+            selected_count=$(jq 'length' selected.json)
+            if ((selected_count == 0)); then
+              echo "::error::The GitHub App installation selected no enabled repositories; refusing an empty scan."
+              exit 1
+            fi
+            if ((selected_count > repository_limit)); then
+              echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$repository_limit; refusing incomplete coverage."
+              exit 1
+            fi
+            : > targets.jsonl
+            while IFS= read -r repository; do
+              id=$(jq -r '.id' <<<"$repository")
+              full_name=$(jq -r '.full_name' <<<"$repository")
+              owner=$(jq -r '.owner.login' <<<"$repository")
+              name=$(jq -r '.name' <<<"$repository")
+              default_branch=$(jq -r '.default_branch // empty' <<<"$repository")
+              commit_sha=''
+              resolution_error=''
+              if [[ -z "$default_branch" ]]; then
+                resolution_error='repository has no default branch'
+              elif ! commit_sha=$(gh api --method GET "repos/$full_name/commits" \
+                -f sha="$default_branch" -f per_page=1 --jq '.[0].sha' 2> resolve.log); then
+                resolution_error=$(<resolve.log)
+              elif [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                resolution_error='default branch did not resolve to a commit SHA'
+                commit_sha=''
+              fi
+              jq -cn --arg id "$id" --arg full_name "$full_name" --arg owner "$owner" \
+                --arg name "$name" --arg default_branch "$default_branch" --arg commit_sha "$commit_sha" \
+                --arg resolution_error "$resolution_error" \
+                '{id, full_name, owner, name, default_branch, commit_sha, resolution_error}' >> targets.jsonl
+            done < <(jq -c '.[]' selected.json)
+            jq -sc '{include: .}' targets.jsonl > matrix.json
+          fi
+
           printf 'matrix=%s\n' "$(jq -c . matrix.json)" >> "$GITHUB_OUTPUT"
           printf 'has_targets=%s\n' "$(jq -r '.include | length > 0' matrix.json)" >> "$GITHUB_OUTPUT"
           printf 'max_parallel=%s\n' "$max_parallel" >> "$GITHUB_OUTPUT"
 
   scan:
-    name: Source scan / ${{ matrix.full_name }}
+    name: Source scan / ${{ matrix.full_name }}${{ matrix.validation_case && format(' / {0}', matrix.validation_case) || '' }}
     needs: plan
     if: needs.plan.outputs.has_targets == 'true'
     strategy:
@@ -145,28 +193,35 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      checks: read
+      issues: read
+      pull-requests: read
     env:
       AQUA_CONFIG: ${{ github.workspace }}/_trusted/aqua.yaml
     steps:
       - name: Record immutable target metadata
         id: target
+        continue-on-error: ${{ inputs.validation_mode }}
         env:
           REPOSITORY_ID: ${{ matrix.id }}
           REPOSITORY: ${{ matrix.full_name }}
           DEFAULT_BRANCH: ${{ matrix.default_branch }}
           COMMIT_SHA: ${{ matrix.commit_sha }}
           RESOLUTION_ERROR: ${{ matrix.resolution_error }}
+          VALIDATION_CASE: ${{ matrix.validation_case }}
         run: |
           mkdir -p results
           jq -n --arg repository_id "$REPOSITORY_ID" --arg repository "$REPOSITORY" \
             --arg default_branch "$DEFAULT_BRANCH" --arg commit_sha "$COMMIT_SHA" \
-            --arg resolution_error "$RESOLUTION_ERROR" \
-            '{repository_id, repository, default_branch, commit_sha, resolution_error}' > results/target.json
+            --arg resolution_error "$RESOLUTION_ERROR" --arg validation_case "$VALIDATION_CASE" \
+            '{repository_id, repository, default_branch, commit_sha, resolution_error}
+             + if $validation_case == "" then {} else {validation_case: $validation_case} end' > results/target.json
           if [[ -n "$RESOLUTION_ERROR" || ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::$REPOSITORY: ${RESOLUTION_ERROR:-invalid immutable commit SHA}"
             exit 1
           fi
       - name: Check out trusted scanner configuration
+        id: trusted
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ job.workflow_repository }}
@@ -174,6 +229,7 @@ jobs:
           path: _trusted
           persist-credentials: false
       - name: Create repository-scoped read-only token
+        if: inputs.validation_mode != true
         id: target-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -188,34 +244,80 @@ jobs:
           permission-pull-requests: read
       - name: Check out untrusted target revision
         id: checkout
+        continue-on-error: ${{ inputs.validation_mode }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ matrix.full_name }}
           ref: ${{ matrix.commit_sha }}
-          token: ${{ steps.target-token.outputs.token }}
+          token: ${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}
           path: _target
           persist-credentials: false
           fetch-depth: 1
           lfs: false
           submodules: false
+      - name: Prepare controlled validation fixture
+        if: inputs.validation_mode && steps.checkout.outcome == 'success'
+        env:
+          CASE: ${{ matrix.validation_case }}
+        run: |
+          git -C _target rm -qr --cached -- .
+          find _target -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
+          mkdir -p _target/.github/workflows
+          cat > _target/.github/workflows/fixture.yml <<'EOF'
+          ---
+          name: Fixture
+          on:
+            push:
+          permissions:
+            contents: read
+          jobs:
+            test:
+              runs-on: ubuntu-24.04
+              steps:
+                - run: "true"
+          EOF
+          case "$CASE" in
+            clean|scanner-runtime-error)
+              printf '#!/bin/sh\ntrue\n' > _target/test.sh
+              ;;
+            finding)
+              printf '#!/bin/sh\nvalue="$1"\necho $value\n' > _target/test.sh
+              ;;
+            incomplete-content)
+              printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 1\n' 0 > _target/payload.bin
+              ;;
+            *)
+              echo "::error::Unknown validation case: $CASE"
+              exit 1
+              ;;
+          esac
+          git -C _target add .
       - name: Install checksum-verified scanners
+        if: steps.checkout.outcome == 'success'
         id: tools
+        continue-on-error: ${{ inputs.validation_mode }}
         uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
         with:
           aqua_version: v2.62.1
           working_directory: _trusted
       - name: Validate target content
+        if: steps.checkout.outcome == 'success' && steps.tools.outcome == 'success'
         id: preflight
+        continue-on-error: ${{ inputs.validation_mode }}
         run: _trusted/scripts/preflight.sh _target 2>&1 | tee results/preflight.txt
       - name: Run OpenSSF Scorecard
-        if: always() && steps.preflight.outcome == 'success'
+        if: always() && steps.preflight.outcome == 'success' && (!inputs.validation_mode || matrix.validation_case == 'clean')
+        id: scorecard
+        continue-on-error: ${{ inputs.validation_mode }}
         env:
-          GITHUB_AUTH_TOKEN: ${{ steps.target-token.outputs.token }}
+          GITHUB_AUTH_TOKEN: ${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}
           REPOSITORY: ${{ matrix.full_name }}
           COMMIT_SHA: ${{ matrix.commit_sha }}
         run: scorecard --repo="$REPOSITORY" --commit="$COMMIT_SHA" --format=json > results/scorecard.json 2> results/scorecard.log
       - name: Run zizmor
         if: always() && steps.preflight.outcome == 'success'
+        id: zizmor
+        continue-on-error: ${{ inputs.validation_mode }}
         run: |
           files=()
           while IFS= read -r -d '' entry; do
@@ -231,6 +333,8 @@ jobs:
             > results/zizmor.json 2> results/zizmor.log
       - name: Run actionlint
         if: always() && steps.preflight.outcome == 'success'
+        id: actionlint
+        continue-on-error: ${{ inputs.validation_mode }}
         run: |
           files=()
           while IFS= read -r -d '' entry; do
@@ -245,6 +349,11 @@ jobs:
             > results/actionlint.jsonl 2> results/actionlint.log
       - name: Run ShellCheck
         if: always() && steps.preflight.outcome == 'success'
+        id: shellcheck
+        continue-on-error: ${{ inputs.validation_mode }}
+        env:
+          VALIDATION_MODE: ${{ inputs.validation_mode }}
+          VALIDATION_CASE: ${{ matrix.validation_case }}
         run: |
           files=()
           while IFS= read -r -d '' entry; do
@@ -253,20 +362,82 @@ jobs:
               100644|100755) files+=("${entry#*$'\t'}") ;;
             esac
           done < <(git -C _target ls-files --stage -z -- '*.sh' '*.bash' '*.bats')
-          if ((${#files[@]} == 0)); then printf '[]\n' > results/shellcheck.json; exit 0; fi
-          (cd _target && shellcheck --color=never --format=json1 --rcfile /dev/null --severity=style -- "${files[@]}") \
+          if ((${#files[@]} == 0)); then
+            printf '[]\n' > results/shellcheck.json
+            printf '0\n' > results/shellcheck-status.txt
+            exit 0
+          fi
+          format=json1
+          if [[ "$VALIDATION_MODE" == true && "$VALIDATION_CASE" == scanner-runtime-error ]]; then
+            format=invalid
+          fi
+          set +e
+          (cd _target && shellcheck --color=never --format="$format" --rcfile /dev/null --severity=style -- "${files[@]}") \
             > results/shellcheck.json 2> results/shellcheck.log
+          status=$?
+          set -e
+          printf '%s\n' "$status" > results/shellcheck-status.txt
+          exit "$status"
       - name: Run Trivy
-        if: always() && steps.preflight.outcome == 'success'
+        if: always() && steps.preflight.outcome == 'success' && (!inputs.validation_mode || matrix.validation_case == 'clean')
+        id: trivy
+        continue-on-error: ${{ inputs.validation_mode }}
         run: |
           trivy filesystem --config /dev/null --ignorefile /dev/null --scanners vuln,secret,misconfig \
             --exit-code 1 --format json --output results/trivy.json --skip-dirs _target/.git \
             --skip-version-check _target 2> results/trivy.log
       - name: Retain private raw scanner artifacts
         if: always()
+        id: artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: repository-scan-${{ matrix.id }}
+          name: ${{ matrix.validation_case && format('validation-{0}', matrix.validation_case) || format('repository-scan-{0}', matrix.id) }}
           path: results
           if-no-files-found: error
           retention-days: 14
+      - name: Assert production workflow validation outcomes
+        if: always() && inputs.validation_mode
+        env:
+          CASE: ${{ matrix.validation_case }}
+          TARGET: ${{ steps.target.outcome }}
+          TRUSTED: ${{ steps.trusted.outcome }}
+          CHECKOUT: ${{ steps.checkout.outcome }}
+          TOOLS: ${{ steps.tools.outcome }}
+          PREFLIGHT: ${{ steps.preflight.outcome }}
+          SCORECARD: ${{ steps.scorecard.outcome }}
+          ZIZMOR: ${{ steps.zizmor.outcome }}
+          ACTIONLINT: ${{ steps.actionlint.outcome }}
+          SHELLCHECK: ${{ steps.shellcheck.outcome }}
+          TRIVY: ${{ steps.trivy.outcome }}
+          ARTIFACT: ${{ steps.artifact.outcome }}
+        run: |
+          common="$TARGET:$TRUSTED:$ARTIFACT"
+          case "$CASE" in
+            clean)
+              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
+                == success:success:success:success:success:success:success:success:success:success:success ]]
+              [[ "$(cat results/shellcheck-status.txt)" == 0 ]]
+              ;;
+            finding)
+              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
+                == success:success:success:success:success:success:skipped:success:success:failure:skipped ]]
+              [[ "$(cat results/shellcheck-status.txt)" == 1 ]]
+              ;;
+            incomplete-content)
+              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
+                == success:success:success:success:success:failure:skipped:skipped:skipped:skipped:skipped ]]
+              ;;
+            scanner-runtime-error)
+              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
+                == success:success:success:success:success:success:skipped:success:success:failure:skipped ]]
+              [[ "$(cat results/shellcheck-status.txt)" -ge 2 ]]
+              ;;
+            checkout-failure)
+              [[ "$common:$CHECKOUT:$TOOLS:$PREFLIGHT:$SCORECARD:$ZIZMOR:$ACTIONLINT:$SHELLCHECK:$TRIVY" \
+                == success:success:success:failure:skipped:skipped:skipped:skipped:skipped:skipped:skipped ]]
+              ;;
+            *)
+              echo "::error::Unknown validation case: $CASE"
+              exit 1
+              ;;
+          esac
