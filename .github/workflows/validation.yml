@@ -17,4 +17,5 @@ jobs:
     uses: ./.github/workflows/organization-scan.yml
     with:
       validation_mode: true
+      repository_limit: "50"
       max_parallel: "5"
