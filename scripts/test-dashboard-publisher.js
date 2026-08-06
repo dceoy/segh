@@ -23,6 +23,13 @@ const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "segh-publisher-test-")
   root = temp(); files = input(root, summary()); github = new GitHub(); github.failCreate = true;
   await publish({github, context, core, ...files, repositoryPrivate: true});
   assert.equal(github.issues.length, 1);
+  assert.match(github.issues[0].body, /segh-body-integrity: sha256:[0-9a-f]{64}/);
+
+  const canonicalBody = github.issues[0].body;
+  github.issues[0].body = canonicalBody.replace("# Security dashboard:", "# Operator-edited dashboard:");
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  assert.equal(github.issues[0].body, canonicalBody, "publisher must restore a modified managed issue body");
+  assert.equal(github.comments.length, 0, "body repair without a result transition must not add history");
 
   const findings = summary({overall_status: "findings",
     scanners: summary().scanners.map((item) => item.name === "zizmor" ? {...item, status: "findings", findings: 1} : item),
