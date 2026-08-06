@@ -304,6 +304,7 @@ jobs:
         if: steps.checkout.outcome == 'success' && steps.tools.outcome == 'success'
         id: preflight
         continue-on-error: ${{ inputs.validation_mode }}
+        shell: bash
         run: _trusted/scripts/preflight.sh _target 2>&1 | tee results/preflight.txt
       - name: Run OpenSSF Scorecard
         if: always() && steps.preflight.outcome == 'success' && (!inputs.validation_mode || matrix.validation_case == 'clean')
