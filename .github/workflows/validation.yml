@@ -102,6 +102,7 @@ jobs:
           ruby -ryaml -e '
             tracked_files = IO.popen(["git", "ls-files", "-z"], &:read).split("\0")
             action_files = ARGV
+            documents = action_files.to_h { |path| [path, YAML.load_file(path)] }
             forbidden_literals = [
               ["dceoy/gha-for-", "devops"].join,
               ["golang", "ci"].join,
@@ -125,8 +126,35 @@ jobs:
                   exit 1
                 end
               end
+            end
+
+            executable_surfaces = Dir["scripts/*"].select { |path| File.file?(path) }
+            documents.each do |path, document|
+              runs = []
+              collect_runs = lambda do |node|
+                case node
+                when Hash
+                  node.each do |key, value|
+                    runs << value if key == "run" && value.is_a?(String)
+                    collect_runs.call(value)
+                  end
+                when Array
+                  node.each { |value| collect_runs.call(value) }
+                end
+              end
+              collect_runs.call(document)
+              runs.each_with_index do |run, index|
+                if run.match?(go_command)
+                  warn "::error file=#{path}::Executable run block #{index + 1} invokes the removed Go toolchain."
+                  exit 1
+                end
+              end
+            end
+            executable_surfaces.each do |path|
+              content = File.binread(path)
+              next if content.include?("\0")
               if content.match?(go_command)
-                warn "::error file=#{path}::Go toolchain commands are not part of the workflow-only product."
+                warn "::error file=#{path}::Executable script invokes the removed Go toolchain."
                 exit 1
               end
             end
@@ -181,8 +209,7 @@ jobs:
               validate_action.call(step["uses"], path) if step.key?("uses")
             end
 
-            action_files.each do |path|
-              document = YAML.load_file(path)
+            documents.each do |path, document|
               if path.start_with?(".github/workflows/")
                 validate_permissions.call(document["permissions"], path, "workflow", false)
                 document.fetch("jobs", {}).each do |job_name, job|
@@ -195,6 +222,101 @@ jobs:
               else
                 Array(document.dig("runs", "steps")).each { |step| validate_step.call(step, path) }
               end
+            end
+
+            organization_path = ".github/workflows/organization-scan.yml"
+            organization = documents.fetch(organization_path)
+            jobs = organization.fetch("jobs")
+            plan_steps = Array(jobs.fetch("plan")["steps"])
+            scan_steps = Array(jobs.fetch("scan")["steps"])
+            targets = plan_steps.find { |step| step["id"] == "targets" }
+            unless targets && targets["run"].is_a?(String)
+              warn "::error file=#{organization_path}::The immutable target-planning step is missing."
+              exit 1
+            end
+
+            gh_api_calls = []
+            jobs.each do |job_name, job|
+              Array(job["steps"]).each do |step|
+                run = step["run"]
+                gh_api_calls << [job_name, step["id"], run] if run.is_a?(String) && run.match?(/\bgh\s+api\b/)
+              end
+            end
+            unless gh_api_calls.length == 1 && gh_api_calls[0][0, 2] == ["plan", "targets"]
+              warn "::error file=#{organization_path}::Only plan/targets may call gh api."
+              exit 1
+            end
+
+            targets_run = targets["run"].dup
+            allowed_calls = [
+              /gh\s+api\s+--paginate\s+--slurp\s+\/installation\/repositories/,
+              /gh\s+api\s+--method\s+GET\s+"repos\/\$full_name\/commits"\s*\\\s*-f\s+sha="\$default_branch"\s+-f\s+per_page=1/m
+            ]
+            allowed_calls.each do |pattern|
+              unless targets_run.sub!(pattern, "")
+                warn "::error file=#{organization_path}::The target planner must retain only the approved GitHub API calls."
+                exit 1
+              end
+            end
+            if targets_run.match?(/\bgh\s+api\b/)
+              warn "::error file=#{organization_path}::An unapproved GitHub API call was added to the target planner."
+              exit 1
+            end
+
+            target_token = "${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}"
+            checkout = scan_steps.find { |step| step["id"] == "checkout" }
+            scorecard = scan_steps.find { |step| step["id"] == "scorecard" }
+            unless checkout&.dig("with", "token") == target_token &&
+                   scorecard&.dig("env", "SEGH_TARGET_SCORECARD_TOKEN") == target_token
+              warn "::error file=#{organization_path}::Target credentials must remain limited to checkout and Scorecard."
+              exit 1
+            end
+            token_reference_count = 0
+            count_token_references = lambda do |node|
+              case node
+              when Hash
+                node.each_value { |value| count_token_references.call(value) }
+              when Array
+                node.each { |value| count_token_references.call(value) }
+              when String
+                token_reference_count += node.scan("steps.target-token.outputs.token").length
+              end
+            end
+            count_token_references.call(organization)
+            unless token_reference_count == 2
+              warn "::error file=#{organization_path}::Additional target-token consumers are not allowed."
+              exit 1
+            end
+
+            allowed_results = %w[
+              results/actionlint.jsonl
+              results/actionlint.log
+              results/preflight.txt
+              results/scanner-versions.log
+              results/scanner-versions.txt
+              results/scorecard-permissions.json
+              results/scorecard-status.txt
+              results/scorecard.json
+              results/scorecard.log
+              results/shellcheck-status.txt
+              results/shellcheck.json
+              results/shellcheck.log
+              results/target.json
+              results/trivy-misconfiguration.json
+              results/trivy-misconfiguration.log
+              results/trivy-secret.json
+              results/trivy-secret.log
+              results/trivy-vulnerability.json
+              results/trivy-vulnerability.log
+              results/zizmor.json
+              results/zizmor.log
+            ]
+            organization_source = File.read(organization_path)
+            remaining_result_paths = organization_source.dup
+            allowed_results.each { |path| remaining_result_paths.gsub!(path, "") }
+            if remaining_result_paths.include?("results/")
+              warn "::error file=#{organization_path}::An unapproved or dynamic result artifact path was added."
+              exit 1
             end
           ' "${action_files[@]}"
 
