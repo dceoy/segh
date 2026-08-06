@@ -1,5 +1,6 @@
 "use strict";
 
+const MANAGED_DASHBOARD = /<!-- segh-dashboard: v1 -->/;
 const REPOSITORY_ID = /<!-- segh-repository-id: ([0-9]+) -->/;
 
 function retryable(error) {
@@ -19,10 +20,14 @@ async function list(method, params) {
   throw new Error("GitHub list API exceeded the 1000 item bound");
 }
 
+function managedDashboard(body) {
+  return MANAGED_DASHBOARD.test(String(body || ""));
+}
+
 function repositoryId(body) {
   const match = String(body || "").match(REPOSITORY_ID);
   const id = match ? Number.parseInt(match[1], 10) : 0;
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
-module.exports = {list, repositoryId, retryable};
+module.exports = {list, managedDashboard, repositoryId, retryable};

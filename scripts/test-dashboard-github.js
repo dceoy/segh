@@ -3,7 +3,7 @@
 class GitHub {
   constructor() {
     this.labels = []; this.issues = []; this.comments = []; this.next = 1;
-    this.failCreate = false; this.failComment = false;
+    this.failCreate = false; this.failComment = false; this.failUpdate = false;
     this.rest = {issues: {
       listLabelsForRepo: async () => ({data: this.labels}),
       createLabel: async ({name}) => ({data: this.labels[this.labels.push({name}) - 1]}),
@@ -16,6 +16,7 @@ class GitHub {
         return {data: issue};
       },
       update: async (params) => {
+        if (this.failUpdate) { this.failUpdate = false; const error = new Error("definitive update failure"); error.status = 422; throw error; }
         const issue = this.issues.find((item) => item.number === params.issue_number);
         for (const key of ["title", "body", "state"]) if (params[key] !== undefined) issue[key] = params[key];
         if (params.labels) issue.labels = params.labels.map((name) => ({name}));

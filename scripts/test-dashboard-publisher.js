@@ -33,5 +33,28 @@ const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "segh-publisher-test-")
   await publish({github, context, core, ...files, repositoryPrivate: true});
   assert.equal(github.comments.length, 1);
   assert.match(github.comments[0].body, /segh-history-event: sha256:/);
+
+  root = temp(); files = input(root, summary()); github = new GitHub();
+  github.issues.push({number: 99, title: "Unrelated", body: "<!-- segh-repository-id: 123 -->", state: "open", labels: []});
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  assert.equal(github.issues.length, 2, "an unrelated repository-ID marker must not be adopted as a dashboard");
+  assert.equal(github.issues.find((issue) => issue.number === 99).state, "open");
+  const managed = github.issues.find((issue) => /segh-dashboard: v1/.test(issue.body));
+  assert.ok(managed);
+  assert.equal(managed.state, "closed");
+
+  root = temp(); files = input(root, summary()); github = new GitHub();
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  fs.writeFileSync(path.join(files.summariesPath, "repository-summary-123", "summary.json"), `${JSON.stringify(findings)}\n`);
+  github.failUpdate = true;
+  await assert.rejects(
+    () => publish({github, context, core, ...files, repositoryPrivate: true}),
+    /definitive update failure/,
+  );
+  assert.equal(github.comments.length, 1, "the transition event must be persisted before the issue update");
+  assert.match(github.issues[0].body, /segh-overall-status: pass/);
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  assert.equal(github.comments.length, 1, "retry must reuse the persisted transition event");
+  assert.match(github.issues[0].body, /segh-overall-status: findings/);
   console.log("publisher hardening tests passed");
 })().catch((error) => { console.error(error.stack || error); process.exit(1); });
