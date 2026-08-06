@@ -20,6 +20,25 @@ const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "segh-publisher-test-")
   assert.equal(github.issues[0].state, "open");
   assert.ok(github.issues[0].labels.some(({name}) => name === "scan:error"));
 
+  const mixedCoverage = summary({
+    overall_status: "findings",
+    scanners: summary().scanners.map((item) => {
+      if (item.name === "zizmor") return {...item, status: "findings", findings: 1};
+      if (item.name === "actionlint") return {...item, status: "skipped"};
+      return item;
+    }),
+    findings: {total: 1, categories: ["actions"], fingerprint: `sha256:${"1".repeat(64)}`},
+    remediation_categories: ["Harden GitHub Actions workflows and pin trusted dependencies."],
+  });
+  root = temp(); files = input(root, mixedCoverage); github = new GitHub();
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  assert.ok(github.issues[0].labels.some(({name}) => name === "scan:error"));
+
+  root = temp(); files = input(root, summary()); github = new GitHub(); github.failCreateLabel = true;
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  assert.equal(github.labels.length, 11, "ambiguous label creation must reconcile without duplicates");
+  assert.equal(github.issues.length, 1);
+
   root = temp(); files = input(root, summary()); github = new GitHub(); github.failCreate = true;
   await publish({github, context, core, ...files, repositoryPrivate: true});
   assert.equal(github.issues.length, 1);
