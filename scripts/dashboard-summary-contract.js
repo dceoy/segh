@@ -8,15 +8,19 @@ const REQUIRED = new Set([
   "scorecard", "zizmor", "actionlint", "shellcheck",
   "trivy-vulnerability", "trivy-secret", "trivy-misconfiguration",
 ]);
+const SCANNER_STATUS = new Set(["pass", "findings", "incomplete", "error", "skipped"]);
 
 function completeScannerSet(summary) {
   if (!Array.isArray(summary?.scanners) || summary.scanners.length !== REQUIRED.size) return false;
   const names = new Set(summary.scanners.map((scanner) => scanner?.name));
   if (names.size !== REQUIRED.size || [...REQUIRED].some((name) => !names.has(name))) return false;
-  if (summary.scanners.some((scanner) => !Number.isSafeInteger(scanner?.findings) || scanner.findings < 0)) return false;
+  if (summary.scanners.some((scanner) => !SCANNER_STATUS.has(scanner?.status) ||
+      !Number.isSafeInteger(scanner.findings) || scanner.findings < 0 ||
+      (scanner.status === "findings" ? scanner.findings === 0 : scanner.findings !== 0))) return false;
 
   const statuses = summary.scanners.map((scanner) => scanner.status);
   const totalFindings = summary.scanners.reduce((sum, scanner) => sum + scanner.findings, 0);
+  if (!Number.isSafeInteger(summary?.findings?.total) || summary.findings.total !== totalFindings) return false;
   switch (summary.overall_status) {
     case "pass":
       return totalFindings === 0 && statuses.every((status) => status === "pass");
