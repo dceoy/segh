@@ -38,17 +38,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmp --silent \
-            _trusted/.github/workflows/trusted-boundary.yml \
-            _candidate/.github/workflows/trusted-boundary.yml || {
-              echo "::error file=.github/workflows/trusted-boundary.yml::The trusted boundary workflow cannot be changed by an ordinary pull request."
-              exit 1
-            }
-          cmp --silent \
-            _trusted/scripts/validate-workflow-boundary.rb \
-            _candidate/scripts/validate-workflow-boundary.rb || {
-              echo "::error file=scripts/validate-workflow-boundary.rb::The trusted boundary validator cannot be changed by an ordinary pull request."
-              exit 1
-            }
+          compare_trusted_entry() {
+            local path=$1
+            local trusted_entry candidate_entry
+            trusted_entry=$(git -C _trusted ls-tree HEAD -- "$path")
+            candidate_entry=$(git -C _candidate ls-tree HEAD -- "$path")
+            if [[ -z "$trusted_entry" || "$candidate_entry" != "$trusted_entry" ]]; then
+              echo "::error file=$path::The trusted policy source cannot be changed by an ordinary pull request."
+              return 1
+            fi
+          }
+          compare_trusted_entry .github/workflows/trusted-boundary.yml
+          compare_trusted_entry scripts/validate-workflow-boundary.rb
       - name: Validate candidate product boundary
         run: ruby _trusted/scripts/validate-workflow-boundary.rb _candidate
