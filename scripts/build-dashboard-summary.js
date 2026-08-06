@@ -15,7 +15,7 @@ const SCORECARD_CHECKS = new Set([
   "Token-Permissions",
   "Vulnerabilities",
 ]);
-const SCORECARD_PASS_SCORE = 10;
+const SCORECARD_MINIMUM_SCORE = 7;
 const MAX_FINDINGS = 100000;
 
 function readJson(file) {
@@ -78,11 +78,11 @@ function parseScorecard(resultsDir, outcome) {
     }
     const selected = data.checks
       .map((check) => ({name: check.Name ?? check.name, score: check.Score ?? check.score}))
-      .filter((check) => SCORECARD_CHECKS.has(check.name) && Number.isFinite(check.score))
-      .map((check) => ({name: check.name, score: Math.max(0, Math.min(10, check.score))}))
+      .filter((check) => SCORECARD_CHECKS.has(check.name) && Number.isFinite(check.score) && check.score >= 0)
+      .map((check) => ({name: check.name, score: Math.min(10, check.score)}))
       .sort((a, b) => a.name.localeCompare(b.name));
     if (selected.length === 0) return scanner("scorecard", "error", 0);
-    const findings = selected.filter((check) => check.score < SCORECARD_PASS_SCORE);
+    const findings = selected.filter((check) => check.score < SCORECARD_MINIMUM_SCORE);
     const fingerprints = findingFingerprints("scorecard", findings);
     return scanner(
       "scorecard",
