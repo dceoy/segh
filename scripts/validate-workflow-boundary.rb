@@ -23,6 +23,31 @@ EXPECTED_PATHS = %w[
   scripts/validate-workflow-boundary.rb
 ].freeze
 
+EXPECTED_FILE_MODES = EXPECTED_PATHS.to_h do |path|
+  [path, path == "scripts/preflight.sh" ? "100755" : "100644"]
+end.freeze
+
+EXPECTED_ACTIONS = {
+  ORGANIZATION_WORKFLOW => [
+    "actions/checkout",
+    "actions/checkout",
+    "actions/create-github-app-token",
+    "actions/create-github-app-token",
+    "actions/upload-artifact",
+    "aquaproj/aqua-installer"
+  ].sort.freeze,
+  TRUSTED_BOUNDARY_WORKFLOW => [
+    "actions/checkout",
+    "actions/checkout"
+  ].sort.freeze,
+  VALIDATION_WORKFLOW => [
+    "./.github/workflows/organization-scan.yml",
+    "actions/checkout",
+    "actions/checkout",
+    "aquaproj/aqua-installer"
+  ].sort.freeze
+}.freeze
+
 ALLOWED_RESULTS = %w[
   results/actionlint.jsonl
   results/actionlint.log
@@ -84,10 +109,17 @@ module Boundary
     exit 1
   end
 
-  def load_yaml(path)
-    YAML.safe_load_file(path, aliases: false)
+  def load_yaml(path, content)
+    YAML.safe_load(content, aliases: false, filename: path)
   rescue Psych::Exception => e
     fail!(path, "Invalid YAML: #{e.message.lines.first&.strip}")
+  end
+
+  def read_blob(path, object_id)
+    content = IO.popen(["git", "cat-file", "blob", object_id], &:read)
+    fail!(path, "Unable to read the tracked blob #{object_id}.") unless $?.success?
+
+    content
   end
 
   def walk_strings(node, path = [], &block)
@@ -119,13 +151,13 @@ module Boundary
     end
   end
 
-  def validate_action(action, path)
+  def action_identity(action, path)
     fail!(path, "Action reference must be a string.") unless action.is_a?(String)
-    return if action.start_with?("./")
+    return action if action.start_with?("./")
 
     name = action.sub(/@[^@]+\z/, "")
     fail!(path, "The Go toolchain action is not part of the workflow-only product: #{action}") if name == "actions/setup-go"
-    return if action.match?(/\A[^@\s]+@[0-9a-f]{40}\z/)
+    return name if action.match?(/\A[^@\s]+@[0-9a-f]{40}\z/)
 
     fail!(path, "Remote action is not pinned to a full commit SHA: #{action}")
   end
@@ -137,7 +169,12 @@ module Boundary
 end
 
 Dir.chdir(ROOT) do
-  tracked_files = IO.popen(["git", "ls-files", "-z"], &:read).split("\0")
+  index_entries = IO.popen(["git", "ls-files", "--stage", "-z"], &:read).split("\0").to_h do |entry|
+    metadata, path = entry.split("\t", 2)
+    mode, object_id, stage = metadata.to_s.split
+    [path, {"mode" => mode, "object_id" => object_id, "stage" => stage}]
+  end
+  tracked_files = index_entries.keys
   unless tracked_files == EXPECTED_PATHS
     warn "::error::Tracked path set differs from the workflow-only product allowlist."
     warn "Expected paths:\n  #{EXPECTED_PATHS.join("\n  ")}"
@@ -145,10 +182,22 @@ Dir.chdir(ROOT) do
     exit 1
   end
 
+  index_entries.each do |path, entry|
+    expected_mode = EXPECTED_FILE_MODES.fetch(path)
+    unless entry["stage"] == "0" && entry["mode"] == expected_mode && entry["object_id"]&.match?(/\A[0-9a-f]{40}\z/)
+      Boundary.fail!(path, "Tracked entry must be a stage-0 regular blob with mode #{expected_mode}.")
+    end
+  end
+  file_contents = index_entries.to_h do |path, entry|
+    [path, Boundary.read_blob(path, entry.fetch("object_id"))]
+  end
+
   action_files = tracked_files.select do |path|
     path.match?(%r{\A\.github/workflows/.*\.ya?ml\z}) || File.basename(path).match?(/\Aaction\.ya?ml\z/)
   end
-  documents = action_files.to_h { |path| [path, Boundary.load_yaml(path)] }
+  documents = action_files.to_h do |path|
+    [path, Boundary.load_yaml(path, file_contents.fetch(path))]
+  end
 
   forbidden_literals = [
     ["dceoy/gha-for-", "devops"].join,
@@ -161,8 +210,7 @@ Dir.chdir(ROOT) do
     ["reconcile-source-", "scan"].join,
     ["status.", "json"].join
   ]
-  tracked_files.each do |path|
-    content = File.binread(path)
+  file_contents.each do |path, content|
     next if content.include?("\0")
 
     forbidden_literals.each do |literal|
@@ -179,7 +227,7 @@ Dir.chdir(ROOT) do
   tracked_files.grep(%r{\Ascripts/}).each do |path|
     next if path == "scripts/validate-workflow-boundary.rb"
 
-    content = File.binread(path)
+    content = file_contents.fetch(path)
     executable_surfaces << [path, ["script"], content] unless content.include?("\0")
   end
   executable_surfaces.each do |path, node_path, command|
@@ -189,6 +237,7 @@ Dir.chdir(ROOT) do
     end
   end
 
+  actual_actions = Hash.new { |hash, path| hash[path] = [] }
   documents.each do |path, document|
     if path.start_with?(".github/workflows/")
       Boundary.validate_permissions(document["permissions"], path, "workflow")
@@ -196,18 +245,28 @@ Dir.chdir(ROOT) do
         Boundary.fail!(path, "Job #{job_name} must be a mapping.") unless job.is_a?(Hash)
         publisher = path == ORGANIZATION_WORKFLOW && job_name == "publish-dashboard"
         Boundary.validate_permissions(job["permissions"], path, "job #{job_name}", publisher: publisher)
-        Boundary.validate_action(job["uses"], path) if job.key?("uses")
+        actual_actions[path] << Boundary.action_identity(job["uses"], path) if job.key?("uses")
         Array(job["steps"]).each do |step|
           Boundary.fail!(path, "Every workflow step must be a mapping.") unless step.is_a?(Hash)
-          Boundary.validate_action(step["uses"], path) if step.key?("uses")
+          actual_actions[path] << Boundary.action_identity(step["uses"], path) if step.key?("uses")
         end
       end
     else
       Array(document.dig("runs", "steps")).each do |step|
         Boundary.fail!(path, "Every composite-action step must be a mapping.") unless step.is_a?(Hash)
-        Boundary.validate_action(step["uses"], path) if step.key?("uses")
+        actual_actions[path] << Boundary.action_identity(step["uses"], path) if step.key?("uses")
       end
     end
+  end
+  EXPECTED_ACTIONS.each do |path, expected|
+    actual = actual_actions.fetch(path, []).sort
+    next if actual == expected
+
+    Boundary.fail!(path, "Action identity profile differs from the approved workflow-only product: #{actual.inspect}")
+  end
+  unexpected_action_files = actual_actions.keys - EXPECTED_ACTIONS.keys
+  unless unexpected_action_files.empty?
+    Boundary.fail!(unexpected_action_files.first, "Executable action definitions are outside the approved workflow profile.")
   end
 
   validation = documents.fetch(VALIDATION_WORKFLOW)
@@ -292,7 +351,7 @@ Dir.chdir(ROOT) do
     end
   end
 
-  aqua = Boundary.load_yaml("aqua.yaml")
+  aqua = Boundary.load_yaml("aqua.yaml", file_contents.fetch("aqua.yaml"))
   checksum = aqua.fetch("checksum", {})
   unless checksum["enabled"] == true && checksum["require_checksum"] == true
     Boundary.fail!("aqua.yaml", "Aqua checksums must remain enabled and required.")
