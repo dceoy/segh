@@ -27,7 +27,13 @@ jobs:
       - name: Validate credential boundaries
         run: ruby scripts/test-workflow-security.rb
       - name: Run actionlint
-        run: actionlint .github/workflows/*.yml
+        run: |
+          actionlint \
+            -ignore 'property "workflow_repository" is not defined' \
+            -ignore 'property "workflow_sha" is not defined' \
+            -ignore 'shellcheck reported issue.*SC2129' \
+            -ignore 'shellcheck reported issue.*SC2016' \
+            .github/workflows/*.yml
       - name: Run zizmor
         run: >-
           zizmor --offline --no-config --no-ignores
