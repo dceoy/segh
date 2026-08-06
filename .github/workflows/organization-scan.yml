@@ -103,6 +103,20 @@ jobs:
             ((count > 0 && count <= limit))
           }
 
+          validate_repository_pages() {
+            jq -e '
+              . as $pages |
+              ($pages | type == "array" and length > 0) and
+              all($pages[];
+                type == "object" and
+                (.total_count | type == "number" and floor == . and . >= 0) and
+                (.repositories | type == "array")
+              ) and
+              (($pages | map(.total_count) | unique | length) == 1) and
+              (($pages | map(.repositories | length) | add) == $pages[0].total_count)
+            ' "$1" > /dev/null
+          }
+
           if [[ ! "$REPOSITORY_LIMIT" =~ ^[0-9]+$ ]]; then
             echo "::error::repository_limit must be an integer from 1 to 100."
             exit 1
@@ -133,6 +147,13 @@ jobs:
             fi
             if enforce_selection_bound 2 1 || ! enforce_selection_bound 1 1; then
               echo "::error::The production repository-limit predicate did not reject an oversized selection."
+              exit 1
+            fi
+            if ! validate_repository_pages <(printf '%s\n' \
+              '[{"total_count":2,"repositories":[{"id":1}]},{"total_count":2,"repositories":[{"id":2}]}]') || \
+               validate_repository_pages <(printf '%s\n' \
+              '[{"total_count":2,"repositories":[{"id":1}]}]'); then
+              echo "::error::The production pagination predicate accepted incomplete repository data."
               exit 1
             fi
             jq -n --arg commit_sha "$HEAD_SHA" '
@@ -169,11 +190,8 @@ jobs:
               echo "::error::GitHub App installation repository enumeration failed."
               exit 1
             fi
-            if ! jq -e '
-              type == "array" and length > 0 and
-              all(.[]; type == "object" and (.repositories | type == "array"))
-            ' repositories.json > /dev/null; then
-              echo "::error::GitHub App repository pagination returned malformed data."
+            if ! validate_repository_pages repositories.json; then
+              echo "::error::GitHub App repository pagination returned incomplete or malformed data."
               exit 1
             fi
             if ! jq -e '
@@ -460,16 +478,16 @@ jobs:
           EOF
               ;;
             shellcheck-finding)
-              printf '#!/bin/sh\nvalue=$1\necho $value\n' > _target/test.sh
+              printf '#!/usr/bin/env -S dash -eu\nvalue=$1\necho $value\n' > _target/test
               ;;
             trivy-vulnerability)
               printf 'urllib3==1.26.4\n' > _target/requirements.txt
               ;;
             trivy-secret)
-              cat > _target/credentials.txt <<'EOF'
-          AWS_ACCESS_KEY_ID=AKIA7JXQ2W6R8T1Y4U5P
-          AWS_SECRET_ACCESS_KEY=aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ABCD
-          EOF
+              access_key=$(printf '%s%s%s' 'AK' 'IA7JXQ2W6R' '8T1Y4U5P')
+              secret_key=$(printf '%s%s%s' 'aBcDeFgHiJ' 'kLmNoPqRsT' 'uVwXyZ0123456789ABCD')
+              printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
+                "$access_key" "$secret_key" > _target/credentials.txt
               ;;
             trivy-misconfiguration)
               cat > _target/pod.yml <<'EOF'
@@ -504,6 +522,11 @@ jobs:
               printf 'all:\n\ttouch executed.marker\n' > _target/Makefile
               printf '#!/bin/sh\ntouch executed.marker\n' > _target/install.sh
               printf '#!/bin/sh\ntouch executed.marker\n' > _target/.githooks/post-checkout
+              {
+                printf '#!'
+                printf '%300s' '' | tr ' ' x
+                printf '/bin/sh\nvalue=$1\necho $value\n'
+              } > _target/oversized-shebang
               cat > _target/.github/actions/owned/action.yml <<'EOF'
           ---
           name: Untrusted action
@@ -643,6 +666,30 @@ jobs:
           VALIDATION_MODE: ${{ inputs.validation_mode }}
           VALIDATION_CASE: ${{ matrix.validation_case }}
         run: |
+          has_supported_shell_shebang() {
+            local line=$1
+            local command rest interpreter
+            [[ "$line" == '#!'* ]] || return 1
+            line=${line#\#!}
+            line=${line#"${line%%[![:space:]]*}"}
+            read -r command rest <<< "$line"
+            interpreter=${command##*/}
+            case "$interpreter" in
+              sh|bash|dash|ksh) return 0 ;;
+              env)
+                read -r command rest <<< "$rest"
+                if [[ "$command" == -S ]]; then
+                  read -r command rest <<< "$rest"
+                fi
+                interpreter=${command##*/}
+                case "$interpreter" in
+                  sh|bash|dash|ksh) return 0 ;;
+                esac
+                ;;
+            esac
+            return 1
+          }
+
           files=()
           declare -A seen=()
           while IFS= read -r -d '' entry; do
@@ -657,12 +704,11 @@ jobs:
               *.sh|*.bash|*.bats) include=true ;;
             esac
             if [[ "$include" == false ]]; then
-              IFS= read -r first_line < "_target/$path" || first_line=''
-              case "$first_line" in
-                '#!'*'/sh'|'#!'*'/bash'|'#!'*'/dash'|'#!'*'/ksh'|'#!'*' env sh'*|'#!'*' env bash'*)
-                  include=true
-                  ;;
-              esac
+              first_line=''
+              IFS= LC_ALL=C read -r -n 256 first_line < "_target/$path" || true
+              if has_supported_shell_shebang "$first_line"; then
+                include=true
+              fi
             fi
             if [[ "$include" == true && -z "${seen[$path]:-}" ]]; then
               files+=("$path")
