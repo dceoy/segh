@@ -132,6 +132,13 @@ if publisher
   permissions.each do |name, access|
     fail_if.call(allowed[name] != access, "publisher permission #{name}: #{access} is outside the credential contract")
   end
+  publisher_env = publisher.fetch("env", {})
+  fail_if.call(
+    publisher_env["SEGH_DASHBOARD_REPOSITORY"] != "${{ github.repository }}",
+    "publisher must bind the dashboard target to the caller repository"
+  )
+  fail_if.call(publisher_text.include?("secrets."), "publisher must not receive configured secrets")
+  fail_if.call(publisher_text.include?("SEGH_PUBLISH_APP_"), "publisher must not receive cross-repository publisher App credentials")
   fail_if.call(publisher_text.include?("SEGH_ORG_SCAN_APP_"), "publisher must not receive organization scan App credentials")
   fail_if.call(publisher_text.include?("target-token") || publisher_text.include?("SEGH_TARGET_SCORECARD_TOKEN"), "publisher must not receive target scan credentials")
   fail_if.call(!publisher_text.include?("github.event.repository.private"), "publisher must enforce a private control repository")
