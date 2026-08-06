@@ -358,20 +358,49 @@ jobs:
             --arg trusted_workflow_sha "$TRUSTED_WORKFLOW_SHA" \
             --arg validation_case "$VALIDATION_CASE" \
             '{
-              repository_id,
-              repository,
-              owner,
-              name,
-              visibility,
-              fork,
-              default_branch,
-              commit_sha,
-              workflow_run_id,
-              workflow_run_attempt,
-              trusted_workflow_repository,
-              trusted_workflow_sha
+              repository_id: $repository_id,
+              repository: $repository,
+              owner: $owner,
+              name: $name,
+              visibility: $visibility,
+              fork: $fork,
+              default_branch: $default_branch,
+              commit_sha: $commit_sha,
+              workflow_run_id: $workflow_run_id,
+              workflow_run_attempt: $workflow_run_attempt,
+              trusted_workflow_repository: $trusted_workflow_repository,
+              trusted_workflow_sha: $trusted_workflow_sha
             } + if $validation_case == "" then {} else {validation_case: $validation_case} end' \
             > results/target.json
+          jq -e \
+            --argjson repository_id "$REPOSITORY_ID" \
+            --arg repository "$REPOSITORY" \
+            --arg owner "$REPOSITORY_OWNER" \
+            --arg name "$REPOSITORY_NAME" \
+            --arg visibility "$VISIBILITY" \
+            --argjson fork "$FORK" \
+            --arg default_branch "$DEFAULT_BRANCH" \
+            --arg commit_sha "$COMMIT_SHA" \
+            --argjson workflow_run_id "$WORKFLOW_RUN_ID" \
+            --argjson workflow_run_attempt "$WORKFLOW_RUN_ATTEMPT" \
+            --arg trusted_workflow_repository "$TRUSTED_WORKFLOW_REPOSITORY" \
+            --arg trusted_workflow_sha "$TRUSTED_WORKFLOW_SHA" \
+            --arg validation_case "$VALIDATION_CASE" \
+            'type == "object" and
+             .repository_id == $repository_id and
+             .repository == $repository and
+             .owner == $owner and
+             .name == $name and
+             .visibility == $visibility and
+             .fork == $fork and
+             .default_branch == $default_branch and
+             .commit_sha == $commit_sha and
+             .workflow_run_id == $workflow_run_id and
+             .workflow_run_attempt == $workflow_run_attempt and
+             .trusted_workflow_repository == $trusted_workflow_repository and
+             .trusted_workflow_sha == $trusted_workflow_sha and
+             (.validation_case // "") == $validation_case' \
+            results/target.json > /dev/null
       - name: Check out trusted scanner configuration
         id: trusted
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
