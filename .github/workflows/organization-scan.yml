@@ -735,7 +735,7 @@ jobs:
       - name: Run Trivy vulnerability scan
         if: >-
           always() && steps.preflight.outcome == 'success' &&
-          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","trivy-vulnerability"]'), matrix.validation_case))
+          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","trivy-vulnerability","scanner-runtime-error"]'), matrix.validation_case))
         id: trivy-vulnerability
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
@@ -922,10 +922,16 @@ jobs:
               expect zizmor "$ZIZMOR" success
               expect actionlint "$ACTIONLINT" success
               expect shellcheck "$SHELLCHECK" failure
+              expect trivy-vulnerability "$TRIVY_VULNERABILITY" success
+              expect trivy-secret "$TRIVY_SECRET" skipped
+              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" skipped
               [[ "$(cat results/shellcheck-status.txt)" -ge 2 ]]
               require_file results/zizmor.json
               require_file results/actionlint.jsonl
               require_file results/shellcheck.log
+              require_file results/trivy-vulnerability.json
+              require_file results/trivy-vulnerability.log
+              jq empty results/trivy-vulnerability.json
               ;;
             no-exec)
               expect preflight "$PREFLIGHT" success
