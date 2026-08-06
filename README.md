@@ -14,43 +14,53 @@ The workflow installs exactly five checksum-pinned tools through trusted Aqua co
 - ShellCheck for tracked regular shell files and supported shell shebangs;
 - Trivy for independent vulnerability, secret, and misconfiguration scans.
 
-Scorecard runs against the immutable GitHub repository and commit with `--show-details`. Its aggregate score is not a gate. The repository job fails only when Scorecard cannot execute or does not produce valid non-empty JSON. No SARIF is uploaded and no score threshold is implemented.
+Scorecard runs against the immutable repository and commit with `--show-details`. Its aggregate score is not a gate. The repository job fails when Scorecard cannot execute or does not produce valid non-empty JSON. No SARIF is uploaded and no custom score threshold is implemented.
 
 ## Repository selection
 
-The GitHub App installation selection is authoritative.
+The GitHub App installation selection is authoritative. Planning excludes disabled and archived repositories, includes explicitly selected forks, sorts targets deterministically, validates repository identity and visibility, and resolves every default branch to a lowercase 40-character commit SHA.
 
-Planning:
+Planning fails closed on malformed pagination, duplicate identities, empty or oversized selections, unavailable default branches, unresolved commits, or invalid immutable SHAs.
 
-- excludes disabled and archived repositories;
-- includes selected forks rather than applying an additional fork filter;
-- sorts targets deterministically by full repository name;
-- validates repository ID, full name, owner, name, visibility, fork status, and default branch;
-- resolves every default branch to a lowercase 40-character commit SHA;
-- rejects malformed pagination, duplicate identities, empty selections, unresolved commits, and selections larger than `repository_limit` before emitting the matrix.
+## Credential architecture
 
-A selected fork is scanned because the App installation explicitly selected it. Fork status is retained in immutable target metadata.
+Organization discovery, target scanning, and future issue publication use separate credential domains:
+
+```text
+plan
+  └─ organization installation token, read-only
+
+scan matrix
+  └─ one repository-scoped installation token per target, read-only
+
+publish-dashboard (future #74 implementation)
+  └─ private control-repository GITHUB_TOKEN with issues: write
+```
+
+No job may receive both scan credentials and an issue-write credential. The current workflow does not implement dashboard publication or scheduled reconciliation from #74 and #76.
+
+See [CREDENTIALS.md](CREDENTIALS.md) for the complete permission mapping, Scorecard limitations, publisher contract, private-control-repository requirements, and migration guidance.
 
 ## Operation
 
-Use `.github/workflows/organization-scan.yml` from a **private control repository**. This is mandatory because GitHub Actions artifacts inherit the visibility of the caller repository and can contain sensitive findings.
+Consume `.github/workflows/organization-scan.yml` from a **private execution or control repository**. This is mandatory because artifacts can contain private repository identities, paths, dependency information, findings, and scanner logs.
 
-Configure a GitHub App with this repository-level read permission set:
+Create one GitHub App installed on the authoritative target set with these repository permissions:
 
-- Metadata;
-- Contents;
-- Issues;
-- Pull requests;
-- Checks.
+- Metadata: read;
+- Contents: read;
+- Checks: read;
+- Issues: read;
+- Pull requests: read.
 
-This set follows the OpenSSF Scorecard private-repository guidance for commit and SAST detection and is also sufficient for immutable checkout and the other scanners. `Actions` and `Administration` are intentionally not requested because repository-contained validation and current upstream guidance do not demonstrate that they are required. A real private App-backed deployment must confirm the final set before #78 can close.
+Do not grant target-repository write permissions. `Actions` and `Administration` are intentionally not requested because the retained Scorecard profile does not require them. Administrator-only classic branch-protection evidence and the experimental Webhooks check are therefore unavailable and are recorded as explicit limitations in every scan artifact.
 
-Install the App on the authoritative repository selection, then add these secrets to the private control repository:
+Configure these Actions secrets in the private control repository:
 
-- `SEGH_READ_APP_ID`
-- `SEGH_READ_APP_PRIVATE_KEY`
+- `SEGH_ORG_SCAN_APP_ID`
+- `SEGH_ORG_SCAN_APP_PRIVATE_KEY`
 
-A scheduled caller should pin the reusable workflow to a reviewed commit:
+A caller should pin the reusable workflow to a reviewed commit:
 
 ```yaml
 ---
@@ -59,68 +69,68 @@ on:
   schedule:
     - cron: "17 3 * * 0"
   workflow_dispatch:
-permissions:
-  contents: read
+permissions: {}
 jobs:
   scan:
+    permissions:
+      contents: read
+      checks: read
+      issues: read
+      pull-requests: read
     uses: dceoy/segh/.github/workflows/organization-scan.yml@<reviewed-40-character-commit-sha>
     with:
       repository_limit: "50"
       max_parallel: "4"
     secrets:
-      SEGH_READ_APP_ID: ${{ secrets.SEGH_READ_APP_ID }}
-      SEGH_READ_APP_PRIVATE_KEY: ${{ secrets.SEGH_READ_APP_PRIVATE_KEY }}
+      SEGH_ORG_SCAN_APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
+      SEGH_ORG_SCAN_APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
 ```
 
-The public `dceoy/segh` repository does not publish organization findings. Its direct scheduled job is skipped because the repository is public; manual execution fails closed.
+The public `dceoy/segh` repository does not publish organization findings. Its direct scheduled job is skipped because the repository is public, and manual production execution fails closed.
 
 ## Security boundary
 
 For every selected repository, the workflow:
 
-1. resolves the default branch to an immutable commit SHA before matrix emission;
-2. mints a repository-scoped read-only token;
-3. checks out the exact commit with credential persistence, Git LFS, and submodules disabled;
-4. removes tracked symlinks and rejects gitlinks, unmaterialized LFS pointers, unreadable tracked regular files, and checkouts without tracked regular files;
-5. installs scanners only from the trusted workflow revision;
-6. ignores target-owned scanner configuration and ignore files where the tools support this;
-7. executes only trusted scanner command lines and never invokes target scripts, actions, hooks, package managers, installers, builds, tests, or Terraform providers;
-8. uploads private raw evidence after scanner findings and runtime errors whenever target metadata exists.
+1. uses a planning token with only Metadata and Contents read access;
+2. resolves the default branch to an immutable commit before matrix emission;
+3. mints a separate repository-scoped read-only token for exactly one matrix target;
+4. checks out the exact commit with credential persistence, Git LFS, and submodules disabled;
+5. removes tracked symlinks and rejects gitlinks, unmaterialized LFS pointers, unreadable tracked regular files, and incomplete checkouts;
+6. installs scanners only from the trusted reusable-workflow revision;
+7. ignores target-owned scanner configuration where supported;
+8. never executes target scripts, actions, hooks, package managers, installers, builds, tests, or Terraform providers;
+9. exposes the target token only to target checkout and Scorecard through a step-local environment variable;
+10. uploads only the bounded `results` directory.
 
-Native GitHub Actions step and matrix-job conclusions distinguish planning, checkout/preflight, scanner finding, and scanner runtime failures. `segh` does not create a custom status taxonomy or aggregate result engine.
+Tokens are not job outputs, are not persisted in Git configuration, and are masked before trusted shell commands use them. Job-level permissions are explicit. Scanner jobs have no write permission and cannot receive a future publisher credential.
 
 ## Evidence
 
 Each production matrix job retains `repository-scan-<repository-id>` for 14 days. Depending on the execution path, it contains:
 
-- `target.json` with repository ID, full name, visibility, fork status, default branch, immutable commit, workflow run ID and attempt, and trusted workflow repository and SHA;
+- `target.json` with immutable target and workflow provenance;
+- `scorecard-permissions.json` with the measured permission set and unavailable-evidence limitations;
 - `scanner-versions.txt` and its log;
 - `preflight.txt`;
-- `scorecard.json`, `scorecard.log`, and `scorecard-status.txt`;
-- `zizmor.json` and `zizmor.log`;
-- `actionlint.jsonl` and `actionlint.log`;
-- `shellcheck.json`, `shellcheck.log`, and `shellcheck-status.txt`;
-- `trivy-vulnerability.json` and `trivy-vulnerability.log`;
-- `trivy-secret.json` and `trivy-secret.log`;
-- `trivy-misconfiguration.json` and `trivy-misconfiguration.log`.
+- Scorecard, zizmor, actionlint, ShellCheck, and three independent Trivy outputs and logs.
 
-These files are raw private evidence, not a stable public schema.
+These files are raw private evidence, not a stable public schema. They must remain in a private workflow execution context whenever any target is private or internal.
 
 ## Validation
 
-Pull-request CI invokes the real reusable workflow in guarded `validation_mode`. It uses deterministic controlled fixtures for:
+Pull-request CI runs:
 
-- clean and no-relevant-file repositories;
-- zizmor, actionlint syntax, embedded shell, and standalone ShellCheck findings;
-- Trivy vulnerability, secret, and misconfiguration findings;
-- tracked symlink removal, gitlink rejection, and Git LFS pointer rejection;
-- immutable checkout failure;
-- scanner runtime failure while earlier scanner evidence remains available;
-- the production matrix-bound predicate;
-- proof that target package scripts, actions, hooks, installers, builds, tests, and Terraform providers are not executed.
+- data-driven workflow credential-boundary tests;
+- actionlint;
+- zizmor;
+- ShellCheck;
+- YAML and JSON parsing;
+- Aqua checksum verification;
+- the production reusable workflow in guarded `validation_mode` across clean, finding, incomplete-content, checkout-failure, scanner-runtime-error, and no-target-code-execution fixtures.
 
-PR CI cannot validate GitHub App installation enumeration, real repository-scoped token creation, private checkout, or artifact privacy. Those checks require a private control repository pinned to the exact candidate commit. Record only sanitized run URLs and conclusions; never expose secrets or private artifact contents.
+Repository-contained CI cannot mint the external organization App token or prove private artifact visibility. Before deploying a changed permission profile, run the exact reviewed commit from a private control repository and confirm installation enumeration, repository-scoped token generation, immutable private checkout, and one private Scorecard scan. Publish only sanitized run references and conclusions.
 
 ## Non-goals
 
-`segh` does not audit organization rulesets, classic branch protection, Actions settings, Dependabot, dependency graphs, `SECURITY.md`, or other GitHub governance controls. It does not maintain compatibility with the former CLI, configuration schemas, suppressions, `inventory.json`, `audit.json`, `report.md`, `scan-manifest.json`, `scan-summary.json`, or normalized source-scan status evidence.
+`segh` does not implement issue dashboards, scheduled dashboard reconciliation, organization governance auditing, a general workflow-policy framework, or compatibility with the former CLI and source-scan reconciliation contracts.
