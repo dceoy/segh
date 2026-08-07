@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const {buildSummary} = require("./build-dashboard-summary.js");
+const publish = require("./publish-dashboard.js");
 
 function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value)}\n`);
@@ -42,6 +43,14 @@ const env = {
   TRIVY_MISCONFIGURATION_OUTCOME: "success",
   DASHBOARD_REPOSITORY: "control/private",
 };
+const target = {
+  id: 123,
+  full_name: "example/project",
+  visibility: "private",
+  default_branch: "main",
+  commit_sha: "a".repeat(40),
+};
+const scorecardRemediation = "Review OpenSSF Scorecard checks below the 7/10 dashboard threshold.";
 
 writeJson(path.join(root, "scorecard.json"), {
   checks: [
@@ -54,7 +63,11 @@ assert.equal(findings.overall_status, "findings");
 assert.equal(findings.scanners[0].status, "findings");
 assert.equal(findings.scanners[0].findings, 1);
 assert.deepEqual(findings.findings.categories, ["scorecard"]);
-assert.deepEqual(findings.remediation_categories, ["Harden GitHub Actions workflows and pin trusted dependencies."]);
+assert.deepEqual(findings.remediation_categories, [scorecardRemediation]);
+assert.doesNotThrow(() => publish._internal.validateSummary(findings, target));
+const rendered = publish._internal.renderIssue(findings);
+assert.match(rendered.body, /Review OpenSSF Scorecard checks below the 7\/10 dashboard threshold\./);
+assert.doesNotMatch(rendered.body, /No operator remediation is currently required/);
 const firstFingerprint = findings.findings.fingerprint;
 
 writeJson(path.join(root, "scorecard.json"), {
@@ -65,7 +78,7 @@ writeJson(path.join(root, "scorecard.json"), {
 });
 const changed = buildSummary({resultsDir: root, env});
 assert.notEqual(changed.findings.fingerprint, firstFingerprint);
-assert.deepEqual(changed.remediation_categories, ["Harden GitHub Actions workflows and pin trusted dependencies."]);
+assert.deepEqual(changed.remediation_categories, [scorecardRemediation]);
 
 writeJson(path.join(root, "scorecard.json"), {
   checks: [
