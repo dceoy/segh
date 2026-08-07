@@ -1,6 +1,6 @@
 # Credential and trust boundaries
 
-`segh` uses separate credentials for merge attestation, organization discovery, target scanning, and dashboard publication. A credential is never shared across these trust domains.
+`segh` separates write-capable credentials from read-only organization scanning, and scopes runtime tokens to the minimum access needed for each phase. Organization discovery and per-target scanning use the same organization scan App credentials to mint distinct short-lived installation tokens; dashboard publication and merge attestation use separate write-capable credentials.
 
 ```text
 trusted pull-request boundary
