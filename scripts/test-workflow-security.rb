@@ -30,6 +30,7 @@ end
 
 plan = jobs.fetch("plan")
 scan = jobs.fetch("scan")
+publisher = jobs["publish-dashboard"]
 plan_text = stringify.call(plan)
 scan_text = stringify.call(scan)
 
@@ -66,6 +67,16 @@ if resolve_step
   fail_if.call(env.key?("GH_TOKEN"), "planning token must not use a configured generic GH_TOKEN environment entry")
 end
 
+plan_upload = Array(plan["steps"]).find do |candidate|
+  candidate.fetch("uses", "").start_with?("actions/upload-artifact@") &&
+    candidate.fetch("with", {})["name"] == "organization-scan-plan"
+end
+fail_if.call(plan_upload.nil?, "plan must retain the authoritative publication plan")
+if plan_upload
+  fail_if.call(plan_upload.fetch("uses", "") !~ %r{\Aactions/upload-artifact@[0-9a-f]{40}\z}, "plan artifact action must be commit-pinned")
+  fail_if.call(plan_upload.fetch("with", {})["path"] != "matrix.json", "publication plan artifact must contain only matrix.json")
+end
+
 target_token = step.call(scan, "target-token")
 fail_if.call(target_token.nil?, "scan must mint a repository-scoped token")
 if target_token
@@ -97,7 +108,7 @@ checkout_steps = Array(scan["steps"]).select { |candidate| candidate.fetch("uses
 fail_if.call(checkout_steps.empty?, "scan must contain checkout steps")
 checkout_steps.each do |checkout|
   with = checkout.fetch("with", {})
-  fail_if.call(!false_value.call(with["persist-credentials"]), "every checkout must disable credential persistence")
+  fail_if.call(!false_value.call(with["persist-credentials"]), "every scan checkout must disable credential persistence")
 end
 
 target_checkout = checkout_steps.find { |candidate| candidate["id"] == "checkout" }
@@ -109,10 +120,26 @@ if target_checkout
   fail_if.call(with["token"] != "${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}", "target checkout must use only the current target token")
 end
 
-upload = Array(scan["steps"]).find { |candidate| candidate.fetch("uses", "").start_with?("actions/upload-artifact@") }
+summary = step.call(scan, "summary")
+fail_if.call(summary.nil?, "scan must build a normalized dashboard summary")
+if summary
+  fail_if.call(!summary.fetch("run", "").include?("_trusted/scripts/build-dashboard-summary.js"), "summary must be rendered by the trusted implementation")
+  fail_if.call(stringify.call(summary).include?("SEGH_ORG_SCAN_APP_"), "summary renderer must not receive organization scan credentials")
+end
+
+summary_upload = step.call(scan, "summary-artifact")
+fail_if.call(summary_upload.nil?, "scan must upload a bounded dashboard summary")
+if summary_upload
+  fail_if.call(summary_upload.fetch("uses", "") !~ %r{\Aactions/upload-artifact@[0-9a-f]{40}\z}, "summary artifact action must be commit-pinned")
+  fail_if.call(summary_upload.fetch("with", {})["path"] != "results/summary.json", "summary artifact must contain only summary.json")
+  fail_if.call(!summary_upload.fetch("with", {})["name"].include?("repository-summary-"), "summary artifact must be keyed by repository ID")
+end
+
+upload = step.call(scan, "artifact")
+fail_if.call(upload.nil?, "raw evidence artifact upload is missing")
 if upload
   artifact_path = upload.fetch("with", {})["path"]
-  fail_if.call(artifact_path != "results", "artifact upload must be limited to the bounded results directory")
+  fail_if.call(artifact_path != "results", "raw artifact upload must be limited to the bounded results directory")
 end
 
 fail_if.call(!plan_text.include?("github.event.repository.private"), "plan must inspect caller repository visibility")
@@ -123,7 +150,7 @@ fail_if.call(source.include?("SEGH_READ_APP_ID") || source.include?("SEGH_READ_A
 fail_if.call(plan_text.include?("SEGH_PUBLISH_APP_"), "plan must not receive publisher App credentials")
 fail_if.call(scan_text.include?("SEGH_PUBLISH_APP_"), "scan must not receive publisher App credentials")
 
-publisher = jobs["publish-dashboard"]
+fail_if.call(publisher.nil?, "publish-dashboard job is required")
 if publisher
   publisher_text = stringify.call(publisher)
   allowed = {"issues" => "write", "contents" => "read", "actions" => "read"}
@@ -142,6 +169,17 @@ if publisher
   fail_if.call(publisher_text.include?("SEGH_ORG_SCAN_APP_"), "publisher must not receive organization scan App credentials")
   fail_if.call(publisher_text.include?("target-token") || publisher_text.include?("SEGH_TARGET_SCORECARD_TOKEN"), "publisher must not receive target scan credentials")
   fail_if.call(!publisher_text.include?("github.event.repository.private"), "publisher must enforce a private control repository")
+  fail_if.call(!publisher_text.include?("organization-scan-plan"), "publisher must consume the authoritative plan artifact")
+  fail_if.call(!publisher_text.include?("repository-summary-*"), "publisher must consume only normalized repository summaries")
+  fail_if.call(!publisher_text.include?("publish-dashboard.js"), "publisher must use the trusted dashboard implementation")
+  fail_if.call(!publisher_text.include?("always()"), "publisher must reconcile after failed matrix jobs")
+
+  Array(publisher["steps"]).select { |candidate| candidate.fetch("uses", "").start_with?("actions/checkout@") }.each do |checkout|
+    fail_if.call(!false_value.call(checkout.fetch("with", {})["persist-credentials"]), "publisher checkout must disable credential persistence")
+  end
+  Array(publisher["steps"]).select { |candidate| candidate.key?("uses") }.each do |candidate|
+    fail_if.call(candidate["uses"] !~ /@[0-9a-f]{40}\z/, "publisher action must be pinned: #{candidate["uses"]}")
+  end
 end
 
 jobs.each do |name, job|

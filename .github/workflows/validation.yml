@@ -26,6 +26,8 @@ jobs:
           aqua_version: v2.62.1
       - name: Validate credential boundaries
         run: ruby scripts/test-workflow-security.rb
+      - name: Test dashboard normalization and publication
+        run: node --test scripts/test-dashboard.js
       - name: Run actionlint
         run: |
           actionlint \
@@ -68,9 +70,10 @@ jobs:
   production-workflow:
     needs: workflow-only-boundary
     permissions:
+      actions: read
       contents: read
       checks: read
-      issues: read
+      issues: write
       pull-requests: read
     uses: ./.github/workflows/organization-scan.yml
     with:
