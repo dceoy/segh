@@ -72,6 +72,11 @@ function desiredLabels(summary) {
   return [...new Set(names)].filter((name) => Object.hasOwn(LABELS, name)).sort();
 }
 
+function mergedLabels(existing, desired) {
+  const unmanaged = labelNames(existing?.labels).filter((name) => !Object.hasOwn(LABELS, name));
+  return [...new Set([...unmanaged, ...desired.labels])].sort();
+}
+
 function validateSummary(target, summary) {
   if (!summary || !VALID_STATUS.has(summary.overall_status) || !Array.isArray(summary.scanners)) return false;
   return summary.repository?.id === target.id && summary.repository?.full_name === target.full_name &&
@@ -163,9 +168,9 @@ async function createIssue(github, owner, repo, desired) {
   }
 }
 
-function sameIssue(issue, desired) {
+function sameIssue(issue, desired, labels = desired.labels) {
   return issue.title === desired.title && issue.body === desired.body && issue.state === desired.state &&
-    JSON.stringify(labelNames(issue.labels)) === JSON.stringify([...desired.labels].sort());
+    JSON.stringify(labelNames(issue.labels)) === JSON.stringify([...labels].sort());
 }
 
 async function apply(github, owner, repo, existing, desired) {
@@ -176,14 +181,15 @@ async function apply(github, owner, repo, existing, desired) {
     }
     return "created";
   }
-  if (sameIssue(existing, desired)) return "unchanged";
+  const labels = mergedLabels(existing, desired);
+  if (sameIssue(existing, desired, labels)) return "unchanged";
   await github.rest.issues.update({
     owner,
     repo,
     issue_number: existing.number,
     title: desired.title,
     body: desired.body,
-    labels: desired.labels,
+    labels,
     state: desired.state,
   });
   return "updated";
