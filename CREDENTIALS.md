@@ -1,20 +1,23 @@
 # Credential and trust boundaries
 
-`segh` separates repository discovery, per-repository scanning, and dashboard publication into distinct credential domains.
+`segh` separates immutable scan planning, per-repository scanning, complete App-selection capture, and dashboard reconciliation into distinct credential domains.
 
 ```text
-plan
+scan plan
   └─ organization installation token, read-only
 
 scan matrix
   └─ one repository-scoped installation token per matrix target, read-only
 
-publish-dashboard
+selection snapshot
+  └─ organization installation token, read-only; no issue-write permission
+
+dashboard publication / reconciliation
   └─ same private control repository's GITHUB_TOKEN with
-     actions: read, contents: read, and issues: write
+     actions: read, contents: read, and issues: write; no configured secrets
 ```
 
-No job receives both a scan credential and an issue-write credential.
+No job receives both an organization/target scan credential and an issue-write credential.
 
 ## GitHub App installation
 
@@ -31,8 +34,8 @@ The App requires only these repository permissions:
 
 | Permission | Access | Consumer | Reason |
 | --- | --- | --- | --- |
-| Metadata | Read | plan and scan | Repository identity and metadata; implicitly available to installation tokens |
-| Contents | Read | plan and scan | Resolve immutable commits, checkout the selected commit, and let Scorecard inspect repository content and history |
+| Metadata | Read | scan plan, selection snapshot, scan | Repository identity and metadata; implicitly available to installation tokens |
+| Contents | Read | scan plan, selection snapshot, scan | Enumerate the selected repositories, resolve immutable commits, checkout the selected commit, and let Scorecard inspect repository content and history |
 | Checks | Read | scan only | Scorecard CI-Tests and SAST evidence from check runs |
 | Issues | Read | scan only | Scorecard private-repository GraphQL and project-history queries |
 | Pull requests | Read | scan only | Scorecard code-review and commit-history queries |
@@ -50,15 +53,32 @@ The permission basis follows the current OpenSSF Scorecard private-repository gu
 
 A private App-backed validation run remains required whenever the pinned Scorecard version or enabled checks change.
 
-## Planning credential
+## Scan-planning credential
 
-The `plan` job mints a short-lived installation token with only Metadata and Contents read access. It uses the token only to:
+The `plan` job in `organization-scan.yml` mints a short-lived installation token with only Metadata and Contents read access. It uses the token only to:
 
 1. enumerate repositories selected by the App installation;
-2. read repository metadata; and
-3. resolve each default branch to one immutable commit SHA.
+2. read bounded repository identity metadata; and
+3. resolve each active default branch to one immutable commit SHA.
 
-The token is not a job output, is not persisted in a checkout, and is never available to scanner or publisher code. The token action revokes it at job completion. The job uploads only the bounded, non-secret `matrix.json` publication plan.
+The token is not a job output, is not persisted in a checkout, and is never available to scanner or dashboard code. The token action revokes it at job completion. The job uploads only the bounded `matrix.json` immutable scan plan.
+
+## Complete-selection credential
+
+`organization-selection.yml` independently mints the same narrow organization installation token with only Metadata and Contents read access. It does **not** resolve source commits or run scanners. Its sole purpose is to retain a bounded transient snapshot of the complete GitHub App repository selection so dashboard reconciliation can account for repository lifecycle changes even when immutable scan planning fails.
+
+The snapshot contains only:
+
+- immutable repository ID;
+- current full name, owner, and repository name;
+- visibility and fork state;
+- archived and disabled state;
+- default branch name; and
+- an explicit `active` or `retired` disposition with a bounded reason.
+
+It contains no source content, scanner output, secret values, governance policy data, or write credential. The selection job has `permissions: {}` and cannot update issues. The snapshot artifact is retained for one day.
+
+The selection and scan workflows should run in parallel from the same reviewed `segh` revision. A repository selection change between their API calls is treated fail closed during final reconciliation rather than silently omitted.
 
 ## Per-repository scan credential
 
@@ -73,29 +93,53 @@ The scanner job has no write permission. Target-controlled scripts, actions, hoo
 
 The trusted scanner revision creates a bounded `summary.json` from scanner exit classes and native outputs. This summary contains counts, statuses, selected Scorecard scores, and immutable provenance, but no raw source excerpts, private paths, secret values, or logs.
 
-## Dashboard publisher
+## Dashboard publication credential
 
-The `publish-dashboard` job uses the private control repository's built-in `GITHUB_TOKEN` and publishes only to that same repository. Its explicit permissions are:
+The normal `publish-dashboard` job inside `organization-scan.yml` and the final `dashboard-reconcile.yml` workflow use the private control repository's built-in `GITHUB_TOKEN`. Both are restricted to the same explicit permission set:
 
 | Permission | Access | Reason |
 | --- | --- | --- |
-| Actions | Read | Download the current run's authoritative plan and normalized summary artifacts |
-| Contents | Read | Check out the trusted publisher implementation at the immutable reusable-workflow revision |
+| Actions | Read | Download the current run's bounded plan, selection, and normalized summary artifacts |
+| Contents | Read | Check out the trusted publisher/reconciler implementation at the immutable reusable-workflow revision |
 | Issues | Write | Create labels and create, update, comment on, open, or close managed dashboard issues |
 
-The job binds `SEGH_DASHBOARD_REPOSITORY` to `${{ github.repository }}` and checks the caller repository's actual private visibility before downloading or publishing results.
+Both jobs bind the dashboard target to `${{ github.repository }}` and verify that the caller repository is private before downloading or publishing organization state.
 
-Cross-repository dashboard publication, personal access tokens, generic configured tokens, and a separate publisher GitHub App are outside this credential contract. If a later change needs a separately configured dashboard repository, it must first add a runtime API check of that repository's actual visibility and structural tests that fail when private or internal scan results could reach a public target.
+The final reconciliation workflow receives **no configured secrets**. In particular it receives none of:
 
-The publisher receives no configured secrets, `SEGH_ORG_SCAN_APP_ID`, `SEGH_ORG_SCAN_APP_PRIVATE_KEY`, planning token, per-target token, or Scorecard token. Scanner jobs receive no issue-write credential. Issue and label API calls are sequential, bounded, and retried only for bounded transient or rate-limit failures.
+- `SEGH_ORG_SCAN_APP_ID`;
+- `SEGH_ORG_SCAN_APP_PRIVATE_KEY`;
+- the planning token;
+- a repository-scoped target token; or
+- `SEGH_TARGET_SCORECARD_TOKEN`.
 
-Reusable-workflow callers must grant the maximum permission set required by all called jobs: `actions: read`, `contents: read`, `checks: read`, `issues: write`, and `pull-requests: read`. The called workflow then narrows each scanner job to `issues: read` and grants `issues: write` only to the publisher job.
+Scanner and selection jobs receive no issue-write credential. Cross-repository dashboard publication, personal access tokens, generic configured tokens, and a separate publisher GitHub App are outside this credential contract.
+
+Issue and label API calls are sequential, bounded, and retried only for bounded transient or secondary-rate-limit failures. Final organization reconciliation attempts the remaining repository decisions after one publication operation fails, reports the failed-operation count, and fails the job after the bounded pass completes.
+
+## Recommended caller boundary
+
+Pin all three reusable workflows to the same reviewed 40-character `segh` commit:
+
+```text
+scan      ─┐
+           ├─> reconcile (if: always())
+selection ─┘
+```
+
+The caller permissions should be scoped per reusable-workflow job rather than granted globally:
+
+- `scan`: `actions: read`, `contents: read`, `checks: read`, `issues: write`, `pull-requests: read` because the called workflow contains both read-only scan jobs and its isolated normal publisher;
+- `selection`: `permissions: {}` plus only the two App secrets;
+- `reconcile`: `actions: read`, `contents: read`, `issues: write`, with no secrets.
+
+`reconcile` must use `if: always()` so a failed scan or selection job still triggers stale/error handling for existing managed dashboards. Pass `needs.scan.result` through the bounded `scan_result` input; do not expose tokens through outputs or generic environment variables.
 
 ## Public/private safety boundary
 
-The source repository `dceoy/segh` is public. Organization scans, raw evidence, normalized summaries, and dashboard issues must run in a private execution or control repository.
+The source repository `dceoy/segh` is public. Organization scans, complete selection snapshots, raw evidence, normalized summaries, and dashboard issues must run in a private execution or control repository.
 
-The workflow fails closed when invoked from a public caller. Because the dashboard target is fixed to the caller repository, this visibility check validates the actual issue-publication target. Private repository names, paths, source excerpts, scanner logs, and finding details must not be placed in public issues, job summaries, or artifacts belonging to the public source repository.
+Every production workflow fails closed when its caller-side operation would expose organization state through a public dashboard target. Because the dashboard target is fixed to the caller repository, this visibility check validates the actual issue-publication target. Private repository names, paths, source excerpts, scanner logs, and finding details must not be placed in public issues, job summaries, or artifacts belonging to the public source repository.
 
 ## Removed names and migration
 
@@ -108,4 +152,4 @@ Remove these obsolete secrets or variables from control repositories and environ
 - any generic `GH_TOKEN`, `GITHUB_TOKEN`, `TARGET_TOKEN`, or `SCAN_TOKEN` secret created for cross-phase reuse
 - any issue-write token installed on target repositories
 
-The workflow uses `SEGH_PLAN_TOKEN` and `SEGH_TARGET_SCORECARD_TOKEN` only as step-local environment variables. Neither is a configured secret.
+The workflows use `SEGH_PLAN_TOKEN`, `SEGH_SELECTION_TOKEN`, and `SEGH_TARGET_SCORECARD_TOKEN` only as step-local environment variables. None is a configured secret or workflow output.
