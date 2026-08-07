@@ -33,9 +33,12 @@ function result(name, status, findings = 0, category = null, selectedChecks = []
 }
 
 function parseScorecard(resultsDir, outcome) {
-  if (outcome === "skipped") return result("scorecard", "skipped");
   const validation = path.join(resultsDir, "validation-scorecard.json");
-  const file = exists(validation) ? validation : path.join(resultsDir, "scorecard.json");
+  const usingValidationEvidence = exists(validation);
+  if (usingValidationEvidence) outcome = "success";
+  if (outcome === "skipped") return result("scorecard", "skipped");
+  if (outcome !== "success") return result("scorecard", "error");
+  const file = usingValidationEvidence ? validation : path.join(resultsDir, "scorecard.json");
   if (!exists(file)) return result("scorecard", "error");
   try {
     const data = readJson(file);

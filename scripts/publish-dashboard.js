@@ -181,6 +181,10 @@ async function publish(options) {
     }
   }
   options.core.info(`dashboard publication complete: ${JSON.stringify(results)}`);
+  const failures = results.filter((result) => result.action === "failed");
+  if (failures.length) {
+    throw new Error(`dashboard publication failed for repository ids: ${failures.map((result) => result.repository_id).join(", ")}`);
+  }
   return results;
 }
 

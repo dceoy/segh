@@ -38,6 +38,17 @@ module Boundary
     value.inspect
   end
 
+  def walk_strings(node, path = [], &block)
+    case node
+    when Hash
+      node.each { |key, value| walk_strings(value, path + [key], &block) }
+    when Array
+      node.each_with_index { |value, index| walk_strings(value, path + [index], &block) }
+    when String
+      block.call(path, node)
+    end
+  end
+
   def assert(condition, path, message)
     fail!(path, message) unless condition
   end
@@ -116,6 +127,35 @@ Dir.chdir(ROOT) do
     SCAN_WORKFLOW,
     "Scorecard must use only the target token"
   )
+
+  scan_steps = Array(target_scan["steps"])
+  checkout_index = scan_steps.index(checkout)
+  scorecard_index = scan_steps.index(scorecard)
+  token_references = []
+  Boundary.walk_strings(target_scan) do |node_path, value|
+    token_references << node_path.join("/") if value.include?("steps.target-token.outputs.token")
+  end
+  expected_token_references = [
+    "steps/#{checkout_index}/with/token",
+    "steps/#{scorecard_index}/env/SEGH_TARGET_SCORECARD_TOKEN"
+  ].sort
+  Boundary.assert(
+    token_references.sort == expected_token_references,
+    SCAN_WORKFLOW,
+    "target credentials escaped the approved checkout and Scorecard nodes"
+  )
+  Boundary.assert(!target_scan.fetch("env", {}).key?("SEGH_TARGET_SCORECARD_TOKEN"), SCAN_WORKFLOW, "target token must not be promoted to job environment")
+  scan_steps.each_with_index do |candidate, index|
+    next if index == scorecard_index
+
+    Boundary.assert(
+      !candidate.fetch("env", {}).key?("SEGH_TARGET_SCORECARD_TOKEN") &&
+        !Boundary.stringify(candidate).include?("SEGH_TARGET_SCORECARD_TOKEN"),
+      SCAN_WORKFLOW,
+      "SEGH_TARGET_SCORECARD_TOKEN must remain local to the Scorecard step"
+    )
+  end
+
   summary = Boundary.step(target_scan, "summary")
   Boundary.assert(summary&.fetch("run", "")&.include?("_trusted/scripts/build-dashboard-summary.js"), SCAN_WORKFLOW, "scan must use the trusted summary builder")
 

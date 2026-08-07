@@ -15,6 +15,7 @@ function tempDir() {
 }
 
 function writeJson(file, value) {
+  fs.mkdirSync(path.dirname(file), {recursive: true});
   fs.writeFileSync(file, `${JSON.stringify(value)}\n`);
 }
 
@@ -74,6 +75,18 @@ test("summary reports pass and findings from native scanner outputs", () => {
   }
 });
 
+test("summary fails closed on a failed Scorecard step with parseable output", () => {
+  const dir = tempDir();
+  try {
+    fixture(dir);
+    const summary = buildSummary({resultsDir: dir, env: successEnv({SCORECARD_OUTCOME: "failure"})});
+    assert.equal(summary.overall_status, "error");
+    assert.equal(summary.scanners.find((scanner) => scanner.name === "scorecard").status, "error");
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
 test("summary distinguishes incomplete preflight from scanner runtime error", () => {
   const dir = tempDir();
   try {
@@ -86,7 +99,7 @@ test("summary distinguishes incomplete preflight from scanner runtime error", ()
   }
 });
 
-function mockGitHub(existing = []) {
+function mockGitHub(existing = [], {failUpdate = false} = {}) {
   const calls = {labels: [], creates: [], updates: []};
   return {
     calls,
@@ -96,7 +109,11 @@ function mockGitHub(existing = []) {
         listForRepo: async () => ({data: existing}),
         createLabel: async (params) => { calls.labels.push(params.name); return {data: params}; },
         create: async (params) => { calls.creates.push(params); return {data: {number: 99, ...params, state: "open"}}; },
-        update: async (params) => { calls.updates.push(params); return {data: params}; },
+        update: async (params) => {
+          calls.updates.push(params);
+          if (failUpdate) throw new Error("definitive update failure");
+          return {data: params};
+        },
       },
     },
   };
@@ -175,6 +192,65 @@ test("publisher closes an existing dashboard after a passing scan", async () => 
     assert.equal(github.calls.updates.length, 1);
     assert.equal(github.calls.updates[0].state, "closed");
     assert.deepEqual(github.calls.updates[0].labels, ["scan:pass"]);
+  } finally {
+    fs.rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test("publisher propagates write failures after processing remaining targets", async () => {
+  const root = tempDir();
+  try {
+    const summaries = path.join(root, "summaries");
+    writeJson(path.join(root, "matrix.json"), {include: [
+      {
+        id: 7,
+        full_name: "example/repo",
+        visibility: "private",
+        default_branch: "main",
+        commit_sha: "a".repeat(40),
+      },
+      {
+        id: 8,
+        full_name: "example/other",
+        visibility: "private",
+        default_branch: "main",
+        commit_sha: "b".repeat(40),
+      },
+    ]});
+    writeJson(path.join(summaries, "repository-summary-7", "summary.json"), {
+      repository: {id: 7, full_name: "example/repo", commit_sha: "a".repeat(40)},
+      scan: {evidence_artifact: "repository-scan-7"},
+      overall_status: "findings",
+      scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}],
+    });
+    writeJson(path.join(summaries, "repository-summary-8", "summary.json"), {
+      repository: {id: 8, full_name: "example/other", commit_sha: "b".repeat(40)},
+      scan: {evidence_artifact: "repository-scan-8"},
+      overall_status: "findings",
+      scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}],
+    });
+    const github = mockGitHub([{
+      number: 3,
+      title: "[Security dashboard] example/repo",
+      body: "<!-- segh-dashboard: v1 -->\n<!-- segh-repository-id: 7 -->\nold\n",
+      state: "open",
+      labels: [{name: "scan:pass"}],
+    }], {failUpdate: true});
+
+    await assert.rejects(
+      () => publish({
+        github,
+        core: {info() {}, warning() {}},
+        context: {repo: {owner: "control", repo: "private"}, runId: 125},
+        planPath: path.join(root, "matrix.json"),
+        summariesPath: summaries,
+        repositoryPrivate: "true",
+      }),
+      /dashboard publication failed for repository ids: 7/,
+    );
+    assert.equal(github.calls.updates.length, 1);
+    assert.equal(github.calls.creates.length, 1);
+    assert.equal(github.calls.creates[0].title, "[Security dashboard] example/other");
   } finally {
     fs.rmSync(root, {recursive: true, force: true});
   }
