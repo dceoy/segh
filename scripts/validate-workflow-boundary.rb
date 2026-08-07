@@ -87,9 +87,20 @@ DIRECT_NETWORK_CLIENT = %r{
     \bgit\s+(?:clone|fetch|pull|ls-remote)\b |
     \bNet::HTTP\b | \bnet/http\b | \bOpenURI\b | \bURI\.(?:open|parse)\b |
     \b(?:import|from)\s+(?:requests|urllib3?|httpx|aiohttp)\b |
-    \b(?:requests|urllib3?|httpx|aiohttp)\s*\.\s*(?:get|post|put|patch|delete|request|Session)\b
+    \b(?:requests|urllib3?|httpx|aiohttp)\s*\.\s*(?:get|post|put|patch|delete|request|Session)\b |
+    \b(?:axios|node-fetch)\b |
+    \bfetch\s*\(
   )
 }x
+
+DIRECT_NETWORK_CLIENT_FIXTURES = [
+  "const axios = require('axios')",
+  "const fetch = require('node-fetch')",
+  "await fetch('https://example.invalid')"
+].freeze
+unless DIRECT_NETWORK_CLIENT_FIXTURES.all? { |fixture| fixture.match?(DIRECT_NETWORK_CLIENT) }
+  raise "DIRECT_NETWORK_CLIENT must reject Node direct-network clients"
+end
 
 RESULT_PATH = %r{(?<![0-9A-Za-z_.-])results(?:(?:/[0-9A-Za-z_.-]+)+|(?=\s|$))}
 VERSION_PATTERN = /\Av?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\z/
