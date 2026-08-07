@@ -12,6 +12,85 @@ const context = {repo: {owner: "control", repo: "private"}, runId: 456, runAttem
 const core = {info: () => {}};
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "segh-publisher-test-"));
 
+function selectionPath(root) {
+  const file = path.join(root, "selection.json");
+  fs.writeFileSync(file, `${JSON.stringify({repositories: [{
+    id: 123,
+    full_name: "example/project",
+    owner: "example",
+    name: "project",
+    visibility: "private",
+    fork: false,
+    archived: false,
+    disabled: false,
+    default_branch: "main",
+    disposition: "active",
+    reason: "selected by the GitHub App installation",
+  }]})}\n`);
+  return file;
+}
+
+function installActionsApi(github, {workflowId = 77, workflowRuns = [], artifacts = []} = {}) {
+  github.rest.actions = {
+    getWorkflowRun: async (params) => {
+      assert.equal(params.owner, "control");
+      assert.equal(params.repo, "private");
+      return {data: {id: params.run_id, workflow_id: workflowId}};
+    },
+    listWorkflowRuns: async (params) => {
+      assert.equal(params.workflow_id, workflowId);
+      assert.equal(params.status, "completed");
+      const offset = ((params.page || 1) - 1) * (params.per_page || 100);
+      return {data: {workflow_runs: workflowRuns.slice(offset, offset + (params.per_page || 100))}};
+    },
+    listArtifactsForRepo: async (params) => {
+      const offset = ((params.page || 1) - 1) * (params.per_page || 100);
+      return {data: {artifacts: artifacts.slice(offset, offset + (params.per_page || 100)), total_count: artifacts.length}};
+    },
+  };
+}
+
+function successfulRun(id, now = Date.now()) {
+  return {
+    id,
+    conclusion: "success",
+    created_at: new Date(now - 3 * 60 * 60 * 1000).toISOString(),
+    run_started_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+    updated_at: new Date(now - 60 * 60 * 1000).toISOString(),
+  };
+}
+
+function failedRun(id, now = Date.now()) {
+  return {...successfulRun(id, now), conclusion: "failure"};
+}
+
+function summaryArtifact(runId, now = Date.now()) {
+  return {
+    name: "repository-summary-123",
+    expired: false,
+    created_at: new Date(now - 90 * 60 * 1000).toISOString(),
+    workflow_run: {id: runId},
+  };
+}
+
+async function reconcileWithMissingInputs(github, runId) {
+  const root = temp();
+  return publish.reconcileOrganization({
+    github,
+    context: {...context, runId},
+    core,
+    repositoryPrivate: true,
+    staleAfterHours: "192",
+    scanResult: "success",
+    selectionAvailable: false,
+    planAvailable: false,
+    summariesAvailable: false,
+    selectionPath: path.join(root, "missing-selection.json"),
+    planPath: path.join(root, "missing-plan.json"),
+    summariesPath: path.join(root, "missing-summaries"),
+  });
+}
+
 (async () => {
   let root = temp();
   let files = input(root, summary({scanners: [scanner("scorecard"), scanner("zizmor", "actions")]}));
@@ -105,6 +184,59 @@ const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "segh-publisher-test-")
   assert.equal(github.comments.length, 1, "retirement must record one state transition");
   await publish({github, context, core, ...files, repositoryPrivate: true});
   assert.equal(github.comments.length, 1, "repeated empty selections must converge to a no-op");
+
+  root = temp(); files = input(root, summary()); github = new GitHub();
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  const trustedNow = Date.now();
+  installActionsApi(github, {
+    workflowRuns: [successfulRun(900, trustedNow)],
+    artifacts: [summaryArtifact(900, trustedNow)],
+  });
+  await assert.rejects(() => reconcileWithMissingInputs(github, 999), /selection snapshot is unavailable/);
+  assert.equal(github.issues[0].state, "closed", "a recent summary from a successful run of the same workflow remains authoritative freshness evidence");
+  assert.ok(github.issues[0].labels.some(({name}) => name === "scan:pass"));
+
+  root = temp(); files = input(root, summary()); github = new GitHub();
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  const unrelatedNow = Date.now();
+  installActionsApi(github, {
+    workflowRuns: [successfulRun(900, unrelatedNow)],
+    artifacts: [summaryArtifact(901, unrelatedNow)],
+  });
+  await assert.rejects(() => reconcileWithMissingInputs(github, 1000), /selection snapshot is unavailable/);
+  assert.equal(github.issues[0].state, "open", "an unrelated workflow artifact must not refresh a passing dashboard");
+  assert.ok(github.issues[0].labels.some(({name}) => name === "scan:error"));
+
+  root = temp(); files = input(root, summary()); github = new GitHub();
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  const failedNow = Date.now();
+  installActionsApi(github, {
+    workflowRuns: [failedRun(902, failedNow)],
+    artifacts: [summaryArtifact(902, failedNow)],
+  });
+  await assert.rejects(() => reconcileWithMissingInputs(github, 1001), /selection snapshot is unavailable/);
+  assert.equal(github.issues[0].state, "open", "an unpublished artifact from a failed workflow run must not refresh a passing dashboard");
+  assert.ok(github.issues[0].labels.some(({name}) => name === "scan:error"));
+
+  root = temp(); files = input(root, summary()); github = new GitHub();
+  installActionsApi(github);
+  const selectedPath = selectionPath(root);
+  await assert.rejects(() => publish.reconcileOrganization({
+    github,
+    context: {...context, runId: 1002},
+    core,
+    repositoryPrivate: true,
+    staleAfterHours: "192",
+    scanResult: "failure",
+    selectionAvailable: true,
+    planAvailable: true,
+    summariesAvailable: true,
+    selectionPath: selectedPath,
+    ...files,
+  }), /source scan result is failure/);
+  assert.equal(github.issues.length, 1);
+  assert.equal(github.issues[0].state, "open", "a failed source-scan result must fail closed even when current summaries are present");
+  assert.ok(github.issues[0].labels.some(({name}) => name === "scan:error"));
 
   console.log("publisher hardening tests passed");
 })().catch((error) => { console.error(error.stack || error); process.exit(1); });

@@ -26,6 +26,8 @@ jobs:
           aqua_version: v2.62.1
       - name: Validate credential boundaries
         run: ruby scripts/test-workflow-security.rb
+      - name: Validate reconciliation workflow boundaries
+        run: ruby scripts/test-reconciliation-workflows.rb
       - name: Test dashboard normalization and publication
         run: node --test scripts/test-dashboard.js
       - name: Run actionlint
@@ -46,6 +48,7 @@ jobs:
       - name: Validate Ruby, YAML, and JSON
         run: |
           ruby -c scripts/validate-workflow-boundary.rb
+          ruby -c scripts/test-reconciliation-workflows.rb
           ruby -e 'require "yaml"; Dir["**/*.{yml,yaml}"].sort.each { |path| YAML.safe_load_file(path, aliases: false) }'
           ruby -e 'require "json"; JSON.parse(File.read("aqua-checksums.json"))'
       - name: Verify Aqua checksums

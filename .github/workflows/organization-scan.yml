@@ -14,6 +14,11 @@ on:
         required: false
         type: string
         default: "4"
+      dashboard_publication:
+        description: Dashboard publication mode for reusable callers; use deferred when a final reconciler owns issue writes
+        required: false
+        type: string
+        default: "inline"
       validation_mode:
         description: Internal production-path validation; accepted only for dceoy/segh pull requests
         required: false
@@ -847,7 +852,7 @@ jobs:
           name: repository-summary-${{ matrix.id }}
           path: results/summary.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 31
       - name: Retain private raw scanner artifacts
         if: always() && hashFiles('results/target.json') != ''
         id: artifact
@@ -1060,6 +1065,7 @@ jobs:
     if: >-
       always() &&
       inputs.validation_mode != true &&
+      inputs.dashboard_publication != 'deferred' &&
       needs.plan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1114,4 +1120,3 @@ jobs:
               summariesPath: 'dashboard-input/summaries',
               repositoryPrivate: process.env.REPOSITORY_PRIVATE,
             });
-

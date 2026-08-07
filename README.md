@@ -18,33 +18,38 @@ Scorecard runs against the immutable repository and commit with `--show-details`
 
 ## Repository selection
 
-The GitHub App installation selection is authoritative. Planning excludes disabled and archived repositories, includes explicitly selected forks, sorts targets deterministically, validates repository identity and visibility, and resolves every default branch to a lowercase 40-character commit SHA.
+The GitHub App installation selection is authoritative. The source-scan planner excludes disabled and archived repositories from the scan matrix, includes explicitly selected forks, sorts targets deterministically, validates repository identity and visibility, and resolves every active default branch to a lowercase 40-character commit SHA.
 
-Planning fails closed on malformed pagination, duplicate identities, empty or oversized selections, unavailable default branches, unresolved commits, or invalid immutable SHAs.
+A separate bounded selection-snapshot workflow records only the identity and class metadata needed for reconciliation: repository ID and full name, visibility, fork state, archived/disabled state, default branch, and an explicit active/retired reason. It does not collect governance settings, policy evidence, source content, or scanner output. This transient snapshot lets the issue dashboard account for archived, disabled, newly selected, renamed, and removed repositories even when immutable target planning fails.
+
+Planning and selection capture fail closed on malformed pagination, duplicate identities, oversized selections, unavailable required metadata, or invalid bounds. A missing immutable target is represented as a dashboard error rather than silently disappearing from organization coverage.
 
 ## Credential architecture
 
-Organization discovery, target scanning, and issue publication use separate credential domains:
+Organization discovery, target scanning, complete selection capture, and issue publication use separate credential domains:
 
 ```text
-plan
+scan plan
   └─ organization installation token, read-only
 
 scan matrix
   └─ one repository-scoped installation token per target, read-only
 
-publish-dashboard
+selection snapshot
+  └─ organization installation token, read-only; no issue-write permission
+
+dashboard reconciliation
   └─ private control-repository GITHUB_TOKEN with actions: read,
-     contents: read, and issues: write
+     contents: read, and issues: write; no configured secrets
 ```
 
-No job receives both scan credentials and an issue-write credential. The publisher receives no configured secrets and can write issues only in the private caller repository.
+No job receives both organization/target scan credentials and an issue-write credential. The dashboard reconciler receives no configured secrets and can write issues only in the private caller repository.
 
 See [CREDENTIALS.md](CREDENTIALS.md) for the complete permission mapping, Scorecard limitations, publisher contract, private-control-repository requirements, and migration guidance.
 
 ## Operation
 
-Consume `.github/workflows/organization-scan.yml` from a **private execution or control repository**. This is mandatory because artifacts and dashboard issues can contain private repository identities and security status.
+Consume the reusable workflows from a **private execution or control repository**. This is mandatory because artifacts and dashboard issues can contain private repository identities and security status.
 
 Create one GitHub App installed on the authoritative target set with these repository permissions:
 
@@ -61,7 +66,7 @@ Configure these Actions secrets in the private control repository:
 - `SEGH_ORG_SCAN_APP_ID`
 - `SEGH_ORG_SCAN_APP_PRIVATE_KEY`
 
-A caller should pin the reusable workflow to a reviewed commit and grant the maximum permissions required by its isolated jobs:
+A caller should pin all reusable workflows to the same reviewed commit. Run the scanner and complete App-selection snapshot in parallel, then invoke dashboard reconciliation unconditionally so planning or scanner failure cannot leave a previous passing dashboard looking current:
 
 ```yaml
 ---
@@ -83,14 +88,40 @@ jobs:
     with:
       repository_limit: "50"
       max_parallel: "4"
+      dashboard_publication: deferred
     secrets:
       SEGH_ORG_SCAN_APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
       SEGH_ORG_SCAN_APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
+
+  selection:
+    permissions: {}
+    uses: dceoy/segh/.github/workflows/organization-selection.yml@<reviewed-40-character-commit-sha>
+    with:
+      repository_limit: "50"
+    secrets:
+      SEGH_ORG_SCAN_APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
+      SEGH_ORG_SCAN_APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
+
+  reconcile:
+    if: always()
+    needs:
+      - scan
+      - selection
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    uses: dceoy/segh/.github/workflows/dashboard-reconcile.yml@<reviewed-40-character-commit-sha>
+    with:
+      stale_after_hours: "192"
+      scan_result: ${{ needs.scan.result }}
 ```
 
-The called workflow narrows the scanner jobs back to read-only permissions. Only the final publisher job receives `issues: write`.
+The scanner workflow runs with dashboard publication deferred, so its matrix produces scan artifacts without writing dashboard issues. The final reconciliation workflow is the sole issue writer for this organization-dashboard path; it consumes the scan plan, normalized summaries, and complete selection snapshot, and handles missing inputs, stale prior results, repository retirement, and identity mismatches fail closed.
 
-The public `dceoy/segh` repository does not publish organization findings. Its direct scheduled job is skipped because the repository is public, and manual production execution fails closed.
+The default schedule is weekly. The recommended stale threshold is eight days (`192` hours), giving one day of tolerance beyond the normal weekly cadence. Set it between 24 and 720 hours according to the control repository's operating cadence.
+
+The public `dceoy/segh` repository does not publish organization findings. Its direct scheduled scan job is skipped because the repository is public, and manual production execution fails closed.
 
 ## Security boundary
 
@@ -106,22 +137,30 @@ For every selected repository, the workflow:
 8. never executes target scripts, actions, hooks, package managers, installers, builds, tests, or Terraform providers;
 9. exposes the target token only to target checkout and Scorecard through a step-local environment variable;
 10. uploads raw evidence and a separate bounded normalized summary;
-11. publishes issues sequentially only after every matrix job has completed.
+11. publishes normal issues sequentially only after every matrix job has completed;
+12. captures the complete App repository identity set in a separate read-only job; and
+13. runs issue-write reconciliation without App secrets after both scan and selection jobs have finished, even when either job failed.
 
-Tokens are not job outputs, are not persisted in Git configuration, and are masked before trusted shell commands use them. Scanner jobs have no write permission and cannot receive the publisher credential.
+Tokens are not job outputs, are not persisted in Git configuration, and are masked before trusted shell commands use them. Scanner and selection jobs have no target write permission and cannot receive the dashboard publisher credential.
 
 ## Issue-backed dashboard
 
-The private control repository contains exactly one managed issue for each immutable repository ID. Managed issues include stable hidden markers for the repository ID, current status, previous status, finding fingerprint, semantic result digest, renderer version/digest, and complete body integrity.
+The private control repository contains exactly one managed issue for each repository ID that has been actively scanned or requires operator attention. Managed issues include stable hidden markers for the repository ID, current status, previous status, finding fingerprint, semantic result digest, renderer version/digest, and complete body integrity.
 
 - `pass` closes the issue with `scan:pass`;
 - `findings`, `incomplete`, and `error` keep the issue open with the corresponding status label;
-- a repository removed from the active plan is closed with `scan:retired`;
+- an archived or disabled repository with an existing dashboard is closed with `scan:retired` and an explicit selection reason;
+- a repository removed from the GitHub App selection is closed with `scan:retired`;
 - repository renames update the existing issue by repository ID;
 - unchanged normalized results perform no issue or comment write;
 - status or finding-fingerprint changes append one bounded history comment;
 - missing, duplicate, malformed, or identity-mismatched summaries fail closed as `scan:error`;
+- an App-selected repository missing from the immutable scan plan remains represented as `scan:error`;
+- a failed run with no complete plan cannot leave a previous `scan:pass` dashboard looking current;
+- when complete selection evidence is unavailable, dashboards older than the configured stale threshold are promoted to `scan:error` rather than treated as current;
 - incrementing the renderer version migrates existing trusted issue bodies without making scan timestamps or run URLs part of no-op detection.
+
+Reconciliation makes exactly one bounded decision for every repository ID in the selection snapshot and every existing managed dashboard issue. Per-repository issue writes are sequential and independently retried; failures are counted and the reconciliation job fails after attempting the remaining decisions. The job summary contains only organization-level counts for pass, findings, incomplete, error, retired, created, updated, unchanged, deferred, and failed publication operations.
 
 The publisher manages only a fixed label set: five `scan:*` state labels and six bounded `finding:*` category labels. It preserves operator-owned labels.
 
@@ -138,23 +177,24 @@ Each production matrix job retains `repository-scan-<repository-id>` for 14 days
 - Scorecard, zizmor, actionlint, ShellCheck, and three independent Trivy outputs and logs;
 - `summary.json`, the bounded non-sensitive dashboard input.
 
-A separate `repository-summary-<repository-id>` artifact retains only `summary.json` for one day. The authoritative publication plan is likewise retained for one day. Raw evidence remains private and is not a stable public schema.
+A separate `repository-summary-<repository-id>` artifact retains only `summary.json` for 31 days so completed scans remain authoritative freshness evidence across the supported stale window. The immutable scan plan and complete selection snapshot are retained for one day. The selection snapshot contains only bounded repository identity/class metadata and no source or finding content. Raw evidence remains private and is not a stable public schema.
 
 ## Validation
 
 Pull-request CI runs:
 
-- data-driven workflow credential-boundary tests;
-- dashboard normalization, transition, recovery, retirement, privacy, duplicate, and no-op tests;
+- data-driven scan credential-boundary tests;
+- reconciliation workflow tests proving the selection job is read-only and the issue-write job receives no App or target credentials;
+- dashboard normalization, transition, recovery, retirement, privacy, duplicate, no-op, missing-plan, and stale-failure tests;
 - actionlint;
 - zizmor;
 - ShellCheck;
 - YAML and JSON parsing;
 - Aqua checksum verification;
-- the production reusable workflow in guarded `validation_mode` across clean, finding, incomplete-content, checkout-failure, scanner-runtime-error, and no-target-code-execution fixtures, including expected normalized dashboard status.
+- the production reusable scan workflow in guarded `validation_mode` across clean, finding, incomplete-content, checkout-failure, scanner-runtime-error, and no-target-code-execution fixtures, including expected normalized dashboard status.
 
-Repository-contained CI cannot mint the external organization App token or prove private artifact visibility. Before deployment, run the exact reviewed commit from a private control repository and confirm installation enumeration, repository-scoped token generation, immutable private checkout, private artifact retention, and issue create/update/close behavior. Publish only sanitized run references and conclusions.
+Repository-contained CI cannot mint the external organization App token or prove private artifact visibility. Before deployment, run the exact reviewed commit from a private control repository and confirm installation enumeration, selection-snapshot upload, repository-scoped token generation, immutable private checkout, private artifact retention, issue create/update/close behavior, and fail-closed reconciliation after an intentionally failed plan. Publish only sanitized run references and conclusions.
 
 ## Non-goals
 
-`segh` does not implement organization governance auditing, a general workflow-policy framework, GitHub Projects integration, a historical analytics database, continuous target-push scanning, or compatibility with the former CLI and source-scan reconciliation contracts. Complete organization-wide stale-state reconciliation remains separate work.
+`segh` does not implement organization governance auditing, a general workflow-policy framework, GitHub Projects integration, a historical analytics database, continuous target-push scanning, or compatibility with the former CLI and source-scan reconciliation contracts.
