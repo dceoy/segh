@@ -103,7 +103,7 @@ jobs:
           enforce_selection_bound() {
             local count=$1
             local limit=$2
-            ((count > 0 && count <= limit))
+            ((count >= 0 && count <= limit))
           }
 
           validate_repository_pages() {
@@ -148,8 +148,8 @@ jobs:
               echo "::error::The validation pull request head must resolve to an immutable commit SHA."
               exit 1
             fi
-            if enforce_selection_bound 2 1 || ! enforce_selection_bound 1 1; then
-              echo "::error::The production repository-limit predicate did not reject an oversized selection."
+            if enforce_selection_bound 2 1 || ! enforce_selection_bound 1 1 || ! enforce_selection_bound 0 1; then
+              echo "::error::The production repository-limit predicate accepted an oversized selection or rejected an empty authoritative plan."
               exit 1
             fi
             if ! validate_repository_pages <(printf '%s\n' \
@@ -235,11 +235,7 @@ jobs:
             fi
             selected_count=$(jq 'length' selected.json)
             if ! enforce_selection_bound "$selected_count" "$repository_limit"; then
-              if ((selected_count == 0)); then
-                echo "::error::The GitHub App installation selected no enabled, non-archived repositories; refusing an empty scan."
-              else
-                echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$repository_limit; refusing incomplete coverage."
-              fi
+              echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$repository_limit; refusing incomplete coverage."
               exit 1
             fi
 
@@ -281,7 +277,7 @@ jobs:
           fi
 
           if ! jq -e '
-            type == "object" and (.include | type == "array" and length > 0) and
+            type == "object" and (.include | type == "array") and
             all(.include[];
               (.id | type == "number" and floor == . and . > 0) and
               (.full_name | type == "string") and
@@ -301,7 +297,11 @@ jobs:
             exit 1
           fi
           printf 'matrix=%s\n' "$(jq -c . matrix.json)" >> "$GITHUB_OUTPUT"
-          printf 'has_targets=true\n' >> "$GITHUB_OUTPUT"
+          if ((matrix_count > 0)); then
+            printf 'has_targets=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'has_targets=false\n' >> "$GITHUB_OUTPUT"
+          fi
           printf 'max_parallel=%s\n' "$max_parallel" >> "$GITHUB_OUTPUT"
       - name: Retain bounded publication plan
         if: steps.targets.outcome == 'success'
