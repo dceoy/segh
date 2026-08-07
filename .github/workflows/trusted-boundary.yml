@@ -1,7 +1,7 @@
 ---
 name: Trusted workflow-only boundary
 
-# Configure this check as required after the bootstrap merge.
+# Enforce this workflow through an organization ruleset after the bootstrap merge.
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers]
     branches:
@@ -36,7 +36,7 @@ jobs:
           lfs: false
           submodules: false
           allow-unsafe-pr-checkout: true
-      - name: Protect trusted policy sources and command surface
+      - name: Protect trusted policy sources and executable workflow structure
         shell: bash
         run: |
           set -euo pipefail
@@ -56,8 +56,12 @@ jobs:
           ruby <<'RUBY'
           require "yaml"
 
-          def tracked_workflow(root)
-            path = ".github/workflows/organization-scan.yml"
+          WORKFLOWS = [
+            ".github/workflows/organization-scan.yml",
+            ".github/workflows/validation.yml"
+          ].freeze
+
+          def tracked_workflow(root, path)
             content = IO.popen(["git", "-C", root, "show", "HEAD:#{path}"], &:read)
             abort("::error file=#{path}::Unable to read the tracked workflow blob.") unless $?.success?
 
@@ -66,28 +70,30 @@ jobs:
             abort("::error file=#{path}::Invalid YAML: #{e.message.lines.first&.strip}")
           end
 
-          def run_surface(node, path = [], result = {})
+          def normalize_workflow(node)
             case node
             when Hash
-              node.each do |key, value|
-                current = path + [key]
-                if key == "run"
-                  abort("::error file=.github/workflows/organization-scan.yml::Every run node must be a string.") unless value.is_a?(String)
-                  result[current] = value
-                else
-                  run_surface(value, current, result)
+              node.to_h do |key, value|
+                normalized = normalize_workflow(value)
+                if key == "uses" && normalized.is_a?(String) && !normalized.start_with?("./")
+                  match = /\A([^@\s]+)@[0-9a-f]{40}\z/.match(normalized)
+                  normalized = "#{match[1]}@<full-sha>" if match
                 end
+                [key, normalized]
               end
             when Array
-              node.each_with_index { |value, index| run_surface(value, path + [index], result) }
+              node.map { |value| normalize_workflow(value) }
+            else
+              node
             end
-            result
           end
 
-          trusted = run_surface(tracked_workflow("_trusted"))
-          candidate = run_surface(tracked_workflow("_candidate"))
-          unless candidate == trusted
-            abort("::error file=.github/workflows/organization-scan.yml::The executable command surface must match the trusted base implementation.")
+          WORKFLOWS.each do |path|
+            trusted = normalize_workflow(tracked_workflow("_trusted", path))
+            candidate = normalize_workflow(tracked_workflow("_candidate", path))
+            next if candidate == trusted
+
+            abort("::error file=#{path}::The security-sensitive workflow structure must match the trusted base implementation; only reviewed full-SHA action pin updates are allowed.")
           end
           RUBY
       - name: Validate candidate product boundary
