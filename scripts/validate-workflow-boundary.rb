@@ -11,94 +11,14 @@ RECONCILE_WORKFLOW = ".github/workflows/dashboard-reconcile.yml"
 VALIDATION_WORKFLOW = ".github/workflows/validation.yml"
 TRUSTED_BOUNDARY_WORKFLOW = ".github/workflows/trusted-boundary.yml"
 
-EXPECTED_PATHS = %w[
-  .github/CODEOWNERS
-  .github/FUNDING.yml
-  .github/workflows/dashboard-reconcile.yml
-  .github/workflows/organization-dashboard.yml
-  .github/workflows/organization-scan.yml
-  .github/workflows/organization-selection.yml
-  .github/workflows/trusted-boundary.yml
-  .github/workflows/validation.yml
-  CREDENTIALS.md
-  LICENSE
-  README.md
-  SECURITY.md
-  aqua-checksums.json
-  aqua.yaml
-  scripts/build-dashboard-summary.js
-  scripts/core/build-dashboard-summary.js
-  scripts/core/publish-dashboard.js
-  scripts/core/test-dashboard.js
-  scripts/dashboard-github-common.js
-  scripts/dashboard-idempotent-comment.js
-  scripts/dashboard-idempotent-github.js
-  scripts/dashboard-idempotent-issue.js
-  scripts/dashboard-summary-contract.js
-  scripts/preflight.sh
-  scripts/publish-dashboard.js
-  scripts/reconcile-organization-dashboard.js
-  scripts/test-dashboard-data.js
-  scripts/test-dashboard-fingerprint.js
-  scripts/test-dashboard-github.js
-  scripts/test-dashboard-idempotency.js
-  scripts/test-dashboard-native-output.js
-  scripts/test-dashboard-publisher.js
-  scripts/test-dashboard-reconciliation.js
-  scripts/test-dashboard-renderer.js
-  scripts/test-dashboard-scorecard.js
-  scripts/test-dashboard.js
-  scripts/test-reconciliation-workflows.rb
-  scripts/test-workflow-security.rb
-  scripts/validate-workflow-boundary.rb
+ALLOWED_REMOTE_ACTIONS = %w[
+  actions/checkout
+  actions/create-github-app-token
+  actions/download-artifact
+  actions/github-script
+  actions/upload-artifact
+  aquaproj/aqua-installer
 ].freeze
-
-EXECUTABLE_PATHS = %w[
-  scripts/build-dashboard-summary.js
-  scripts/core/build-dashboard-summary.js
-  scripts/core/test-dashboard.js
-  scripts/preflight.sh
-  scripts/test-dashboard-idempotency.js
-  scripts/test-dashboard.js
-  scripts/test-workflow-security.rb
-].freeze
-
-EXPECTED_FILE_MODES = EXPECTED_PATHS.to_h do |path|
-  [path, EXECUTABLE_PATHS.include?(path) ? "100755" : "100644"]
-end.freeze
-
-EXPECTED_ACTIONS = {
-  ORCHESTRATOR_WORKFLOW => [
-    "./.github/workflows/dashboard-reconcile.yml",
-    "./.github/workflows/organization-scan.yml",
-    "./.github/workflows/organization-selection.yml"
-  ].sort.freeze,
-  ORGANIZATION_WORKFLOW => [
-    "actions/checkout", "actions/checkout", "actions/checkout",
-    "actions/create-github-app-token", "actions/create-github-app-token",
-    "actions/download-artifact", "actions/download-artifact",
-    "actions/github-script",
-    "actions/upload-artifact", "actions/upload-artifact", "actions/upload-artifact",
-    "aquaproj/aqua-installer"
-  ].sort.freeze,
-  SELECTION_WORKFLOW => [
-    "actions/create-github-app-token",
-    "actions/upload-artifact"
-  ].sort.freeze,
-  RECONCILE_WORKFLOW => [
-    "actions/checkout",
-    "actions/download-artifact", "actions/download-artifact", "actions/download-artifact",
-    "actions/github-script"
-  ].sort.freeze,
-  TRUSTED_BOUNDARY_WORKFLOW => [
-    "actions/checkout", "actions/checkout"
-  ].sort.freeze,
-  VALIDATION_WORKFLOW => [
-    "./.github/workflows/organization-scan.yml",
-    "actions/checkout", "actions/checkout",
-    "aquaproj/aqua-installer"
-  ].sort.freeze
-}.freeze
 
 WRITE_JOB_PERMISSIONS = {
   [ORCHESTRATOR_WORKFLOW, "scan"] => {
@@ -173,6 +93,15 @@ DIRECT_NETWORK_CLIENT = %r{
   )
 }x
 
+DIRECT_NETWORK_CLIENT_FIXTURES = [
+  "const axios = require('axios')",
+  "const fetch = require('node-fetch')",
+  "node -e 'fetch(\"https://example.invalid\")'"
+].freeze
+unless DIRECT_NETWORK_CLIENT_FIXTURES.all? { |fixture| fixture.match?(DIRECT_NETWORK_CLIENT) }
+  raise "DIRECT_NETWORK_CLIENT must reject Node direct-network clients"
+end
+
 RESULT_PATH = %r{(?<![0-9A-Za-z_.-])results(?:(?:/[0-9A-Za-z_.-]+)+|(?=\s|$))}
 VERSION_PATTERN = /\Av?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\z/
 
@@ -193,6 +122,7 @@ module Boundary
   def read_blob(path, object_id)
     content = IO.popen(["git", "cat-file", "blob", object_id], &:read)
     fail!(path, "Unable to read the tracked blob #{object_id}.") unless $?.success?
+
     content
   end
 
@@ -213,6 +143,7 @@ module Boundary
 
     name = action.sub(/@[^@]+\z/, "")
     fail!(path, "The Go toolchain action is not part of the workflow-only product: #{action}") if name == "actions/setup-go"
+    fail!(path, "Remote action is outside the approved workflow profile: #{action}") unless ALLOWED_REMOTE_ACTIONS.include?(name)
     return name if action.match?(/\A[^@\s]+@[0-9a-f]{40}\z/)
 
     fail!(path, "Remote action is not pinned to a full commit SHA: #{action}")
@@ -230,26 +161,39 @@ Dir.chdir(ROOT) do
     mode, object_id, stage = metadata.to_s.split
     [path, {"mode" => mode, "object_id" => object_id, "stage" => stage}]
   end
-  tracked_files = index_entries.keys
-  unless tracked_files == EXPECTED_PATHS
-    warn "::error::Tracked path set differs from the workflow-only product allowlist."
-    warn "Expected paths:\n  #{EXPECTED_PATHS.join("\n  ")}"
-    warn "Actual paths:\n  #{tracked_files.join("\n  ")}"
-    exit 1
-  end
+  Boundary.fail!(".", "The workflow-only product must contain tracked files.") if index_entries.empty?
 
   index_entries.each do |path, entry|
-    expected_mode = EXPECTED_FILE_MODES.fetch(path)
-    unless entry["stage"] == "0" && entry["mode"] == expected_mode && entry["object_id"]&.match?(/\A[0-9a-f]{40}\z/)
-      Boundary.fail!(path, "Tracked entry must be a stage-0 regular blob with mode #{expected_mode}.")
+    mode = entry["mode"]
+    unless entry["stage"] == "0" && %w[100644 100755].include?(mode) && entry["object_id"]&.match?(/\A[0-9a-f]{40}\z/)
+      Boundary.fail!(path, "Tracked entry must be a stage-0 regular blob with mode 100644 or 100755.")
+    end
+    if mode == "100755" && !path.start_with?("scripts/")
+      Boundary.fail!(path, "Executable tracked files are restricted to scripts/.")
     end
   end
 
+  tracked_files = index_entries.keys
   file_contents = index_entries.to_h do |path, entry|
     [path, Boundary.read_blob(path, entry.fetch("object_id"))]
   end
 
-  action_files = tracked_files.select { |path| path.match?(%r{\A\.github/workflows/.*\.ya?ml\z}) }
+  required_files = [
+    ORCHESTRATOR_WORKFLOW,
+    ORGANIZATION_WORKFLOW,
+    SELECTION_WORKFLOW,
+    RECONCILE_WORKFLOW,
+    VALIDATION_WORKFLOW,
+    TRUSTED_BOUNDARY_WORKFLOW,
+    "scripts/preflight.sh",
+    "scripts/validate-workflow-boundary.rb"
+  ]
+  missing = required_files - tracked_files
+  Boundary.fail!(missing.first, "Required trusted product surface is missing.") unless missing.empty?
+
+  action_files = tracked_files.select do |path|
+    path.match?(%r{\A\.github/workflows/.*\.ya?ml\z}) || File.basename(path).match?(/\Aaction\.ya?ml\z/)
+  end
   documents = action_files.to_h do |path|
     [path, Boundary.load_yaml(path, file_contents.fetch(path))]
   end
@@ -267,6 +211,7 @@ Dir.chdir(ROOT) do
   ]
   file_contents.each do |path, content|
     next if content.include?("\0")
+
     forbidden_literals.each do |literal|
       Boundary.fail!(path, "Removed product surface reappeared: #{literal}") if content.include?(literal)
     end
@@ -280,6 +225,7 @@ Dir.chdir(ROOT) do
   end
   tracked_files.grep(%r{\Ascripts/}).each do |path|
     next if path == "scripts/validate-workflow-boundary.rb"
+
     content = file_contents.fetch(path)
     executable_surfaces << [path, ["script"], content] unless content.include?("\0")
   end
@@ -288,8 +234,9 @@ Dir.chdir(ROOT) do
     Boundary.fail!(path, "Executable surface #{node_path.join("/")} uses an unapproved direct network client.") if command.match?(DIRECT_NETWORK_CLIENT)
   end
 
-  actual_actions = Hash.new { |hash, path| hash[path] = [] }
   documents.each do |path, document|
+    next unless path.start_with?(".github/workflows/")
+
     Boundary.fail!(path, "Top-level permissions must be an explicit empty map.") unless document["permissions"] == {}
     document.fetch("jobs", {}).each do |job_name, job|
       Boundary.fail!(path, "Job #{job_name} must be a mapping.") unless job.is_a?(Hash)
@@ -300,27 +247,127 @@ Dir.chdir(ROOT) do
       elsif permissions.is_a?(Hash) && permissions.any? { |_, access| access == "write" }
         Boundary.fail!(path, "Job #{job_name} must not request write permissions.")
       end
-      actual_actions[path] << Boundary.action_identity(job["uses"], path) if job.key?("uses")
+      Boundary.action_identity(job["uses"], path) if job.key?("uses")
       Array(job["steps"]).each do |step|
         Boundary.fail!(path, "Every workflow step must be a mapping.") unless step.is_a?(Hash)
-        actual_actions[path] << Boundary.action_identity(step["uses"], path) if step.key?("uses")
+        Boundary.action_identity(step["uses"], path) if step.key?("uses")
       end
     end
   end
 
-  EXPECTED_ACTIONS.each do |path, expected|
-    actual = actual_actions.fetch(path, []).sort
-    Boundary.fail!(path, "Action identity profile differs from the approved workflow-only product: #{actual.inspect}") unless actual == expected
+  validation = documents.fetch(VALIDATION_WORKFLOW)
+  validation_jobs = validation.fetch("jobs")
+  candidate_steps = Array(validation_jobs.fetch("workflow-only-boundary")["steps"])
+  candidate_validator = candidate_steps.find { |step| step["name"] == "Reject removed product surfaces" }
+  expected_caller_permissions = WRITE_JOB_PERMISSIONS.fetch([VALIDATION_WORKFLOW, "production-workflow"])
+  unless candidate_validator&.fetch("run", nil) == "ruby scripts/validate-workflow-boundary.rb ." &&
+         validation_jobs.dig("production-workflow", "needs") == "workflow-only-boundary" &&
+         validation_jobs.dig("production-workflow", "uses") == "./.github/workflows/organization-scan.yml" &&
+         validation_jobs.dig("production-workflow", "permissions") == expected_caller_permissions
+    Boundary.fail!(VALIDATION_WORKFLOW, "Candidate validation must retain the boundary gate and exact reusable-workflow caller permissions before the production-path matrix.")
   end
-  unexpected_action_files = actual_actions.keys - EXPECTED_ACTIONS.keys
-  Boundary.fail!(unexpected_action_files.first, "Executable action definitions are outside the approved workflow profile.") unless unexpected_action_files.empty?
+
+  trusted = documents.fetch(TRUSTED_BOUNDARY_WORKFLOW)
+  trusted_source = file_contents.fetch(TRUSTED_BOUNDARY_WORKFLOW)
+  unless trusted_source.match?(/\bpull_request_target:\s*#/) && trusted_source.match?(/\n\s+branches:\s*\n\s+- main\s*\n/)
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must remain base-sourced from pull_request_target on main.")
+  end
+
+  trusted_job = trusted.fetch("jobs").fetch("trusted-workflow-only-boundary")
+  unless trusted_job["environment"] == "trusted-boundary" && trusted_job["permissions"] == {"contents" => "read"}
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must use the main-only trusted-boundary environment with read-only GITHUB_TOKEN permissions.")
+  end
+  trusted_steps = Array(trusted_job["steps"])
+  token_index = trusted_steps.index { |step| step["id"] == "boundary-token" }
+  token_step = token_index && trusted_steps[token_index]
+  Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The dedicated boundary App token step is missing.") unless token_step
+  Boundary.action_identity(token_step.fetch("uses"), TRUSTED_BOUNDARY_WORKFLOW)
+  expected_token_with = {
+    "app-id" => "${{ secrets.SEGH_BOUNDARY_APP_ID }}",
+    "private-key" => "${{ secrets.SEGH_BOUNDARY_APP_PRIVATE_KEY }}",
+    "owner" => "${{ github.repository_owner }}",
+    "repositories" => "${{ github.event.repository.name }}",
+    "permission-checks" => "write",
+    "permission-metadata" => "read"
+  }
+  unless token_step["with"] == expected_token_with
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The boundary App token must be repository-scoped with only metadata:read and checks:write.")
+  end
+
+  expected_secret_nodes = {
+    ["jobs", "trusted-workflow-only-boundary", "steps", token_index, "with", "app-id"] => "${{ secrets.SEGH_BOUNDARY_APP_ID }}",
+    ["jobs", "trusted-workflow-only-boundary", "steps", token_index, "with", "private-key"] => "${{ secrets.SEGH_BOUNDARY_APP_PRIVATE_KEY }}"
+  }
+  actual_secret_nodes = {}
+  Boundary.walk_strings(trusted) do |path, value|
+    actual_secret_nodes[path] = value if value.include?("SEGH_BOUNDARY_APP_")
+  end
+  unless actual_secret_nodes == expected_secret_nodes
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Boundary App credentials must be exposed only to the token-minting action.")
+  end
+
+  trusted_checkout = trusted_steps.find { |step| step["id"] == "trusted-checkout" }
+  candidate_checkout = trusted_steps.find { |step| step["id"] == "candidate-checkout" }
+  unless trusted_checkout&.dig("with", "ref") == "${{ github.event.pull_request.base.sha }}" &&
+         trusted_checkout&.dig("with", "persist-credentials") == false &&
+         candidate_checkout&.dig("with", "repository") == "${{ github.event.pull_request.head.repo.full_name }}" &&
+         candidate_checkout&.dig("with", "ref") == "${{ github.event.pull_request.head.sha }}" &&
+         candidate_checkout&.dig("with", "persist-credentials") == false &&
+         candidate_checkout&.dig("with", "allow-unsafe-pr-checkout") == true
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted and candidate revisions must remain explicitly separated with no persisted checkout credentials.")
+  end
+
+  policy_step = trusted_steps.find { |step| step["id"] == "trusted-policy" }
+  policy_run = policy_step&.fetch("run", "")
+  %w[
+    .github/workflows/trusted-boundary.yml
+    scripts/preflight.sh
+    scripts/validate-workflow-boundary.rb
+  ].each do |path|
+    unless policy_run.include?("compare_trusted_entry #{path}")
+      Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted policy source #{path} must be immutable to ordinary pull requests.")
+    end
+  end
+  unless policy_run.include?("tracked_tree_shape(\"_candidate\") == tracked_tree_shape(\"_trusted\")")
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must compare the complete base/candidate path, type, and mode shape.")
+  end
+  [ORCHESTRATOR_WORKFLOW, ORGANIZATION_WORKFLOW, SELECTION_WORKFLOW, RECONCILE_WORKFLOW, VALIDATION_WORKFLOW].each do |path|
+    unless policy_run.include?("\"#{path}\"")
+      Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Security-sensitive workflow #{path} must remain in the base-sourced structural comparison.")
+    end
+  end
+
+  attestation = trusted_steps.find { |step| step["id"] == "boundary-attestation" }
+  Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The dedicated-App attestation step is missing.") unless attestation
+  expected_attestation_env = {
+    "GH_TOKEN" => "${{ steps.boundary-token.outputs.token }}",
+    "REPOSITORY" => "${{ github.repository }}",
+    "HEAD_SHA" => "${{ github.event.pull_request.head.sha }}",
+    "RUN_URL" => "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+    "TRUSTED_CHECKOUT_OUTCOME" => "${{ steps.trusted-checkout.outcome }}",
+    "CANDIDATE_CHECKOUT_OUTCOME" => "${{ steps.candidate-checkout.outcome }}",
+    "TRUSTED_POLICY_OUTCOME" => "${{ steps.trusted-policy.outcome }}",
+    "CANDIDATE_BOUNDARY_OUTCOME" => "${{ steps.candidate-boundary.outcome }}"
+  }
+  unless attestation["if"] == "always() && steps.boundary-token.outcome == 'success'" && attestation["env"] == expected_attestation_env
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The attestation must always publish through only the dedicated App token after token creation succeeds.")
+  end
+  attestation_run = attestation.fetch("run", "")
+  unless attestation_run.scan(/\bgh\s+api\b/).length == 1 &&
+         attestation_run.include?("repos/$REPOSITORY/check-runs") &&
+         attestation_run.include?("Trusted workflow-only boundary attestation") &&
+         attestation_run.include?('head_sha="$HEAD_SHA"') &&
+         attestation_run.include?("status=completed") &&
+         attestation_run.include?('conclusion="$conclusion"')
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The trusted App must publish exactly one fixed-name completed check on the pull-request head SHA.")
+  end
 
   orchestrator = documents.fetch(ORCHESTRATOR_WORKFLOW)
   orchestrator_jobs = orchestrator.fetch("jobs")
-  unless orchestrator.dig("on", "schedule") || File.read(ORCHESTRATOR_WORKFLOW).include?("schedule:")
+  unless orchestrator.dig("on", "schedule") || file_contents.fetch(ORCHESTRATOR_WORKFLOW).include?("schedule:")
     Boundary.fail!(ORCHESTRATOR_WORKFLOW, "Organization dashboard orchestration must retain a schedule trigger.")
   end
-  unless File.read(ORCHESTRATOR_WORKFLOW).include?("workflow_dispatch:")
+  unless file_contents.fetch(ORCHESTRATOR_WORKFLOW).include?("workflow_dispatch:")
     Boundary.fail!(ORCHESTRATOR_WORKFLOW, "Organization dashboard orchestration must retain manual dispatch.")
   end
   unless orchestrator_jobs.dig("reconcile", "needs") == ["scan", "selection"] &&
@@ -331,7 +378,6 @@ Dir.chdir(ROOT) do
 
   organization = documents.fetch(ORGANIZATION_WORKFLOW)
   selection = documents.fetch(SELECTION_WORKFLOW)
-  validation = documents.fetch(VALIDATION_WORKFLOW)
 
   organization_jobs = organization.fetch("jobs")
   plan_steps = Array(organization_jobs.fetch("plan")["steps"])
@@ -390,22 +436,15 @@ Dir.chdir(ROOT) do
   Boundary.walk_strings(organization) do |node_path, value|
     next unless value.match?(/\bresults\b/)
     next if node_path == ["jobs", "scan", "steps", artifact_index, "with", "path"] && value == "results"
+
     literal_paths = value.scan(RESULT_PATH)
     unexpected = literal_paths.reject { |result| ALLOWED_RESULTS.include?(result) }
     Boundary.fail!(ORGANIZATION_WORKFLOW, "Unapproved results artifact path #{unexpected.first.inspect} at #{node_path.join("/")}.") unless unexpected.empty?
+
     remaining = value.dup
     literal_paths.uniq.each { |result| remaining.gsub!(result, "") }
     remaining.gsub!(/\bmkdir\s+-p\s+["']?results["']?/, "")
     Boundary.fail!(ORGANIZATION_WORKFLOW, "Dynamically constructed results artifact path at #{node_path.join("/")}.") if remaining.match?(/\bresults\b/)
-  end
-
-  validation_jobs = validation.fetch("jobs")
-  candidate_steps = Array(validation_jobs.fetch("workflow-only-boundary")["steps"])
-  candidate_validator = candidate_steps.find { |step| step["name"] == "Reject removed product surfaces" }
-  unless candidate_validator&.fetch("run", nil) == "ruby scripts/validate-workflow-boundary.rb ." &&
-         validation_jobs.dig("production-workflow", "needs") == "workflow-only-boundary" &&
-         validation_jobs.dig("production-workflow", "uses") == "./.github/workflows/organization-scan.yml"
-    Boundary.fail!(VALIDATION_WORKFLOW, "Candidate validation must retain the boundary gate before the production-path matrix.")
   end
 
   aqua = Boundary.load_yaml("aqua.yaml", file_contents.fetch("aqua.yaml"))
@@ -428,6 +467,7 @@ Dir.chdir(ROOT) do
     scanner, separator, package_version = name.rpartition("@")
     actual_version = Boundary.parse_version(package_version)
     next if separator == "@" && scanner == expected && actual_version && actual_version >= Gem::Version.new(minimum)
+
     Boundary.fail!("aqua.yaml", "Scanner #{index} must be #{expected} at an explicit non-downgraded semantic version.")
   end
 end

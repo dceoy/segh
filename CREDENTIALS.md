@@ -1,8 +1,12 @@
 # Credential and trust boundaries
 
-`segh` separates immutable scan planning, per-repository scanning, complete App-selection capture, and dashboard reconciliation into distinct credential domains.
+`segh` separates merge-boundary attestation, immutable scan planning, per-repository scanning, complete App-selection capture, and dashboard reconciliation into distinct credential domains.
 
 ```text
+trusted pull-request boundary
+  └─ dedicated repository App runtime token, metadata: read + checks: write
+     (App installation also has statuses: write only for ruleset source eligibility)
+
 scan plan
   └─ organization installation token, read-only
 
@@ -17,7 +21,7 @@ dashboard publication / reconciliation
      actions: read, contents: read, and issues: write; no configured secrets
 ```
 
-No job receives both an organization/target scan credential and an issue-write credential.
+No scan or selection job receives either the trusted-boundary check-write credential or an issue-write credential.
 
 ## GitHub App installation
 
@@ -52,6 +56,42 @@ The permission basis follows the current OpenSSF Scorecard private-repository gu
 - <https://github.com/ossf/scorecard/blob/main/docs/checks.md#branch-protection>
 
 A private App-backed validation run remains required whenever the pinned Scorecard version or enabled checks change.
+
+## Trusted merge-boundary credential
+
+`dceoy/segh` remains a personally owned repository, so the trusted merge boundary uses a dedicated GitHub App rather than an organization required-workflow rule.
+
+Create a separate GitHub App for this boundary and install it **only** on `dceoy/segh`. Grant exactly:
+
+| Permission | Access | Reason |
+| --- | --- | --- |
+| Metadata | Read | Required installation metadata |
+| Checks | Write | Publish the trusted attestation on the pull-request head SHA |
+| Commit statuses | Write | Make the App eligible to be selected as the repository ruleset's expected status-check source |
+
+The Commit statuses permission is an installation-level eligibility requirement only. The trusted workflow does **not** request `statuses: write` when minting its short-lived installation token; the runtime token remains restricted to Metadata read and Checks write and therefore cannot create commit statuses.
+
+Do not grant Contents, Actions, Issues, Pull requests, Administration, or any other repository permission to this App.
+
+Create an Actions environment named `trusted-boundary`. Configure its deployment branch policy to allow only `main`; do not allow pull-request refs or feature branches. Store only these environment secrets there:
+
+- `SEGH_BOUNDARY_APP_ID`
+- `SEGH_BOUNDARY_APP_PRIVATE_KEY`
+
+`.github/workflows/trusted-boundary.yml` is loaded from the protected base revision through `pull_request_target`. Its normal `GITHUB_TOKEN` remains `contents: read`. The workflow mints a repository-scoped dedicated-App token only after entering the `trusted-boundary` environment and passes that token only to the final attestation API call. Candidate code, candidate actions, target scanners, selection jobs, and dashboard jobs never receive it.
+
+After trusted validation completes, the workflow writes one completed check named `Trusted workflow-only boundary attestation` to `github.event.pull_request.head.sha`. A success conclusion is emitted only when the trusted base checkout, candidate checkout, trusted policy comparison, and base-sourced validator all succeed. Failure in any of those phases produces a failed attestation; failure to obtain the environment credential produces no attestation and therefore fails closed once the check is required.
+
+Bootstrap the ruleset binding in this order:
+
+1. merge the trusted workflow and configure the dedicated App plus `trusted-boundary` environment;
+2. open or update a representative pull request so the dedicated App emits `Trusted workflow-only boundary attestation` at least once;
+3. configure the repository `branch-protection` ruleset for the default branch with a strict required-status-check rule for that exact check, selecting the dedicated App as the expected source/integration;
+4. verify that a same-named check from GitHub Actions or another integration does not satisfy the rule.
+
+The App must publish a check before it can be selected reliably as the expected source. Do not configure the GitHub Actions App as the expected source.
+
+The first merge that introduces or deliberately changes the trusted workflow, `scripts/preflight.sh`, or `scripts/validate-workflow-boundary.rb` is an explicit bootstrap/break-glass operation: the already-merged base policy intentionally rejects such candidate changes. After the trusted App, environment, and ruleset are active, changing or bypassing any of them requires an explicit repository-owner administrative action and is outside the ordinary pull-request trust boundary. Record such actions as security-sensitive maintenance.
 
 ## Scan-planning credential
 
@@ -109,6 +149,9 @@ The final reconciliation workflow receives **no configured secrets**. In particu
 
 - `SEGH_ORG_SCAN_APP_ID`;
 - `SEGH_ORG_SCAN_APP_PRIVATE_KEY`;
+- `SEGH_BOUNDARY_APP_ID`;
+- `SEGH_BOUNDARY_APP_PRIVATE_KEY`;
+- the trusted-boundary App token;
 - the planning token;
 - a repository-scoped target token; or
 - `SEGH_TARGET_SCORECARD_TOKEN`.
@@ -130,7 +173,7 @@ selection ─┘
 The caller permissions should be scoped per reusable-workflow job rather than granted globally:
 
 - `scan`: `actions: read`, `contents: read`, `checks: read`, `issues: write`, `pull-requests: read` because the called workflow contains both read-only scan jobs and its isolated normal publisher;
-- `selection`: `permissions: {}` plus only the two App secrets;
+- `selection`: `permissions: {}` plus only the two organization App secrets;
 - `reconcile`: `actions: read`, `contents: read`, `issues: write`, with no secrets.
 
 `reconcile` must use `if: always()` so a failed scan or selection job still triggers stale/error handling for existing managed dashboards. Pass `needs.scan.result` through the bounded `scan_result` input; do not expose tokens through outputs or generic environment variables.
@@ -140,6 +183,8 @@ The caller permissions should be scoped per reusable-workflow job rather than gr
 The source repository `dceoy/segh` is public. Organization scans, complete selection snapshots, raw evidence, normalized summaries, and dashboard issues must run in a private execution or control repository.
 
 Every production workflow fails closed when its caller-side operation would expose organization state through a public dashboard target. Because the dashboard target is fixed to the caller repository, this visibility check validates the actual issue-publication target. Private repository names, paths, source excerpts, scanner logs, and finding details must not be placed in public issues, job summaries, or artifacts belonging to the public source repository.
+
+The trusted merge-boundary check is intentionally public metadata about pull-request policy success or failure. It must not publish scanner evidence, private repository identities, secret values, or other private control-repository data.
 
 ## Removed names and migration
 
@@ -152,4 +197,4 @@ Remove these obsolete secrets or variables from control repositories and environ
 - any generic `GH_TOKEN`, `GITHUB_TOKEN`, `TARGET_TOKEN`, or `SCAN_TOKEN` secret created for cross-phase reuse
 - any issue-write token installed on target repositories
 
-The workflows use `SEGH_PLAN_TOKEN`, `SEGH_SELECTION_TOKEN`, and `SEGH_TARGET_SCORECARD_TOKEN` only as step-local environment variables. None is a configured secret or workflow output.
+The workflows use `SEGH_PLAN_TOKEN`, `SEGH_SELECTION_TOKEN`, and `SEGH_TARGET_SCORECARD_TOKEN` only as step-local environment variables. None is a configured secret or workflow output. The dedicated merge-boundary App credentials are separate environment secrets and must never be copied into a control repository, scanner job, selection job, publisher job, or reconciliation job.
