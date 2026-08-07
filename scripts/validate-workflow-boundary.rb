@@ -92,7 +92,8 @@ ALTERNATE_NETWORK_CLIENT = %r{
     \bopenssl\s+s_client\b |
     \bgit\s+(?:clone|fetch|pull|ls-remote)\b |
     \bNet::HTTP\b | \bnet/http\b | \bOpenURI\b | \bURI\.(?:open|parse)\b |
-    \b(?:requests|urllib3?|httpx|aiohttp)\b |
+    \b(?:import|from)\s+(?:requests|urllib3?|httpx|aiohttp)\b |
+    \b(?:requests|urllib3?|httpx|aiohttp)\s*\.\s*(?:get|post|put|patch|delete|request|Session)\b |
     \b(?:axios|node-fetch)\b | \bfetch\s*\( |
     https?://(?:api\.)?github\.com | \bapi\.github\.com\b
   )
