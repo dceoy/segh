@@ -130,6 +130,39 @@ async function managedIssues(github, owner, repo) {
   return issues.filter((issue) => !issue.pull_request && MANAGED.test(String(issue.body || "")));
 }
 
+function retryable(error) {
+  const status = error?.status || error?.response?.status;
+  return status === 429 || (Number.isInteger(status) && status >= 500 && status <= 599) ||
+    (status === 403 && /secondary rate limit|rate limit/i.test(String(error?.message || "")));
+}
+
+async function findManagedIssue(github, owner, repo, id) {
+  const matches = (await managedIssues(github, owner, repo)).filter((issue) => repositoryId(issue) === id);
+  if (matches.length > 1) throw new Error(`repository id ${id} has ${matches.length} managed dashboard issues`);
+  return matches[0] || null;
+}
+
+async function createIssue(github, owner, repo, desired) {
+  const id = repositoryId({body: desired.body});
+  if (!id) throw new Error("managed dashboard body lacks a repository id");
+  const params = {
+    owner,
+    repo,
+    title: desired.title,
+    body: desired.body,
+    labels: desired.labels,
+    request: {retries: 0},
+  };
+  try {
+    return await github.rest.issues.create(params);
+  } catch (error) {
+    if (!retryable(error)) throw error;
+    const existing = await findManagedIssue(github, owner, repo, id);
+    if (existing) return {data: existing};
+    throw error;
+  }
+}
+
 function sameIssue(issue, desired) {
   return issue.title === desired.title && issue.body === desired.body && issue.state === desired.state &&
     JSON.stringify(labelNames(issue.labels)) === JSON.stringify([...desired.labels].sort());
@@ -137,7 +170,7 @@ function sameIssue(issue, desired) {
 
 async function apply(github, owner, repo, existing, desired) {
   if (!existing) {
-    const created = await github.rest.issues.create({owner, repo, title: desired.title, body: desired.body, labels: desired.labels});
+    const created = await createIssue(github, owner, repo, desired);
     if (desired.state === "closed") {
       await github.rest.issues.update({owner, repo, issue_number: created.data.number, state: "closed"});
     }
