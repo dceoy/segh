@@ -118,7 +118,16 @@ function parseActionlint(resultsDir, outcome) {
   if (outcome === "skipped") return scanner("actionlint", "skipped", 0, "actions");
   if (!fileExists(file)) return scanner("actionlint", "error", 0, "actions");
   try {
-    const findings = fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const raw = fs.readFileSync(file, "utf8").trim();
+    let findings = [];
+    if (raw !== "") {
+      try {
+        const parsed = JSON.parse(raw);
+        findings = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        findings = raw.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      }
+    }
     const fingerprints = findingFingerprints("actionlint", findings);
     if (outcome === "success" && findings.length === 0) return scanner("actionlint", "pass", 0, "actions", [], fingerprints);
     if (findings.length > 0) return scanner("actionlint", "findings", findings.length, "actions", [], fingerprints);
@@ -154,8 +163,17 @@ function parseTrivy(resultsDir, outcome, kind, property, category) {
   if (!fileExists(file)) return scanner(name, "error", 0, category);
   try {
     const data = readJson(file);
-    if (!data || typeof data !== "object" || !Array.isArray(data.Results)) return scanner(name, "error", 0, category);
-    const findings = data.Results.flatMap((result) => {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return scanner(name, "error", 0, category);
+    let results;
+    if (Array.isArray(data.Results)) {
+      results = data.Results;
+    } else if (outcome === "success" && data.Results === undefined && data.SchemaVersion === 2 &&
+               data.Trivy && typeof data.Trivy === "object") {
+      results = [];
+    } else {
+      return scanner(name, "error", 0, category);
+    }
+    const findings = results.flatMap((result) => {
       const entries = result && Array.isArray(result[property]) ? result[property] : [];
       return entries.map((finding) => ({target: result.Target ?? "", class: result.Class ?? "", type: result.Type ?? "", finding}));
     });
