@@ -274,36 +274,19 @@ Dir.chdir(ROOT) do
   end
 
   trusted_job = trusted.fetch("jobs").fetch("trusted-workflow-only-boundary")
-  unless trusted_job["environment"] == "trusted-boundary" && trusted_job["permissions"] == {"contents" => "read"}
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must use the main-only trusted-boundary environment with read-only GITHUB_TOKEN permissions.")
+  unless !trusted_job.key?("environment") && trusted_job["permissions"] == {"contents" => "read"}
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must use only contents:read without an Actions environment.")
   end
-  trusted_steps = Array(trusted_job["steps"])
-  token_index = trusted_steps.index { |step| step["id"] == "boundary-token" }
-  token_step = token_index && trusted_steps[token_index]
-  Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The dedicated boundary App token step is missing.") unless token_step
-  Boundary.action_identity(token_step.fetch("uses"), TRUSTED_BOUNDARY_WORKFLOW)
-  expected_token_with = {
-    "app-id" => "${{ secrets.SEGH_BOUNDARY_APP_ID }}",
-    "private-key" => "${{ secrets.SEGH_BOUNDARY_APP_PRIVATE_KEY }}",
-    "owner" => "${{ github.repository_owner }}",
-    "repositories" => "${{ github.event.repository.name }}",
-    "permission-checks" => "write",
-    "permission-metadata" => "read"
-  }
-  unless token_step["with"] == expected_token_with
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The boundary App token must be repository-scoped with only metadata:read and checks:write.")
+  if trusted_source.include?("SEGH_BOUNDARY_APP_") || trusted_job.key?("environment")
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The dedicated boundary App credentials and environment are outside the simplified trust contract.")
   end
 
-  expected_secret_nodes = {
-    ["jobs", "trusted-workflow-only-boundary", "steps", token_index, "with", "app-id"] => "${{ secrets.SEGH_BOUNDARY_APP_ID }}",
-    ["jobs", "trusted-workflow-only-boundary", "steps", token_index, "with", "private-key"] => "${{ secrets.SEGH_BOUNDARY_APP_PRIVATE_KEY }}"
-  }
-  actual_secret_nodes = {}
-  Boundary.walk_strings(trusted) do |path, value|
-    actual_secret_nodes[path] = value if value.include?("SEGH_BOUNDARY_APP_")
+  trusted_steps = Array(trusted_job["steps"])
+  if trusted_steps.any? { |step| step["id"] == "boundary-token" || step.fetch("uses", "").start_with?("actions/create-github-app-token@") }
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must not mint a dedicated App token.")
   end
-  unless actual_secret_nodes == expected_secret_nodes
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Boundary App credentials must be exposed only to the token-minting action.")
+  if trusted_steps.any? { |step| step["id"] == "boundary-result" || step.fetch("run", "").match?(/\bgh\s+api\b/) }
+    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must rely on its native GitHub Actions job check without publishing a separate result.")
   end
 
   trusted_checkout = trusted_steps.find { |step| step["id"] == "trusted-checkout" }
@@ -335,31 +318,6 @@ Dir.chdir(ROOT) do
     unless policy_run.include?("\"#{path}\"")
       Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Security-sensitive workflow #{path} must remain in the base-sourced structural comparison.")
     end
-  end
-
-  attestation = trusted_steps.find { |step| step["id"] == "boundary-attestation" }
-  Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The dedicated-App attestation step is missing.") unless attestation
-  expected_attestation_env = {
-    "GH_TOKEN" => "${{ steps.boundary-token.outputs.token }}",
-    "REPOSITORY" => "${{ github.repository }}",
-    "HEAD_SHA" => "${{ github.event.pull_request.head.sha }}",
-    "RUN_URL" => "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-    "TRUSTED_CHECKOUT_OUTCOME" => "${{ steps.trusted-checkout.outcome }}",
-    "CANDIDATE_CHECKOUT_OUTCOME" => "${{ steps.candidate-checkout.outcome }}",
-    "TRUSTED_POLICY_OUTCOME" => "${{ steps.trusted-policy.outcome }}",
-    "CANDIDATE_BOUNDARY_OUTCOME" => "${{ steps.candidate-boundary.outcome }}"
-  }
-  unless attestation["if"] == "always() && steps.boundary-token.outcome == 'success'" && attestation["env"] == expected_attestation_env
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The attestation must always publish through only the dedicated App token after token creation succeeds.")
-  end
-  attestation_run = attestation.fetch("run", "")
-  unless attestation_run.scan(/\bgh\s+api\b/).length == 1 &&
-         attestation_run.include?("repos/$REPOSITORY/check-runs") &&
-         attestation_run.include?("Trusted workflow-only boundary attestation") &&
-         attestation_run.include?('head_sha="$HEAD_SHA"') &&
-         attestation_run.include?("status=completed") &&
-         attestation_run.include?('conclusion="$conclusion"')
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The trusted App must publish exactly one fixed-name completed check on the pull-request head SHA.")
   end
 
   orchestrator = documents.fetch(ORCHESTRATOR_WORKFLOW)

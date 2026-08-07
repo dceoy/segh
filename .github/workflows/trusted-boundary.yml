@@ -1,8 +1,8 @@
 ---
 name: Trusted workflow-only boundary
 
-# This base-sourced workflow is the authoritative merge-boundary validator.
-# A repository ruleset must require the dedicated-App attestation emitted below.
+# This base-sourced workflow validates ordinary pull requests with policy loaded
+# from the protected base revision. Its native job check is the required result.
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers]
     branches:
@@ -14,22 +14,11 @@ jobs:
   trusted-workflow-only-boundary:
     name: Trusted workflow-only boundary
     if: github.repository == 'dceoy/segh'
-    environment: trusted-boundary
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
-      - name: Create trusted attestation token
-        id: boundary-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.SEGH_BOUNDARY_APP_ID }}
-          private-key: ${{ secrets.SEGH_BOUNDARY_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }} # zizmor: ignore[github-app]
-          repositories: ${{ github.event.repository.name }}
-          permission-checks: write
-          permission-metadata: read
       - name: Check out trusted base revision
         id: trusted-checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -135,34 +124,3 @@ jobs:
       - name: Validate candidate product boundary
         id: candidate-boundary
         run: ruby _trusted/scripts/validate-workflow-boundary.rb _candidate
-      - name: Publish trusted boundary attestation
-        id: boundary-attestation
-        if: always() && steps.boundary-token.outcome == 'success'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.boundary-token.outputs.token }}
-          REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TRUSTED_CHECKOUT_OUTCOME: ${{ steps.trusted-checkout.outcome }}
-          CANDIDATE_CHECKOUT_OUTCOME: ${{ steps.candidate-checkout.outcome }}
-          TRUSTED_POLICY_OUTCOME: ${{ steps.trusted-policy.outcome }}
-          CANDIDATE_BOUNDARY_OUTCOME: ${{ steps.candidate-boundary.outcome }}
-        run: |
-          set -euo pipefail
-          conclusion=failure
-          if [[ "$TRUSTED_CHECKOUT_OUTCOME" == success &&
-                "$CANDIDATE_CHECKOUT_OUTCOME" == success &&
-                "$TRUSTED_POLICY_OUTCOME" == success &&
-                "$CANDIDATE_BOUNDARY_OUTCOME" == success ]]; then
-            conclusion=success
-          fi
-
-          gh api --method POST "repos/$REPOSITORY/check-runs" \
-            -f name='Trusted workflow-only boundary attestation' \
-            -f head_sha="$HEAD_SHA" \
-            -f status=completed \
-            -f conclusion="$conclusion" \
-            -f details_url="$RUN_URL" > /dev/null
-
-          [[ "$conclusion" == success ]]

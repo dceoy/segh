@@ -37,16 +37,16 @@ A separate read-only selection snapshot records repository identity and lifecycl
 Credential domains are intentionally separate:
 
 ```text
-trusted PR boundary   -> dedicated segh-only App: metadata read + checks write
+trusted PR boundary   -> base-sourced GitHub Actions: contents read
 organization planning -> organization App: metadata + contents read
 per-target scan       -> one target-scoped App token: metadata/contents/checks/issues/PRs read
 selection snapshot    -> organization App: metadata + contents read
 dashboard reconcile   -> private caller GITHUB_TOKEN: actions/contents read + issues write
 ```
 
-No scanner or selection job receives issue-write or trusted-boundary credentials. Target repositories receive no write permission.
+No scanner or selection job receives issue-write credentials. Target repositories receive no write permission.
 
-See [CREDENTIALS.md](CREDENTIALS.md) for the exact App permissions, secrets, token consumers, and trusted required-check setup. See [SECURITY.md](SECURITY.md) for the threat model and deployment validation requirements.
+See [CREDENTIALS.md](CREDENTIALS.md) for the exact App permissions, token consumers, and required-check setup. See [SECURITY.md](SECURITY.md) for the threat model and deployment validation requirements.
 
 ## Use from a private control repository
 
@@ -115,7 +115,7 @@ A separate `repository-summary-<repository-id>` artifact retains only the bounde
 
 Pull-request CI verifies:
 
-- credential and workflow boundaries;
+- credential and workflow boundaries, including the read-only base-sourced merge boundary;
 - dashboard normalization, idempotency, privacy, recovery, retirement, stale-state handling, and reconciliation;
 - actionlint, zizmor, ShellCheck, YAML/JSON parsing, and Aqua checksums;
 - guarded production scanner fixtures, including clean, findings, incomplete content, unsafe repository shapes, checkout failure, scanner failure, and proof that target code is not executed.

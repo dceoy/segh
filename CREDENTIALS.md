@@ -1,11 +1,11 @@
 # Credential and trust boundaries
 
-`segh` separates write-capable credentials from read-only organization scanning, and scopes runtime tokens to the minimum access needed for each phase. Organization discovery and per-target scanning use the same organization scan App credentials to mint distinct short-lived installation tokens; dashboard publication and merge attestation use separate write-capable credentials.
+`segh` separates write-capable control-plane operations from read-only organization scanning and scopes runtime tokens to the minimum access needed for each phase. Organization discovery and per-target scanning use the same organization scan App credentials to mint distinct short-lived installation tokens; dashboard publication uses its caller-scoped `GITHUB_TOKEN`, while the repository's base-sourced pull-request boundary remains read-only.
 
 ```text
 trusted pull-request boundary
-  -> dedicated App installed only on dceoy/segh
-     runtime token: metadata read + checks write
+  -> base-sourced GitHub Actions workflow
+     GITHUB_TOKEN: contents read
 
 scan planning / selection snapshot
   -> organization scan App
@@ -20,7 +20,7 @@ dashboard publication / reconciliation
      actions read + contents read + issues write
 ```
 
-No target repository receives write permission. Scanner and selection jobs never receive the dashboard or trusted-boundary write credentials.
+No target repository receives write permission. Scanner and selection jobs never receive dashboard write credentials.
 
 ## Organization scan App
 
@@ -72,32 +72,19 @@ Dashboard publication uses the private caller repository's built-in `GITHUB_TOKE
 
 The dashboard target is fixed to `${{ github.repository }}` and production publication requires that repository to be private. Cross-repository dashboard publication, personal access tokens, and a separate publisher App are outside the supported contract.
 
-The reconciliation workflow receives no configured secrets, organization App credential, target token, or trusted-boundary credential. Issue operations are sequential, bounded, and retried only for bounded transient/rate-limit failures.
+The reconciliation workflow receives no configured secrets, organization App credential, or target token. Issue operations are sequential, bounded, and retried only for bounded transient/rate-limit failures.
 
-## Trusted merge-boundary App
+## Trusted merge boundary
 
-Because `dceoy/segh` is personally owned, its authoritative pull-request boundary uses a dedicated GitHub App and a repository ruleset required check.
+`.github/workflows/trusted-boundary.yml` runs from the protected base revision through `pull_request_target`. It checks out the base and candidate separately, compares the complete tracked path/type/mode shape, protects the trusted workflow/validator/preflight sources, and evaluates the candidate with the base validator. Candidate-owned code is not executed.
 
-Install a separate App only on `dceoy/segh` with:
+The job uses only the built-in `GITHUB_TOKEN` with Contents read access. It does not mint another token and does not call the Checks or Commit Status APIs. GitHub Actions' native job check, `Trusted workflow-only boundary`, is the merge signal.
 
-| Permission | Access | Purpose |
-| --- | --- | --- |
-| Metadata | Read | Required installation metadata |
-| Checks | Write | Publish `Trusted workflow-only boundary attestation` on the PR head SHA |
-| Commit statuses | Write | Allow the App to be selected as the ruleset's expected check source |
+No dedicated GitHub App, Actions environment, App private key, configured merge-boundary secret, or custom attestation result is required.
 
-The workflow-minted runtime token requests only Metadata read and Checks write. Commit-status write is an installation-level source-eligibility requirement and is not present in the runtime token.
+Configure the default-branch repository ruleset to require the exact `Trusted workflow-only boundary` check, preferably with strict required-status-check behavior. The source is the normal GitHub Actions integration. This deliberately removes the former distinct-App anti-spoofing boundary: a repository writer able to create another GitHub Actions check with the same name is inside the supported personal-ownership trust root. Repository-owner administrative control is therefore part of the security boundary.
 
-Create an Actions environment named `trusted-boundary`, restrict deployment branches to `main`, and store only:
-
-- `SEGH_BOUNDARY_APP_ID`
-- `SEGH_BOUNDARY_APP_PRIVATE_KEY`
-
-`.github/workflows/trusted-boundary.yml` is loaded from the protected base revision. Its normal `GITHUB_TOKEN` is read-only. The dedicated App token is exposed only to the final check-run publication step; candidate content, scanners, selection, and dashboard jobs never receive it.
-
-Configure the default-branch repository ruleset only after the dedicated App has emitted the attestation at least once. Require the exact `Trusted workflow-only boundary attestation` check with strict required-status-check behavior and bind the expected source to that App integration. A same-named check from GitHub Actions or another integration must not satisfy the rule.
-
-Changing the trusted workflow, trusted validator, preflight script, App configuration, `trusted-boundary` environment, or ruleset binding is an explicit repository-owner break-glass action outside the ordinary PR boundary.
+The already-merged base policy intentionally rejects ordinary pull requests that modify `.github/workflows/trusted-boundary.yml`, `scripts/preflight.sh`, or `scripts/validate-workflow-boundary.rb`. Changes to those trusted sources, or to the required-check ruleset, are explicit repository-owner break-glass maintenance and require an administrative bypass for the transition itself.
 
 ## Caller contract
 
@@ -117,4 +104,4 @@ If the lower-level reusable workflows are composed directly instead, run scan an
 
 `dceoy/segh` is public; production organization state is not. Run scans, selection capture, evidence retention, and dashboard publication only from a private control repository.
 
-Do not place private repository identities, paths, source excerpts, scanner logs, finding details, or secret values in public issues, job summaries, or public artifacts. The trusted pull-request attestation is public policy metadata only and must not contain organization scan data.
+Do not place private repository identities, paths, source excerpts, scanner logs, finding details, or secret values in public issues, job summaries, or public artifacts. The trusted pull-request boundary check is public policy metadata only and must not contain organization scan data.

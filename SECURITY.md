@@ -20,13 +20,13 @@ The exact token permissions and consumers are defined in [CREDENTIALS.md](CREDEN
 
 ## Merge protection
 
-The authoritative PR boundary for `dceoy/segh` is the base-sourced `Trusted workflow-only boundary` plus the dedicated-App check `Trusted workflow-only boundary attestation` required by the default-branch repository ruleset.
+The authoritative PR boundary for `dceoy/segh` is the native GitHub Actions job check `Trusted workflow-only boundary`, produced by the base-sourced `pull_request_target` workflow. The default-branch repository ruleset should require that exact check.
 
 The trusted workflow compares the candidate's tracked path/type/mode shape with the protected base, protects its trusted workflow/validator/preflight sources, and evaluates the candidate with the base validator. Candidate-owned code is not executed.
 
-The built-in workflow token is read-only. The attestation is published by a separate App installed only on `dceoy/segh`; its runtime token is limited to Metadata read and Checks write. App credentials exist only in the `trusted-boundary` environment restricted to `main`.
+The workflow uses the built-in `GITHUB_TOKEN` with only Contents read access. It does not mint a dedicated token, publish a custom check, create a commit status, or access configured secrets. No dedicated merge-boundary App, private key, or Actions environment is required.
 
-A same-named check from another integration is not an accepted trust signal. Changing the trusted workflow, validator, preflight script, App/environment configuration, or ruleset binding is an administrator break-glass operation.
+This simplified personal-ownership model does not provide a distinct App identity from other GitHub Actions checks. A repository writer capable of creating another GitHub Actions check with the same name is inside the supported trust root. Repository-owner administrative control is therefore part of the security boundary. Changing the trusted workflow, validator, preflight script, or ruleset binding remains an explicit administrator break-glass operation.
 
 ## Scorecard limitations
 
@@ -53,6 +53,6 @@ Before deploying a reviewed scanner revision from the intended private control r
 - private artifact retention and token redaction on representative failures;
 - fail-closed behavior when production publication would target a public repository.
 
-For the merge boundary, verify representative positive and negative PRs show that the attestation is produced by the dedicated App on the candidate head SHA, only that App satisfies the required check, trusted policy-source changes are blocked, tracked path additions/removals are blocked, and disallowed product surfaces are rejected.
+For the merge boundary, verify representative positive and negative PRs show that the native `Trusted workflow-only boundary` check is associated with the current PR revision, trusted policy-source changes are blocked, tracked path additions/removals are blocked, and disallowed product surfaces are rejected. Confirm the repository ruleset requires `Trusted workflow-only boundary` after the migration.
 
 Publish only sanitized run references, expected conclusions, and bounded file-presence confirmation.
