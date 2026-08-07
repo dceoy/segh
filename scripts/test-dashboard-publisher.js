@@ -79,8 +79,18 @@ const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "segh-publisher-test-")
   );
   assert.equal(github.comments.length, 1, "the transition event must be persisted before the issue update");
   assert.match(github.issues[0].body, /segh-overall-status: pass/);
-  await publish({github, context, core, ...files, repositoryPrivate: true});
-  assert.equal(github.comments.length, 1, "retry must reuse the persisted transition event");
+
+  const nextRunFindings = {...findings, scan: {
+    ...findings.scan,
+    timestamp: "2026-08-07T01:00:00.000Z",
+    workflow_run_id: 789,
+    workflow_url: "https://github.com/control/private/actions/runs/789",
+  }};
+  fs.writeFileSync(path.join(files.summariesPath, "repository-summary-123", "summary.json"), `${JSON.stringify(nextRunFindings)}\n`);
+  const nextContext = {...context, runId: 789};
+  await publish({github, context: nextContext, core, ...files, repositoryPrivate: true});
+  assert.equal(github.comments.length, 1, "cross-run retry must reuse the persisted transition event");
   assert.match(github.issues[0].body, /segh-overall-status: findings/);
+  assert.match(github.issues[0].body, /actions\/runs\/789/);
   console.log("publisher hardening tests passed");
 })().catch((error) => { console.error(error.stack || error); process.exit(1); });
