@@ -50,7 +50,9 @@ jobs:
       issues: write
       pull-requests: read
     uses: dceoy/segh/.github/workflows/organization-scan.yml@<full-commit-sha>
-    secrets: inherit
+    secrets:
+      SEGH_ORG_SCAN_APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
+      SEGH_ORG_SCAN_APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
 ```
 
 The control repository must provide `SEGH_ORG_SCAN_APP_ID` and `SEGH_ORG_SCAN_APP_PRIVATE_KEY`. See [CREDENTIALS.md](CREDENTIALS.md) for the exact credential boundary.
