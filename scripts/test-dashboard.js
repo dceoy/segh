@@ -206,7 +206,7 @@ test("publisher reconciles ambiguous issue creation without duplicates", async (
   }
 });
 
-test("publisher closes an existing dashboard after a passing scan and preserves unmanaged labels", async () => {
+test("publisher replaces stale managed labels and preserves unmanaged labels", async () => {
   const root = tempDir();
   try {
     const summaries = path.join(root, "summaries");
@@ -229,7 +229,7 @@ test("publisher closes an existing dashboard after a passing scan and preserves 
       title: "[Security dashboard] example/repo",
       body: "<!-- segh-dashboard: v1 -->\n<!-- segh-repository-id: 7 -->\nold\n",
       state: "open",
-      labels: [{name: "scan:findings"}, {name: "owner:security"}],
+      labels: [{name: "scan:findings"}, {name: "scan:retired"}, {name: "owner:security"}],
     }]);
     await publish({
       github,
