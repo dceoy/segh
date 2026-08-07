@@ -4,6 +4,7 @@ require "rubygems"
 require "yaml"
 
 ROOT = File.expand_path(ARGV.fetch(0, "."))
+ORCHESTRATOR_WORKFLOW = ".github/workflows/organization-dashboard.yml"
 ORGANIZATION_WORKFLOW = ".github/workflows/organization-scan.yml"
 SELECTION_WORKFLOW = ".github/workflows/organization-selection.yml"
 RECONCILE_WORKFLOW = ".github/workflows/dashboard-reconcile.yml"
@@ -12,6 +13,7 @@ TRUSTED_BOUNDARY_WORKFLOW = ".github/workflows/trusted-boundary.yml"
 
 EXPECTED_PATHS = %w[
   .github/workflows/dashboard-reconcile.yml
+  .github/workflows/organization-dashboard.yml
   .github/workflows/organization-scan.yml
   .github/workflows/organization-selection.yml
   .github/workflows/trusted-boundary.yml
@@ -64,6 +66,11 @@ EXPECTED_FILE_MODES = EXPECTED_PATHS.to_h do |path|
 end.freeze
 
 EXPECTED_ACTIONS = {
+  ORCHESTRATOR_WORKFLOW => [
+    "./.github/workflows/dashboard-reconcile.yml",
+    "./.github/workflows/organization-scan.yml",
+    "./.github/workflows/organization-selection.yml"
+  ].sort.freeze,
   ORGANIZATION_WORKFLOW => [
     "actions/checkout", "actions/checkout", "actions/checkout",
     "actions/create-github-app-token", "actions/create-github-app-token",
@@ -92,6 +99,13 @@ EXPECTED_ACTIONS = {
 }.freeze
 
 WRITE_JOB_PERMISSIONS = {
+  [ORCHESTRATOR_WORKFLOW, "scan"] => {
+    "actions" => "read", "contents" => "read", "checks" => "read",
+    "issues" => "write", "pull-requests" => "read"
+  },
+  [ORCHESTRATOR_WORKFLOW, "reconcile"] => {
+    "actions" => "read", "contents" => "read", "issues" => "write"
+  },
   [ORGANIZATION_WORKFLOW, "publish-dashboard"] => {
     "actions" => "read", "contents" => "read", "issues" => "write"
   },
@@ -297,6 +311,20 @@ Dir.chdir(ROOT) do
   end
   unexpected_action_files = actual_actions.keys - EXPECTED_ACTIONS.keys
   Boundary.fail!(unexpected_action_files.first, "Executable action definitions are outside the approved workflow profile.") unless unexpected_action_files.empty?
+
+  orchestrator = documents.fetch(ORCHESTRATOR_WORKFLOW)
+  orchestrator_jobs = orchestrator.fetch("jobs")
+  unless orchestrator.dig("on", "schedule") || File.read(ORCHESTRATOR_WORKFLOW).include?("schedule:")
+    Boundary.fail!(ORCHESTRATOR_WORKFLOW, "Organization dashboard orchestration must retain a schedule trigger.")
+  end
+  unless File.read(ORCHESTRATOR_WORKFLOW).include?("workflow_dispatch:")
+    Boundary.fail!(ORCHESTRATOR_WORKFLOW, "Organization dashboard orchestration must retain manual dispatch.")
+  end
+  unless orchestrator_jobs.dig("reconcile", "needs") == ["scan", "selection"] &&
+         orchestrator_jobs.dig("reconcile", "if").to_s.include?("always()") &&
+         orchestrator_jobs.dig("reconcile", "uses") == "./.github/workflows/dashboard-reconcile.yml"
+    Boundary.fail!(ORCHESTRATOR_WORKFLOW, "Final reconciliation must run after both scan and selection even when either fails.")
+  end
 
   organization = documents.fetch(ORGANIZATION_WORKFLOW)
   selection = documents.fetch(SELECTION_WORKFLOW)
