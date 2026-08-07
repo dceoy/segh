@@ -40,6 +40,7 @@ const SCORECARD_CHECKS = new Set([
   "Vulnerabilities",
 ]);
 const REMEDIATION_CATEGORIES = new Set([
+  "Review OpenSSF Scorecard checks below the 7/10 dashboard threshold.",
   "Harden GitHub Actions workflows and pin trusted dependencies.",
   "Correct shell diagnostics and unsafe scripting patterns.",
   "Update vulnerable dependencies or base components.",
