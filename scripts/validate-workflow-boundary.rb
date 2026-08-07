@@ -12,6 +12,7 @@ VALIDATION_WORKFLOW = ".github/workflows/validation.yml"
 TRUSTED_BOUNDARY_WORKFLOW = ".github/workflows/trusted-boundary.yml"
 
 EXPECTED_PATHS = %w[
+  .github/CODEOWNERS
   .github/workflows/dashboard-reconcile.yml
   .github/workflows/organization-dashboard.yml
   .github/workflows/organization-scan.yml
