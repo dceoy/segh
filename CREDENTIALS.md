@@ -1,12 +1,8 @@
 # Credential and trust boundaries
 
-`segh` separates write-capable control-plane operations from read-only organization scanning and scopes runtime tokens to the minimum access needed for each phase. Organization discovery and per-target scanning use the same organization scan App credentials to mint distinct short-lived installation tokens; dashboard publication uses its caller-scoped `GITHUB_TOKEN`, while the repository's base-sourced pull-request boundary remains read-only.
+`segh` separates write-capable control-plane operations from read-only organization scanning and scopes runtime tokens to the minimum access needed for each phase. Organization discovery and per-target scanning use the same organization scan App credentials to mint distinct short-lived installation tokens; dashboard publication uses its caller-scoped `GITHUB_TOKEN`.
 
 ```text
-trusted pull-request boundary
-  -> base-sourced GitHub Actions workflow
-     GITHUB_TOKEN: contents read
-
 scan planning / selection snapshot
   -> organization scan App
      token: metadata read + contents read
@@ -74,18 +70,6 @@ The dashboard target is fixed to `${{ github.repository }}` and production publi
 
 The reconciliation workflow receives no configured secrets, organization App credential, or target token. Issue operations are sequential, bounded, and retried only for bounded transient/rate-limit failures.
 
-## Trusted merge boundary
-
-`.github/workflows/trusted-boundary.yml` runs from the protected base revision through `pull_request_target`. It checks out the base and candidate separately, compares the complete tracked path/type/mode shape, protects the trusted workflow/validator/preflight sources, and evaluates the candidate with the base validator. Candidate-owned code is not executed.
-
-The job uses only the built-in `GITHUB_TOKEN` with Contents read access. It does not mint another token and does not call the Checks or Commit Status APIs. GitHub Actions' native job check, `Trusted workflow-only boundary`, is the merge signal.
-
-No dedicated GitHub App, Actions environment, App private key, configured merge-boundary secret, or custom attestation result is required.
-
-Configure the default-branch repository ruleset to require the exact `Trusted workflow-only boundary` check, preferably with strict required-status-check behavior. The source is the normal GitHub Actions integration. This deliberately removes the former distinct-App anti-spoofing boundary: a repository writer able to create another GitHub Actions check with the same name is inside the supported personal-ownership trust root. Repository-owner administrative control is therefore part of the security boundary.
-
-The already-merged base policy intentionally rejects ordinary pull requests that modify `.github/workflows/trusted-boundary.yml`, `scripts/preflight.sh`, or `scripts/validate-workflow-boundary.rb`. Changes to those trusted sources, or to the required-check ruleset, are explicit repository-owner break-glass maintenance and require an administrative bypass for the transition itself.
-
 ## Caller contract
 
 The simplest supported caller invokes `organization-dashboard.yml` from a private control repository at a reviewed immutable `segh` revision. The caller job grants the maximum permissions needed by the nested scan/reconcile jobs:
@@ -104,4 +88,4 @@ If the lower-level reusable workflows are composed directly instead, run scan an
 
 `dceoy/segh` is public; production organization state is not. Run scans, selection capture, evidence retention, and dashboard publication only from a private control repository.
 
-Do not place private repository identities, paths, source excerpts, scanner logs, finding details, or secret values in public issues, job summaries, or public artifacts. The trusted pull-request boundary check is public policy metadata only and must not contain organization scan data.
+Do not place private repository identities, paths, source excerpts, scanner logs, finding details, or secret values in public issues, job summaries, or public artifacts.

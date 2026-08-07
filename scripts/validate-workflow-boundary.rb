@@ -8,8 +8,6 @@ ORCHESTRATOR_WORKFLOW = ".github/workflows/organization-dashboard.yml"
 ORGANIZATION_WORKFLOW = ".github/workflows/organization-scan.yml"
 SELECTION_WORKFLOW = ".github/workflows/organization-selection.yml"
 RECONCILE_WORKFLOW = ".github/workflows/dashboard-reconcile.yml"
-VALIDATION_WORKFLOW = ".github/workflows/validation.yml"
-TRUSTED_BOUNDARY_WORKFLOW = ".github/workflows/trusted-boundary.yml"
 
 ALLOWED_REMOTE_ACTIONS = %w[
   actions/checkout
@@ -33,10 +31,6 @@ WRITE_JOB_PERMISSIONS = {
   },
   [RECONCILE_WORKFLOW, "reconcile"] => {
     "actions" => "read", "contents" => "read", "issues" => "write"
-  },
-  [VALIDATION_WORKFLOW, "production-workflow"] => {
-    "actions" => "read", "contents" => "read", "checks" => "read",
-    "issues" => "write", "pull-requests" => "read"
   }
 }.freeze
 
@@ -76,7 +70,7 @@ MINIMUM_SCANNERS = {
 
 GO_COMMAND = %r{
   (?:^|[;&|()\s])
-  (?:["']?(?:\$\(\s*(?:command\s+-v|which)\s+go\s*\)|[^\s;&|()"'`]*\/go|go)["']?)
+  (?:(?:["']?(?:\$\(\s*(?:command\s+-v|which)\s+go\s*\)|[^\s;&|()"\'`]*\/go|go)["']?))
   \s+(?:test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)(?:\s|$)
 }x
 
@@ -183,13 +177,11 @@ Dir.chdir(ROOT) do
     ORGANIZATION_WORKFLOW,
     SELECTION_WORKFLOW,
     RECONCILE_WORKFLOW,
-    VALIDATION_WORKFLOW,
-    TRUSTED_BOUNDARY_WORKFLOW,
     "scripts/preflight.sh",
     "scripts/validate-workflow-boundary.rb"
   ]
   missing = required_files - tracked_files
-  Boundary.fail!(missing.first, "Required trusted product surface is missing.") unless missing.empty?
+  Boundary.fail!(missing.first, "Required workflow-only product surface is missing.") unless missing.empty?
 
   action_files = tracked_files.select do |path|
     path.match?(%r{\A\.github/workflows/.*\.ya?ml\z}) || File.basename(path).match?(/\Aaction\.ya?ml\z/)
@@ -252,71 +244,6 @@ Dir.chdir(ROOT) do
         Boundary.fail!(path, "Every workflow step must be a mapping.") unless step.is_a?(Hash)
         Boundary.action_identity(step["uses"], path) if step.key?("uses")
       end
-    end
-  end
-
-  validation = documents.fetch(VALIDATION_WORKFLOW)
-  validation_jobs = validation.fetch("jobs")
-  candidate_steps = Array(validation_jobs.fetch("workflow-only-boundary")["steps"])
-  candidate_validator = candidate_steps.find { |step| step["name"] == "Reject removed product surfaces" }
-  expected_caller_permissions = WRITE_JOB_PERMISSIONS.fetch([VALIDATION_WORKFLOW, "production-workflow"])
-  unless candidate_validator&.fetch("run", nil) == "ruby scripts/validate-workflow-boundary.rb ." &&
-         validation_jobs.dig("production-workflow", "needs") == "workflow-only-boundary" &&
-         validation_jobs.dig("production-workflow", "uses") == "./.github/workflows/organization-scan.yml" &&
-         validation_jobs.dig("production-workflow", "permissions") == expected_caller_permissions
-    Boundary.fail!(VALIDATION_WORKFLOW, "Candidate validation must retain the boundary gate and exact reusable-workflow caller permissions before the production-path matrix.")
-  end
-
-  trusted = documents.fetch(TRUSTED_BOUNDARY_WORKFLOW)
-  trusted_source = file_contents.fetch(TRUSTED_BOUNDARY_WORKFLOW)
-  unless trusted_source.match?(/\bpull_request_target:\s*#/) && trusted_source.match?(/\n\s+branches:\s*\n\s+- main\s*\n/)
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must remain base-sourced from pull_request_target on main.")
-  end
-
-  trusted_job = trusted.fetch("jobs").fetch("trusted-workflow-only-boundary")
-  unless !trusted_job.key?("environment") && trusted_job["permissions"] == {"contents" => "read"}
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must use only contents:read without an Actions environment.")
-  end
-  if trusted_source.include?("SEGH_BOUNDARY_APP_") || trusted_job.key?("environment")
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The dedicated boundary App credentials and environment are outside the simplified trust contract.")
-  end
-
-  trusted_steps = Array(trusted_job["steps"])
-  if trusted_steps.any? { |step| step["id"] == "boundary-token" || step.fetch("uses", "").start_with?("actions/create-github-app-token@") }
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must not mint a dedicated App token.")
-  end
-  if trusted_steps.any? { |step| step["id"] == "boundary-result" || step.fetch("run", "").match?(/\bgh\s+api\b/) }
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must rely on its native GitHub Actions job check without publishing a separate result.")
-  end
-
-  trusted_checkout = trusted_steps.find { |step| step["id"] == "trusted-checkout" }
-  candidate_checkout = trusted_steps.find { |step| step["id"] == "candidate-checkout" }
-  unless trusted_checkout&.dig("with", "ref") == "${{ github.event.pull_request.base.sha }}" &&
-         trusted_checkout&.dig("with", "persist-credentials") == false &&
-         candidate_checkout&.dig("with", "repository") == "${{ github.event.pull_request.head.repo.full_name }}" &&
-         candidate_checkout&.dig("with", "ref") == "${{ github.event.pull_request.head.sha }}" &&
-         candidate_checkout&.dig("with", "persist-credentials") == false &&
-         candidate_checkout&.dig("with", "allow-unsafe-pr-checkout") == true
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted and candidate revisions must remain explicitly separated with no persisted checkout credentials.")
-  end
-
-  policy_step = trusted_steps.find { |step| step["id"] == "trusted-policy" }
-  policy_run = policy_step&.fetch("run", "")
-  %w[
-    .github/workflows/trusted-boundary.yml
-    scripts/preflight.sh
-    scripts/validate-workflow-boundary.rb
-  ].each do |path|
-    unless policy_run.include?("compare_trusted_entry #{path}")
-      Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted policy source #{path} must be immutable to ordinary pull requests.")
-    end
-  end
-  unless policy_run.include?("tracked_tree_shape(\"_candidate\") == tracked_tree_shape(\"_trusted\")")
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must compare the complete base/candidate path, type, and mode shape.")
-  end
-  [ORCHESTRATOR_WORKFLOW, ORGANIZATION_WORKFLOW, SELECTION_WORKFLOW, RECONCILE_WORKFLOW, VALIDATION_WORKFLOW].each do |path|
-    unless policy_run.include?("\"#{path}\"")
-      Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Security-sensitive workflow #{path} must remain in the base-sourced structural comparison.")
     end
   end
 
