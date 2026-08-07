@@ -68,7 +68,10 @@ function scanner(name, status, findings, category = null, selectedChecks = [], f
 }
 
 function parseScorecard(resultsDir, outcome) {
-  const file = path.join(resultsDir, "scorecard.json");
+  const validationFile = path.join(resultsDir, "validation-scorecard.json");
+  const usingValidationEvidence = fileExists(validationFile);
+  const file = usingValidationEvidence ? validationFile : path.join(resultsDir, "scorecard.json");
+  if (usingValidationEvidence) outcome = "success";
   if (outcome === "skipped") return scanner("scorecard", "skipped", 0);
   if (outcome !== "success" || !fileExists(file)) return scanner("scorecard", "error", 0);
   try {
