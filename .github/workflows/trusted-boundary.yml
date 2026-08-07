@@ -29,12 +29,14 @@ jobs:
       - name: Check out candidate revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
           path: _candidate
           persist-credentials: false
           lfs: false
           submodules: false
-      - name: Protect the trusted policy source
+          allow-unsafe-pr-checkout: true
+      - name: Protect trusted policy sources and command surface
         shell: bash
         run: |
           set -euo pipefail
@@ -50,5 +52,31 @@ jobs:
           }
           compare_trusted_entry .github/workflows/trusted-boundary.yml
           compare_trusted_entry scripts/validate-workflow-boundary.rb
+
+          ruby <<'RUBY'
+          require "yaml"
+
+          def target_planner(root)
+            path = ".github/workflows/organization-scan.yml"
+            content = IO.popen(["git", "-C", root, "show", "HEAD:#{path}"], &:read)
+            abort("::error file=#{path}::Unable to read the tracked workflow blob.") unless $?.success?
+
+            workflow = YAML.safe_load(content, aliases: false, filename: path)
+            steps = workflow.dig("jobs", "plan", "steps")
+            target = steps.find { |step| step.is_a?(Hash) && step["id"] == "targets" } if steps.is_a?(Array)
+            run = target && target["run"]
+            abort("::error file=#{path}::The immutable target-planning command is missing.") unless run.is_a?(String)
+
+            run
+          rescue Psych::Exception => e
+            abort("::error file=#{path}::Invalid YAML: #{e.message.lines.first&.strip}")
+          end
+
+          trusted = target_planner("_trusted")
+          candidate = target_planner("_candidate")
+          unless candidate == trusted
+            abort("::error file=.github/workflows/organization-scan.yml::The target-planner command must match the trusted base implementation.")
+          end
+          RUBY
       - name: Validate candidate product boundary
         run: ruby _trusted/scripts/validate-workflow-boundary.rb _candidate
