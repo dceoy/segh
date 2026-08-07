@@ -5,6 +5,7 @@ const path = require("node:path");
 
 const MANAGED = /<!-- segh-dashboard: v1 -->/;
 const REPOSITORY_ID = /<!-- segh-repository-id: ([0-9]+) -->/;
+const OWNED_LABEL = /^(?:scan|finding):/;
 const LABELS = Object.freeze({
   "scan:pass": ["1f883d", "Latest security scan passed"],
   "scan:findings": ["d1242f", "Latest security scan has actionable findings"],
@@ -73,7 +74,7 @@ function desiredLabels(summary) {
 }
 
 function mergedLabels(existing, desired) {
-  const unmanaged = labelNames(existing?.labels).filter((name) => !Object.hasOwn(LABELS, name));
+  const unmanaged = labelNames(existing?.labels).filter((name) => !OWNED_LABEL.test(name));
   return [...new Set([...unmanaged, ...desired.labels])].sort();
 }
 
