@@ -8,6 +8,24 @@ fail_if = lambda { |condition, message| errors << message if condition }
 stringify = lambda { |value| JSON.generate(value) }
 false_value = lambda { |value| value == false || value == "false" }
 
+orchestrator_path = ".github/workflows/organization-dashboard.yml"
+orchestrator_source = File.read(orchestrator_path)
+orchestrator = YAML.load_file(orchestrator_path)
+orchestrator_jobs = orchestrator.fetch("jobs")
+
+fail_if.call(orchestrator["permissions"] != {}, "orchestrator top-level permissions must be empty")
+fail_if.call(!orchestrator_source.include?("schedule:"), "orchestrator must provide the weekly schedule")
+fail_if.call(!orchestrator_source.include?("workflow_dispatch:"), "orchestrator must provide manual dispatch")
+fail_if.call(!orchestrator_source.include?("cancel-in-progress: false"), "orchestrator must not cancel an overlapping organization reconciliation")
+fail_if.call(orchestrator_jobs.fetch("scan")["uses"] != "./.github/workflows/organization-scan.yml", "orchestrator scan job must call the trusted source-scan workflow")
+fail_if.call(orchestrator_jobs.fetch("selection")["uses"] != "./.github/workflows/organization-selection.yml", "orchestrator selection job must call the trusted selection workflow")
+final_job = orchestrator_jobs.fetch("reconcile")
+fail_if.call(final_job["uses"] != "./.github/workflows/dashboard-reconcile.yml", "orchestrator must call the trusted final reconciliation workflow")
+fail_if.call(final_job["needs"] != ["scan", "selection"], "final reconciliation must depend on scan and selection")
+fail_if.call(!final_job.fetch("if", "").include?("always()"), "final reconciliation must run after failed scan or selection jobs")
+fail_if.call(stringify.call(final_job).include?("secrets."), "final orchestrator reconciliation job must not pass configured secrets")
+fail_if.call(final_job.dig("with", "scan_result") != "${{ needs.scan.result }}", "orchestrator must pass the source-scan result to stale-state reconciliation")
+
 selection_path = ".github/workflows/organization-selection.yml"
 selection_source = File.read(selection_path)
 selection = YAML.load_file(selection_path)
@@ -16,7 +34,7 @@ selection_text = stringify.call(selection_job)
 
 fail_if.call(selection["permissions"] != {}, "selection workflow top-level permissions must be empty")
 fail_if.call(selection_job.fetch("permissions") != {}, "selection job permissions must be empty")
-fail_if.call(selection_text.include?("issues\":\"write") || selection_text.include?("issues: write"), "selection job must not have issue-write permission")
+fail_if.call(selection_text.include?(%q{"issues":"write"}), "selection job must not have issue-write permission")
 fail_if.call(selection_text.include?("SEGH_DASHBOARD_REPOSITORY"), "selection job must not receive the dashboard target")
 
 selection_token = Array(selection_job["steps"]).find { |step| step["id"] == "app-token" }
