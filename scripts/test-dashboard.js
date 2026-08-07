@@ -13,6 +13,7 @@ for (const file of [
   "test-dashboard-idempotency.js",
   "test-dashboard-renderer.js",
   "test-dashboard-native-output.js",
+  "test-dashboard-reconciliation.js",
 ]) {
   execFileSync(process.execPath, [path.join(__dirname, file)], {stdio: "inherit"});
 }
