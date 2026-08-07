@@ -51,6 +51,7 @@ jobs:
             fi
           }
           compare_trusted_entry .github/workflows/trusted-boundary.yml
+          compare_trusted_entry scripts/preflight.sh
           compare_trusted_entry scripts/validate-workflow-boundary.rb
 
           ruby <<'RUBY'
