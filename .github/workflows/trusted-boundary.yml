@@ -56,26 +56,38 @@ jobs:
           ruby <<'RUBY'
           require "yaml"
 
-          def target_planner(root)
+          def tracked_workflow(root)
             path = ".github/workflows/organization-scan.yml"
             content = IO.popen(["git", "-C", root, "show", "HEAD:#{path}"], &:read)
             abort("::error file=#{path}::Unable to read the tracked workflow blob.") unless $?.success?
 
-            workflow = YAML.safe_load(content, aliases: false, filename: path)
-            steps = workflow.dig("jobs", "plan", "steps")
-            target = steps.find { |step| step.is_a?(Hash) && step["id"] == "targets" } if steps.is_a?(Array)
-            run = target && target["run"]
-            abort("::error file=#{path}::The immutable target-planning command is missing.") unless run.is_a?(String)
-
-            run
+            YAML.safe_load(content, aliases: false, filename: path)
           rescue Psych::Exception => e
             abort("::error file=#{path}::Invalid YAML: #{e.message.lines.first&.strip}")
           end
 
-          trusted = target_planner("_trusted")
-          candidate = target_planner("_candidate")
+          def run_surface(node, path = [], result = {})
+            case node
+            when Hash
+              node.each do |key, value|
+                current = path + [key]
+                if key == "run"
+                  abort("::error file=.github/workflows/organization-scan.yml::Every run node must be a string.") unless value.is_a?(String)
+                  result[current] = value
+                else
+                  run_surface(value, current, result)
+                end
+              end
+            when Array
+              node.each_with_index { |value, index| run_surface(value, path + [index], result) }
+            end
+            result
+          end
+
+          trusted = run_surface(tracked_workflow("_trusted"))
+          candidate = run_surface(tracked_workflow("_candidate"))
           unless candidate == trusted
-            abort("::error file=.github/workflows/organization-scan.yml::The target-planner command must match the trusted base implementation.")
+            abort("::error file=.github/workflows/organization-scan.yml::The executable command surface must match the trusted base implementation.")
           end
           RUBY
       - name: Validate candidate product boundary
