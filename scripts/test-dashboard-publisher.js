@@ -92,5 +92,19 @@ const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "segh-publisher-test-")
   assert.equal(github.comments.length, 1, "cross-run retry must reuse the persisted transition event");
   assert.match(github.issues[0].body, /segh-overall-status: findings/);
   assert.match(github.issues[0].body, /actions\/runs\/789/);
+
+  root = temp(); files = input(root, summary()); github = new GitHub();
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  fs.writeFileSync(files.planPath, '{"include":[]}\n');
+  fs.rmSync(files.summariesPath, {recursive: true, force: true});
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  assert.equal(github.issues.length, 1, "empty selection must retire rather than create dashboards");
+  assert.equal(github.issues[0].state, "closed");
+  assert.ok(github.issues[0].labels.some(({name}) => name === "scan:retired"));
+  assert.match(github.issues[0].body, /segh-overall-status: retired/);
+  assert.equal(github.comments.length, 1, "retirement must record one state transition");
+  await publish({github, context, core, ...files, repositoryPrivate: true});
+  assert.equal(github.comments.length, 1, "repeated empty selections must converge to a no-op");
+
   console.log("publisher hardening tests passed");
 })().catch((error) => { console.error(error.stack || error); process.exit(1); });
