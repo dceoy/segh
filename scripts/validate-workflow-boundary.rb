@@ -8,6 +8,7 @@ ORCHESTRATOR_WORKFLOW = ".github/workflows/organization-dashboard.yml"
 ORGANIZATION_WORKFLOW = ".github/workflows/organization-scan.yml"
 SELECTION_WORKFLOW = ".github/workflows/organization-selection.yml"
 RECONCILE_WORKFLOW = ".github/workflows/dashboard-reconcile.yml"
+VALIDATION_WORKFLOW = ".github/workflows/validation.yml"
 
 ALLOWED_REMOTE_ACTIONS = %w[
   actions/checkout
@@ -31,6 +32,10 @@ WRITE_JOB_PERMISSIONS = {
   },
   [RECONCILE_WORKFLOW, "reconcile"] => {
     "actions" => "read", "contents" => "read", "issues" => "write"
+  },
+  [VALIDATION_WORKFLOW, "production-workflow"] => {
+    "actions" => "read", "contents" => "read", "checks" => "read",
+    "issues" => "write", "pull-requests" => "read"
   }
 }.freeze
 
