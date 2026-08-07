@@ -94,7 +94,8 @@ ALTERNATE_NETWORK_CLIENT = %r{
     \bNet::HTTP\b | \bnet/http\b | \bOpenURI\b | \bURI\.(?:open|parse)\b |
     \b(?:import|from)\s+(?:requests|urllib3?|httpx|aiohttp)\b |
     \b(?:requests|urllib3?|httpx|aiohttp)\s*\.\s*(?:get|post|put|patch|delete|request|Session)\b |
-    \b(?:axios|node-fetch)\b | \bfetch\s*\( |
+    \b(?:axios|node-fetch)\b |
+    \bnode(?:js)?\b[^\n;|&]*\bfetch\s*\( |
     https?://(?:api\.)?github\.com | \bapi\.github\.com\b
   )
 }x
