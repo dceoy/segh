@@ -71,6 +71,11 @@ function cleanSummary(entry, commit = "a".repeat(40), runId = 101) {
     scanners: [
       {name: "scorecard", status: "pass", findings: 0, selected_checks: [{name: "Pinned-Dependencies", score: 10}]},
       {name: "zizmor", status: "pass", findings: 0, category: "actions"},
+      {name: "actionlint", status: "pass", findings: 0, category: "actions"},
+      {name: "shellcheck", status: "pass", findings: 0, category: "shell"},
+      {name: "trivy-vulnerability", status: "pass", findings: 0, category: "vulnerability"},
+      {name: "trivy-secret", status: "pass", findings: 0, category: "secret"},
+      {name: "trivy-misconfiguration", status: "pass", findings: 0, category: "misconfiguration"},
     ],
     findings: {total: 0, categories: [], fingerprint: sha256(`clean:${entry.id}`)},
     remediation_categories: [],
