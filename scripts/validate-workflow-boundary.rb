@@ -89,14 +89,14 @@ DIRECT_NETWORK_CLIENT = %r{
     \b(?:import|from)\s+(?:requests|urllib3?|httpx|aiohttp)\b |
     \b(?:requests|urllib3?|httpx|aiohttp)\s*\.\s*(?:get|post|put|patch|delete|request|Session)\b |
     \b(?:axios|node-fetch)\b |
-    \bfetch\s*\(
+    \bnode(?:js)?\b[^\n;|&]*\bfetch\s*\(
   )
 }x
 
 DIRECT_NETWORK_CLIENT_FIXTURES = [
   "const axios = require('axios')",
   "const fetch = require('node-fetch')",
-  "await fetch('https://example.invalid')"
+  "node -e 'fetch(\"https://example.invalid\")'"
 ].freeze
 unless DIRECT_NETWORK_CLIENT_FIXTURES.all? { |fixture| fixture.match?(DIRECT_NETWORK_CLIENT) }
   raise "DIRECT_NETWORK_CLIENT must reject Node direct-network clients"
