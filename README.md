@@ -88,6 +88,7 @@ jobs:
     with:
       repository_limit: "50"
       max_parallel: "4"
+      dashboard_publication: deferred
     secrets:
       SEGH_ORG_SCAN_APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
       SEGH_ORG_SCAN_APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
@@ -116,7 +117,7 @@ jobs:
       scan_result: ${{ needs.scan.result }}
 ```
 
-The scanner workflow continues to publish normal per-repository dashboard updates after its matrix finishes. The final reconciliation workflow is intentionally idempotent: when the normal publication is complete it performs no issue write, while a missing plan, missing summary, failed selection, stale prior result, repository retirement, or identity mismatch is handled fail closed.
+The scanner workflow runs with dashboard publication deferred, so its matrix produces scan artifacts without writing dashboard issues. The final reconciliation workflow is the sole issue writer for this organization-dashboard path; it consumes the scan plan, normalized summaries, and complete selection snapshot, and handles missing inputs, stale prior results, repository retirement, and identity mismatches fail closed.
 
 The default schedule is weekly. The recommended stale threshold is eight days (`192` hours), giving one day of tolerance beyond the normal weekly cadence. Set it between 24 and 720 hours according to the control repository's operating cadence.
 
@@ -176,7 +177,7 @@ Each production matrix job retains `repository-scan-<repository-id>` for 14 days
 - Scorecard, zizmor, actionlint, ShellCheck, and three independent Trivy outputs and logs;
 - `summary.json`, the bounded non-sensitive dashboard input.
 
-A separate `repository-summary-<repository-id>` artifact retains only `summary.json` for one day. The immutable scan plan and complete selection snapshot are likewise retained for one day. The selection snapshot contains only bounded repository identity/class metadata and no source or finding content. Raw evidence remains private and is not a stable public schema.
+A separate `repository-summary-<repository-id>` artifact retains only `summary.json` for 31 days so completed scans remain authoritative freshness evidence across the supported stale window. The immutable scan plan and complete selection snapshot are retained for one day. The selection snapshot contains only bounded repository identity/class metadata and no source or finding content. Raw evidence remains private and is not a stable public schema.
 
 ## Validation
 
