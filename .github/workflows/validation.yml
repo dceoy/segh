@@ -20,6 +20,10 @@ jobs:
           persist-credentials: false
           lfs: false
           submodules: false
+      - name: Install checksum-verified tools
+        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
+        with:
+          aqua_version: v2.62.1
       - name: Validate workflow-only product
         run: ruby scripts/validate-workflow-boundary.rb .
       - name: Validate credential boundaries

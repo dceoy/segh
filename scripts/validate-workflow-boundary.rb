@@ -70,7 +70,7 @@ MINIMUM_SCANNERS = {
 
 GO_COMMAND = %r{
   (?:^|[;&|()\s])
-  (?:(?:["']?(?:\$\(\s*(?:command\s+-v|which)\s+go\s*\)|[^\s;&|()"\'`]*\/go|go)["']?))
+  (?:["']?(?:\$\(\s*(?:command\s+-v|which)\s+go\s*\)|[^\s;&|()"'`]*\/go|go)["']?)
   \s+(?:test|build|vet|install|run|generate|fmt|env|list|mod|work|tool|version)(?:\s|$)
 }x
 
