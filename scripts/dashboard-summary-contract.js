@@ -12,41 +12,43 @@ const SCANNER_STATUS = new Set(["pass", "findings", "incomplete", "error", "skip
 const ARTIFACT_DIRECTORY = /^repository-summary-([0-9]+)$/;
 
 function completeScannerSet(summary) {
-  if (!Array.isArray(summary?.scanners) || summary.scanners.length !== REQUIRED.size) return false;
-  const names = new Set(summary.scanners.map((scanner) => scanner?.name));
-  if (names.size !== REQUIRED.size || [...REQUIRED].some((name) => !names.has(name))) return false;
-  if (summary.scanners.some((scanner) => !SCANNER_STATUS.has(scanner?.status) ||
-      !Number.isSafeInteger(scanner.findings) || scanner.findings < 0 ||
-      (scanner.status === "findings" ? scanner.findings === 0 : scanner.findings !== 0))) return false;
+  const scanners = summary?.scanners;
+  if (!Array.isArray(scanners) || scanners.length !== REQUIRED.size) return false;
 
-  const statuses = summary.scanners.map((scanner) => scanner.status);
-  const totalFindings = summary.scanners.reduce((sum, scanner) => sum + scanner.findings, 0);
-  if (!Number.isSafeInteger(summary?.findings?.total) || summary.findings.total !== totalFindings) return false;
+  const names = new Set();
+  let findings = 0;
+  for (const scanner of scanners) {
+    if (!scanner || !REQUIRED.has(scanner.name) || names.has(scanner.name) || !SCANNER_STATUS.has(scanner.status) ||
+        !Number.isSafeInteger(scanner.findings) || scanner.findings < 0 ||
+        (scanner.status === "findings" ? scanner.findings === 0 : scanner.findings !== 0)) return false;
+    names.add(scanner.name);
+    findings += scanner.findings;
+  }
+  const totalFindings = summary?.findings?.total;
+  if (!Number.isSafeInteger(totalFindings) || findings !== totalFindings) return false;
+
+  const statuses = scanners.map(({status}) => status);
   switch (summary.overall_status) {
     case "pass":
-      return totalFindings === 0 && statuses.every((status) => status === "pass");
+      return statuses.every((status) => status === "pass");
     case "findings":
-      return totalFindings > 0 && statuses.some((status) => status === "findings") &&
-        statuses.every((status) => status === "pass" || status === "findings");
+      return findings > 0 && statuses.includes("findings") && statuses.every((status) => status === "pass" || status === "findings");
     case "incomplete":
-      return statuses.some((status) => status === "incomplete" || status === "skipped") &&
-        statuses.every((status) => status !== "error");
+      return statuses.some((status) => status === "incomplete" || status === "skipped") && !statuses.includes("error");
     case "error":
-      return statuses.some((status) => status === "error") || statuses.every((status) => status === "skipped");
+      return statuses.includes("error") || statuses.every((status) => status === "skipped");
     default:
       return false;
   }
 }
 
 function findSummaries(root) {
-  const files = [];
-  if (!fs.existsSync(root)) return files;
-  for (const entry of fs.readdirSync(root, {withFileTypes: true})) {
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root, {withFileTypes: true}).flatMap((entry) => {
     const file = path.join(root, entry.name);
-    if (entry.isDirectory()) files.push(...findSummaries(file));
-    else if (entry.isFile() && entry.name === "summary.json") files.push(file);
-  }
-  return files;
+    if (entry.isDirectory()) return findSummaries(file);
+    return entry.isFile() && entry.name === "summary.json" ? [file] : [];
+  });
 }
 
 function artifactRepositoryId(file) {
@@ -67,13 +69,11 @@ function hardenedSummaryCopy(root) {
       const summary = JSON.parse(fs.readFileSync(file, "utf8"));
       const artifactId = artifactRepositoryId(file);
       const payloadId = summary?.repository?.id;
-      const identityMatches = artifactId === null ||
-        (Number.isSafeInteger(payloadId) && payloadId > 0 && payloadId === artifactId);
-      if (!identityMatches || !completeScannerSet(summary)) {
+      if ((artifactId !== null && artifactId !== payloadId) || !completeScannerSet(summary)) {
         fs.writeFileSync(file, '{"schema_version":0}\n', {mode: 0o600});
       }
     } catch {
-      // The core publisher converts malformed JSON into scan:error.
+      // The publisher converts malformed JSON into scan:error.
     }
   }
   return copy;
