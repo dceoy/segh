@@ -206,7 +206,7 @@ test("publisher reconciles ambiguous issue creation without duplicates", async (
   }
 });
 
-test("publisher closes an existing dashboard after a passing scan", async () => {
+test("publisher closes an existing dashboard after a passing scan and preserves unmanaged labels", async () => {
   const root = tempDir();
   try {
     const summaries = path.join(root, "summaries");
@@ -229,7 +229,7 @@ test("publisher closes an existing dashboard after a passing scan", async () => 
       title: "[Security dashboard] example/repo",
       body: "<!-- segh-dashboard: v1 -->\n<!-- segh-repository-id: 7 -->\nold\n",
       state: "open",
-      labels: [{name: "scan:findings"}],
+      labels: [{name: "scan:findings"}, {name: "owner:security"}],
     }]);
     await publish({
       github,
@@ -241,7 +241,7 @@ test("publisher closes an existing dashboard after a passing scan", async () => 
     });
     assert.equal(github.calls.updates.length, 1);
     assert.equal(github.calls.updates[0].state, "closed");
-    assert.deepEqual(github.calls.updates[0].labels, ["scan:pass"]);
+    assert.deepEqual(github.calls.updates[0].labels, ["owner:security", "scan:pass"]);
   } finally {
     fs.rmSync(root, {recursive: true, force: true});
   }
