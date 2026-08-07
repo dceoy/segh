@@ -62,7 +62,7 @@ ALLOWED_RESULTS = %w[
   results/trivy-secret.log
   results/trivy-vulnerability.json
   results/trivy-vulnerability.log
-  results/zizmor.jsonl
+  results/zizmor.json
   results/zizmor.log
 ].freeze
 
