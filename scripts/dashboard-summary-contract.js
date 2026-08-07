@@ -9,6 +9,7 @@ const REQUIRED = new Set([
   "trivy-vulnerability", "trivy-secret", "trivy-misconfiguration",
 ]);
 const SCANNER_STATUS = new Set(["pass", "findings", "incomplete", "error", "skipped"]);
+const ARTIFACT_DIRECTORY = /^repository-summary-([0-9]+)$/;
 
 function completeScannerSet(summary) {
   if (!Array.isArray(summary?.scanners) || summary.scanners.length !== REQUIRED.size) return false;
@@ -48,12 +49,27 @@ function findSummaries(root) {
   return files;
 }
 
+function artifactRepositoryId(file) {
+  for (let directory = path.dirname(file); directory && directory !== path.dirname(directory); directory = path.dirname(directory)) {
+    const match = path.basename(directory).match(ARTIFACT_DIRECTORY);
+    if (!match) continue;
+    const id = Number.parseInt(match[1], 10);
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  }
+  return null;
+}
+
 function hardenedSummaryCopy(root) {
   const copy = fs.mkdtempSync(path.join(os.tmpdir(), "segh-dashboard-summaries-"));
   if (fs.existsSync(root)) fs.cpSync(root, copy, {recursive: true});
   for (const file of findSummaries(copy)) {
     try {
-      if (!completeScannerSet(JSON.parse(fs.readFileSync(file, "utf8")))) {
+      const summary = JSON.parse(fs.readFileSync(file, "utf8"));
+      const artifactId = artifactRepositoryId(file);
+      const payloadId = summary?.repository?.id;
+      const identityMatches = artifactId === null ||
+        (Number.isSafeInteger(payloadId) && payloadId > 0 && payloadId === artifactId);
+      if (!identityMatches || !completeScannerSet(summary)) {
         fs.writeFileSync(file, '{"schema_version":0}\n', {mode: 0o600});
       }
     } catch {
@@ -63,4 +79,4 @@ function hardenedSummaryCopy(root) {
   return copy;
 }
 
-module.exports = {completeScannerSet, hardenedSummaryCopy};
+module.exports = {artifactRepositoryId, completeScannerSet, hardenedSummaryCopy};
