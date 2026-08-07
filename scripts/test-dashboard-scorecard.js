@@ -54,6 +54,7 @@ assert.equal(findings.overall_status, "findings");
 assert.equal(findings.scanners[0].status, "findings");
 assert.equal(findings.scanners[0].findings, 1);
 assert.deepEqual(findings.findings.categories, ["scorecard"]);
+assert.deepEqual(findings.remediation_categories, ["Harden GitHub Actions workflows and pin trusted dependencies."]);
 const firstFingerprint = findings.findings.fingerprint;
 
 writeJson(path.join(root, "scorecard.json"), {
@@ -64,6 +65,7 @@ writeJson(path.join(root, "scorecard.json"), {
 });
 const changed = buildSummary({resultsDir: root, env});
 assert.notEqual(changed.findings.fingerprint, firstFingerprint);
+assert.deepEqual(changed.remediation_categories, ["Harden GitHub Actions workflows and pin trusted dependencies."]);
 
 writeJson(path.join(root, "scorecard.json"), {
   checks: [
@@ -74,5 +76,6 @@ writeJson(path.join(root, "scorecard.json"), {
 const pass = buildSummary({resultsDir: root, env});
 assert.equal(pass.overall_status, "pass");
 assert.equal(pass.scanners[0].findings, 0);
+assert.deepEqual(pass.remediation_categories, []);
 
 console.log("scorecard dashboard policy tests passed");
