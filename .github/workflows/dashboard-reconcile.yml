@@ -78,7 +78,8 @@ jobs:
         with:
           retries: 3
           script: |
-            const reconcile = require('./_trusted/scripts/reconcile-organization-dashboard.js');
+            // publish-dashboard.js gates freshness before delegating to reconcile-organization-dashboard.js.
+            const reconcile = require('./_trusted/scripts/publish-dashboard.js').reconcileOrganization;
             await reconcile({
               github,
               context,
