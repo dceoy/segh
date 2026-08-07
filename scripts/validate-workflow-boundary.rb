@@ -119,6 +119,7 @@ WRITE_JOB_PERMISSIONS = {
 }.freeze
 
 ALLOWED_RESULTS = %w[
+  results
   results/actionlint.jsonl
   results/actionlint.log
   results/preflight.txt
@@ -170,7 +171,7 @@ DIRECT_NETWORK_CLIENT = %r{
   )
 }x
 
-RESULT_PATH = %r{(?<![0-9A-Za-z_.-])results(?:/[0-9A-Za-z_.-]+)+}
+RESULT_PATH = %r{(?<![0-9A-Za-z_.-])results(?:(?:/[0-9A-Za-z_.-]+)+|(?=\s|$))}
 VERSION_PATTERN = /\Av?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\z/
 
 module Boundary
