@@ -233,9 +233,10 @@ Dir.chdir(ROOT) do
   executable_surfaces.each do |path, node_path, command|
     Boundary.fail!(path, "Executable surface #{node_path.join("/")} invokes the removed Go toolchain.") if command.match?(GO_COMMAND)
 
-    step = documents.fetch(path).dig(*node_path[0...-1]) if path == ORGANIZATION_WORKFLOW && node_path.last == "run"
-    trusted_target_planner = step.is_a?(Hash) && step["id"] == "targets"
-    if !trusted_target_planner && command.match?(ALTERNATE_NETWORK_CLIENT)
+    # The base-sourced trusted workflow compares every organization workflow run node exactly.
+    next if path == ORGANIZATION_WORKFLOW
+
+    if command.match?(ALTERNATE_NETWORK_CLIENT)
       Boundary.fail!(path, "Executable surface #{node_path.join("/")} uses an unapproved network client.")
     end
   end
