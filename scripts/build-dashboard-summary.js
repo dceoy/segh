@@ -189,6 +189,7 @@ function remediationCategories(scanners) {
   for (const item of scanners) {
     if (item.status !== "findings") continue;
     switch (item.category) {
+      case "scorecard": categories.add("Harden GitHub Actions workflows and pin trusted dependencies."); break;
       case "actions": categories.add("Harden GitHub Actions workflows and pin trusted dependencies."); break;
       case "shell": categories.add("Correct shell diagnostics and unsafe scripting patterns."); break;
       case "vulnerability": categories.add("Update vulnerable dependencies or base components."); break;
