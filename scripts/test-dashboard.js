@@ -99,16 +99,29 @@ test("summary distinguishes incomplete preflight from scanner runtime error", ()
   }
 });
 
-function mockGitHub(existing = [], {failUpdate = false} = {}) {
+function mockGitHub(existing = [], {failCreateAmbiguously = false, failUpdate = false} = {}) {
   const calls = {labels: [], creates: [], updates: []};
+  let ambiguousCreate = failCreateAmbiguously;
   return {
     calls,
+    issues: existing,
     paginate: async () => existing,
     rest: {
       issues: {
         listForRepo: async () => ({data: existing}),
         createLabel: async (params) => { calls.labels.push(params.name); return {data: params}; },
-        create: async (params) => { calls.creates.push(params); return {data: {number: 99, ...params, state: "open"}}; },
+        create: async (params) => {
+          calls.creates.push(params);
+          const issue = {number: 99, ...params, state: "open"};
+          existing.push(issue);
+          if (ambiguousCreate) {
+            ambiguousCreate = false;
+            const error = new Error("ambiguous create failure");
+            error.status = 502;
+            throw error;
+          }
+          return {data: issue};
+        },
         update: async (params) => {
           calls.updates.push(params);
           if (failUpdate) throw new Error("definitive update failure");
@@ -149,8 +162,45 @@ test("publisher creates one current-run issue without reconciliation machinery",
     });
     assert.deepEqual(results, [{repository_id: 7, status: "findings", action: "created"}]);
     assert.equal(github.calls.creates.length, 1);
+    assert.equal(github.calls.creates[0].request.retries, 0);
     assert.deepEqual(github.calls.creates[0].labels.sort(), ["finding:actions", "scan:findings"]);
     assert.match(github.calls.creates[0].body, /Scanner results/);
+  } finally {
+    fs.rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test("publisher reconciles ambiguous issue creation without duplicates", async () => {
+  const root = tempDir();
+  try {
+    const summaries = path.join(root, "summaries", "repository-summary-7");
+    writeJson(path.join(root, "matrix.json"), {include: [{
+      id: 7,
+      full_name: "example/repo",
+      visibility: "private",
+      default_branch: "main",
+      commit_sha: "a".repeat(40),
+    }]});
+    writeJson(path.join(summaries, "summary.json"), {
+      repository: {id: 7, full_name: "example/repo", commit_sha: "a".repeat(40)},
+      scan: {evidence_artifact: "repository-scan-7"},
+      overall_status: "findings",
+      scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}],
+    });
+    const github = mockGitHub([], {failCreateAmbiguously: true});
+    const results = await publish({
+      github,
+      core: {info() {}, warning() {}},
+      context: {repo: {owner: "control", repo: "private"}, runId: 126},
+      planPath: path.join(root, "matrix.json"),
+      summariesPath: path.join(root, "summaries"),
+      repositoryPrivate: "true",
+    });
+    assert.deepEqual(results, [{repository_id: 7, status: "findings", action: "created"}]);
+    assert.equal(github.calls.creates.length, 1);
+    assert.equal(github.calls.creates[0].request.retries, 0);
+    assert.equal(github.issues.length, 1);
+    assert.equal(github.issues[0].number, 99);
   } finally {
     fs.rmSync(root, {recursive: true, force: true});
   }
