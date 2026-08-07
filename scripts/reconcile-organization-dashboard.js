@@ -1,7 +1,6 @@
 "use strict";
 
 const fs = require("node:fs");
-const path = require("node:path");
 const publisher = require("./publish-dashboard.js");
 const {idempotentGitHub} = require("./dashboard-idempotent-github.js");
 const {hardenedSummaryCopy} = require("./dashboard-summary-contract.js");
@@ -369,9 +368,11 @@ async function reconcile(options) {
         const target = targetById.get(selected.id);
         let desired;
         if (!target) {
+          if (completeness === "complete") completeness = "plan-incomplete";
           desired = renderSelectionError(selected, issue, options.context,
             planError ? `immutable scan plan is invalid: ${safeReason(planError.message)}` : "immutable scan target is missing from the current run");
         } else if (!planMatchesSelection(target, selected)) {
+          completeness = "identity-mismatch";
           desired = renderSelectionError(selected, issue, options.context, "selection identity does not match the immutable scan plan");
         } else {
           desired = dashboard.renderIssue(summaries.get(selected.id), issue);
@@ -453,15 +454,16 @@ async function reconcile(options) {
   const summary = await writeOrganizationSummary(options.core, results, completeness);
   const failed = summary.actions.failed;
   const incompleteInputs = Boolean(selectionError || planError || !selection || !targets);
-  if (failed > 0 || incompleteInputs || completeness === "identity-mismatch") {
+  if (failed > 0 || incompleteInputs || completeness !== "complete") {
     const reasons = [];
     if (failed > 0) reasons.push(`${failed} publication operation(s) failed`);
     if (selectionError) reasons.push(`selection snapshot is invalid: ${safeReason(selectionError.message)}`);
     else if (!selection) reasons.push("selection snapshot is unavailable");
     if (planError) reasons.push(`scan plan is invalid: ${safeReason(planError.message)}`);
     else if (!targets) reasons.push("scan plan is unavailable");
+    if (completeness === "plan-incomplete") reasons.push("at least one active App-selected repository is missing from the immutable scan plan");
     if (completeness === "identity-mismatch") reasons.push("selection and scan plan identities disagree");
-    throw new Error(reasons.join("; "));
+    throw new Error(reasons.join("; ") || `organization reconciliation is incomplete: ${completeness}`);
   }
 
   return results;
