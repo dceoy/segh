@@ -63,6 +63,7 @@ jobs:
     with:
       repository_limit: ${{ inputs.repository_limit || '50' }}
       max_parallel: ${{ inputs.max_parallel || '4' }}
+      dashboard_publication: deferred
     secrets:
       SEGH_ORG_SCAN_APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
       SEGH_ORG_SCAN_APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}

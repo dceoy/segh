@@ -49,7 +49,7 @@ function target(entry, commit = "a".repeat(40)) {
   };
 }
 
-function cleanSummary(entry, commit = "a".repeat(40), runId = 101) {
+function cleanSummary(entry, commit = "a".repeat(40), runId = 101, timestamp = "2026-08-07T00:00:00.000Z") {
   return {
     schema_version: 1,
     repository: {
@@ -60,7 +60,7 @@ function cleanSummary(entry, commit = "a".repeat(40), runId = 101) {
       commit_sha: commit,
     },
     scan: {
-      timestamp: "2026-08-07T00:00:00.000Z",
+      timestamp,
       workflow_run_id: runId,
       workflow_run_attempt: 1,
       workflow_repository: "control/private",
@@ -87,9 +87,13 @@ class FakeGitHub {
     this.labels = [];
     this.issues = [];
     this.comments = [];
+    this.artifacts = [];
     this.calls = [];
     this.nextNumber = 1;
     this.rest = {
+      actions: {
+        listArtifactsForRepo: async () => ({data: {total_count: this.artifacts.length, artifacts: this.artifacts}}),
+      },
       issues: {
         listLabelsForRepo: async () => ({data: this.labels}),
         createLabel: async (params) => {
@@ -275,21 +279,141 @@ async function testFailedRunInvalidatesPassingDashboard() {
   assert.ok(github.comments.length >= 1, "pass-to-error transition must append bounded history");
 }
 
+async function testRecentArtifactPreventsFalseStaleAfterUnchangedScans() {
+  const root = tempDir();
+  const active = selected(123, "project");
+  const oldSummary = cleanSummary(active, "a".repeat(40), 401, "2026-07-01T00:00:00.000Z");
+  let files = input(root, [active], [target(active)], [oldSummary]);
+  const github = new FakeGitHub();
+  const context = {repo: {owner: "control", repo: "private"}, runId: 401, runAttempt: 1};
+
+  await reconcile({
+    github,
+    context,
+    core: fakeCore(),
+    repositoryPrivate: true,
+    staleAfterHours: "192",
+    scanResult: "success",
+    selectionAvailable: true,
+    planAvailable: true,
+    summariesAvailable: true,
+    ...files,
+  });
+  assert.equal(github.issues[0].state, "closed");
+  assert.ok(github.issues[0].body.includes("2026-07-01T00:00:00.000Z"));
+
+  files = input(root, [active], [target(active)], [cleanSummary(active, "a".repeat(40), 402, new Date().toISOString())]);
+  github.calls = [];
+  const unchanged = await reconcile({
+    github,
+    context: {...context, runId: 402},
+    core: fakeCore(),
+    repositoryPrivate: true,
+    staleAfterHours: "192",
+    scanResult: "success",
+    selectionAvailable: true,
+    planAvailable: true,
+    summariesAvailable: true,
+    ...files,
+  });
+  assert.deepEqual(unchanged, [{repository_id: 123, status: "pass", action: "unchanged"}]);
+  assert.equal(github.calls.length, 0, "unchanged successful scans must not write the issue");
+  assert.ok(github.issues[0].body.includes("2026-07-01T00:00:00.000Z"), "no-op publication keeps the old rendered scan timestamp");
+
+  github.artifacts = [{name: "repository-summary-123", created_at: new Date().toISOString(), expired: false}];
+  github.calls = [];
+  await assert.rejects(() => reconcile({
+    github,
+    context: {...context, runId: 403},
+    core: fakeCore(),
+    repositoryPrivate: true,
+    staleAfterHours: "192",
+    scanResult: "success",
+    selectionAvailable: false,
+    planAvailable: false,
+    summariesAvailable: false,
+    selectionPath: path.join(root, "missing-selection.json"),
+    planPath: path.join(root, "missing-plan.json"),
+    summariesPath: path.join(root, "missing-summaries"),
+  }), /selection snapshot is unavailable/);
+
+  assert.equal(github.issues[0].state, "closed", "recent immutable scan artifacts must prevent false stale promotion");
+  assert.ok(github.issues[0].labels.some((label) => label.name === "scan:pass"));
+  assert.equal(github.calls.length, 0, "freshness fallback must not mutate a still-current dashboard");
+}
+
+async function testFailedSummaryDownloadFailsClosed() {
+  const root = tempDir();
+  const active = selected(123, "project");
+  const files = input(root, [active], [target(active)], []);
+  const github = new FakeGitHub();
+  const context = {repo: {owner: "control", repo: "private"}, runId: 501, runAttempt: 1};
+
+  await assert.rejects(() => reconcile({
+    github,
+    context,
+    core: fakeCore(),
+    repositoryPrivate: true,
+    staleAfterHours: "192",
+    scanResult: "success",
+    selectionAvailable: true,
+    planAvailable: true,
+    summariesAvailable: false,
+    ...files,
+  }), /normalized summary artifacts are unavailable/);
+
+  assert.equal(github.issues.length, 1);
+  assert.equal(github.issues[0].state, "open");
+  assert.ok(github.issues[0].labels.some((label) => label.name === "scan:error"));
+}
+
+async function testPartialSummaryDownloadFailsClosed() {
+  const root = tempDir();
+  const first = selected(123, "first");
+  const second = selected(456, "second");
+  const files = input(root, [first, second], [target(first), target(second)], [cleanSummary(first)]);
+  const github = new FakeGitHub();
+  const context = {repo: {owner: "control", repo: "private"}, runId: 502, runAttempt: 1};
+
+  await assert.rejects(() => reconcile({
+    github,
+    context,
+    core: fakeCore(),
+    repositoryPrivate: true,
+    staleAfterHours: "192",
+    scanResult: "success",
+    selectionAvailable: true,
+    planAvailable: true,
+    summariesAvailable: true,
+    ...files,
+  }), /normalized summary artifacts are incomplete/);
+
+  assert.equal(github.issues.length, 2);
+  const firstIssue = github.issues.find((issue) => issue.title.endsWith("example/first"));
+  const secondIssue = github.issues.find((issue) => issue.title.endsWith("example/second"));
+  assert.equal(firstIssue.state, "closed");
+  assert.equal(secondIssue.state, "open");
+  assert.ok(secondIssue.labels.some((label) => label.name === "scan:error"));
+}
+
 async function testSelectionValidation() {
   const root = tempDir();
   const file = path.join(root, "selection.json");
   writeJson(file, {repositories: [selected(1, "one"), selected(1, "duplicate")]});
   assert.throws(() => reconcile._internal.loadSelection(file), /duplicate repository id/);
 
-  const staleIssue = {body: "- **Scan timestamp:** 2026-08-01T00:00:00.000Z\n"};
-  assert.equal(reconcile._internal.isStale(staleIssue, new Date("2026-08-10T00:00:00Z"), 192), true);
-  assert.equal(reconcile._internal.isStale(staleIssue, new Date("2026-08-02T00:00:00Z"), 192), false);
+  const timestamp = Date.parse("2026-08-01T00:00:00.000Z");
+  assert.equal(reconcile._internal.isStale(timestamp, new Date("2026-08-10T00:00:00Z"), 192), true);
+  assert.equal(reconcile._internal.isStale(timestamp, new Date("2026-08-02T00:00:00Z"), 192), false);
 }
 
 (async () => {
   await testCompleteReconciliation();
   await testMissingPlanFailsClosed();
   await testFailedRunInvalidatesPassingDashboard();
+  await testRecentArtifactPreventsFalseStaleAfterUnchangedScans();
+  await testFailedSummaryDownloadFailsClosed();
+  await testPartialSummaryDownloadFailsClosed();
   await testSelectionValidation();
   process.stdout.write("organization dashboard reconciliation tests passed\n");
 })().catch((error) => {

@@ -17,7 +17,9 @@ fail_if.call(orchestrator["permissions"] != {}, "orchestrator top-level permissi
 fail_if.call(!orchestrator_source.include?("schedule:"), "orchestrator must provide the weekly schedule")
 fail_if.call(!orchestrator_source.include?("workflow_dispatch:"), "orchestrator must provide manual dispatch")
 fail_if.call(!orchestrator_source.include?("cancel-in-progress: false"), "orchestrator must not cancel an overlapping organization reconciliation")
-fail_if.call(orchestrator_jobs.fetch("scan")["uses"] != "./.github/workflows/organization-scan.yml", "orchestrator scan job must call the trusted source-scan workflow")
+scan_job = orchestrator_jobs.fetch("scan")
+fail_if.call(scan_job["uses"] != "./.github/workflows/organization-scan.yml", "orchestrator scan job must call the trusted source-scan workflow")
+fail_if.call(scan_job.dig("with", "dashboard_publication") != "deferred", "orchestrator must defer source-scan issue publication to final reconciliation")
 fail_if.call(orchestrator_jobs.fetch("selection")["uses"] != "./.github/workflows/organization-selection.yml", "orchestrator selection job must call the trusted selection workflow")
 final_job = orchestrator_jobs.fetch("reconcile")
 fail_if.call(final_job["uses"] != "./.github/workflows/dashboard-reconcile.yml", "orchestrator must call the trusted final reconciliation workflow")
@@ -25,6 +27,17 @@ fail_if.call(final_job["needs"] != ["scan", "selection"], "final reconciliation 
 fail_if.call(!final_job.fetch("if", "").include?("always()"), "final reconciliation must run after failed scan or selection jobs")
 fail_if.call(stringify.call(final_job).include?("secrets."), "final orchestrator reconciliation job must not pass configured secrets")
 fail_if.call(final_job.dig("with", "scan_result") != "${{ needs.scan.result }}", "orchestrator must pass the source-scan result to stale-state reconciliation")
+
+source_scan_path = ".github/workflows/organization-scan.yml"
+source_scan = YAML.load_file(source_scan_path)
+source_scan_jobs = source_scan.fetch("jobs")
+publisher_job = source_scan_jobs.fetch("publish-dashboard")
+fail_if.call(!publisher_job.fetch("if", "").include?("inputs.dashboard_publication != 'deferred'"), "source-scan publisher must honor deferred publication mode")
+summary_artifact = Array(source_scan_jobs.fetch("scan")["steps"]).find { |step| step["id"] == "summary-artifact" }
+fail_if.call(summary_artifact.nil?, "source scan must retain a normalized summary artifact")
+if summary_artifact
+  fail_if.call(summary_artifact.dig("with", "retention-days") != 31, "normalized summary artifacts must outlive the maximum stale threshold")
+end
 
 selection_path = ".github/workflows/organization-selection.yml"
 selection_source = File.read(selection_path)

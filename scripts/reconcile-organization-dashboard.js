@@ -1,9 +1,10 @@
 "use strict";
 
 const fs = require("node:fs");
+const path = require("node:path");
 const publisher = require("./publish-dashboard.js");
 const {idempotentGitHub} = require("./dashboard-idempotent-github.js");
-const {hardenedSummaryCopy} = require("./dashboard-summary-contract.js");
+const {artifactRepositoryId, hardenedSummaryCopy} = require("./dashboard-summary-contract.js");
 
 const dashboard = publisher._internal;
 const MANAGED = /<!-- segh-dashboard: v1 -->/;
@@ -11,7 +12,7 @@ const REPOSITORY_ID = /<!-- segh-repository-id: ([0-9]+) -->/;
 const OVERALL_STATUS = /<!-- segh-overall-status: (pass|findings|incomplete|error|retired) -->/;
 const PREVIOUS_STATUS = /<!-- segh-previous-status: (none|pass|findings|incomplete|error|retired) -->/;
 const FINDING_FINGERPRINT = /<!-- segh-finding-fingerprint: (sha256:[0-9a-f]{64}) -->/;
-const SCAN_TIMESTAMP = /^- \*\*Scan timestamp:\*\* ([^\n]+)$/m;
+const SUMMARY_ARTIFACT = /^repository-summary-([0-9]+)$/;
 
 const LABEL_DEFINITIONS = Object.freeze({
   "scan:pass": {color: "1f883d", description: "Latest security scan passed"},
@@ -39,12 +40,6 @@ function repositoryId(issue) {
 
 function currentStatus(issue) {
   return marker(issue?.body, OVERALL_STATUS, "none");
-}
-
-function lastScanTimestamp(issue) {
-  const value = marker(issue?.body, SCAN_TIMESTAMP, "");
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : null;
 }
 
 function parseBoundedInteger(value, name, minimum, maximum) {
@@ -113,6 +108,27 @@ function planMatchesSelection(target, selected) {
     target.visibility === selected.visibility && target.default_branch === selected.default_branch;
 }
 
+function findSummaryFiles(root) {
+  const files = [];
+  if (!fs.existsSync(root)) return files;
+  for (const entry of fs.readdirSync(root, {withFileTypes: true})) {
+    const candidate = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...findSummaryFiles(candidate));
+    else if (entry.isFile() && entry.name === "summary.json") files.push(candidate);
+  }
+  return files;
+}
+
+function summaryCoverageComplete(root, targets) {
+  const counts = new Map(targets.map((target) => [target.id, 0]));
+  for (const file of findSummaryFiles(root)) {
+    const id = artifactRepositoryId(file);
+    if (!counts.has(id)) continue;
+    counts.set(id, counts.get(id) + 1);
+  }
+  return [...counts.values()].every((count) => count === 1);
+}
+
 async function listBounded(method, params) {
   const items = [];
   for (let page = 1; page <= 10; page += 1) {
@@ -122,6 +138,31 @@ async function listBounded(method, params) {
     if (response.data.length < 100) return items;
   }
   throw new Error("GitHub list API exceeded the 1000 item bound");
+}
+
+async function latestSummaryArtifactTimes(github, owner, repo) {
+  const latest = new Map();
+  for (let page = 1; page <= 10; page += 1) {
+    const response = await dashboard.requestWithRetry(() => github.rest.actions.listArtifactsForRepo({
+      owner,
+      repo,
+      per_page: 100,
+      page,
+    }));
+    const artifacts = response?.data?.artifacts;
+    if (!Array.isArray(artifacts)) throw new Error("GitHub Actions artifact API returned a malformed response");
+    for (const artifact of artifacts) {
+      const match = String(artifact?.name || "").match(SUMMARY_ARTIFACT);
+      if (!match || artifact?.expired === true) continue;
+      const id = Number.parseInt(match[1], 10);
+      const timestamp = Date.parse(artifact?.created_at);
+      if (!Number.isSafeInteger(id) || id <= 0 || !Number.isFinite(timestamp)) continue;
+      const previous = latest.get(id);
+      if (!Number.isFinite(previous) || timestamp > previous) latest.set(id, timestamp);
+    }
+    if (artifacts.length < 100) return latest;
+  }
+  throw new Error("GitHub Actions artifact API exceeded the 1000 item bound");
 }
 
 async function listManagedIssues(github, owner, repo) {
@@ -248,9 +289,9 @@ function selectionFromIssue(issue) {
   return {id, full_name: fullName, owner, name, visibility, fork: false, archived: false, disabled: false, default_branch: defaultBranch, disposition: "active", reason: "organization reconciliation is incomplete"};
 }
 
-function isStale(issue, now, staleAfterHours) {
-  const timestamp = lastScanTimestamp(issue);
-  return timestamp === null || now.getTime() - timestamp > staleAfterHours * 60 * 60 * 1000;
+function isStale(lastCompletedScanTimestamp, now, staleAfterHours) {
+  return !Number.isFinite(lastCompletedScanTimestamp) ||
+    now.getTime() - lastCompletedScanTimestamp > staleAfterHours * 60 * 60 * 1000;
 }
 
 async function applyDecision(github, owner, repo, issue, desired, results, core) {
@@ -339,11 +380,30 @@ async function reconcile(options) {
     completeness = completeness === "complete" ? "plan-missing" : completeness;
   }
 
+  const summariesAvailable = options.summariesAvailable === true || options.summariesAvailable === "true";
+  let summariesComplete = true;
   let summariesRoot = options.summariesPath;
   let hardened = null;
   if (targets && targets.length > 0) {
+    if (!summariesAvailable) {
+      summariesComplete = false;
+      completeness = completeness === "complete" ? "summaries-missing" : completeness;
+    } else if (!summaryCoverageComplete(options.summariesPath, targets)) {
+      summariesComplete = false;
+      completeness = completeness === "complete" ? "summaries-incomplete" : completeness;
+    }
     hardened = hardenedSummaryCopy(options.summariesPath);
     summariesRoot = hardened;
+  }
+
+  let latestScanById = new Map();
+  let freshnessError = null;
+  if (!selection || !targets) {
+    try {
+      latestScanById = await latestSummaryArtifactTimes(github, owner, repo);
+    } catch (error) {
+      freshnessError = error;
+    }
   }
 
   try {
@@ -422,7 +482,7 @@ async function reconcile(options) {
           results.push({repository_id: id, status: "retired", action: "deferred"});
           continue;
         }
-        if (scanResult !== "success" || isStale(issue, now, staleAfterHours)) {
+        if (scanResult !== "success" || isStale(latestScanById.get(id), now, staleAfterHours)) {
           const selected = selectionFromIssue(issue);
           await applyDecision(github, owner, repo, issue,
             renderSelectionError(selected, issue, options.context, "complete GitHub App selection evidence is unavailable for this run"), results, options.core);
@@ -438,7 +498,7 @@ async function reconcile(options) {
           continue;
         }
         const selected = selectionFromIssue(issue);
-        const shouldError = scanResult !== "success" || isStale(issue, now, staleAfterHours);
+        const shouldError = scanResult !== "success" || isStale(latestScanById.get(id), now, staleAfterHours);
         if (shouldError) {
           await applyDecision(github, owner, repo, issue,
             renderSelectionError(selected, issue, options.context, "the current run produced neither a complete selection snapshot nor an immutable scan plan"), results, options.core);
@@ -453,7 +513,7 @@ async function reconcile(options) {
 
   const summary = await writeOrganizationSummary(options.core, results, completeness);
   const failed = summary.actions.failed;
-  const incompleteInputs = Boolean(selectionError || planError || !selection || !targets);
+  const incompleteInputs = Boolean(selectionError || planError || !selection || !targets || !summariesComplete || freshnessError);
   if (failed > 0 || incompleteInputs || completeness !== "complete") {
     const reasons = [];
     if (failed > 0) reasons.push(`${failed} publication operation(s) failed`);
@@ -461,6 +521,10 @@ async function reconcile(options) {
     else if (!selection) reasons.push("selection snapshot is unavailable");
     if (planError) reasons.push(`scan plan is invalid: ${safeReason(planError.message)}`);
     else if (!targets) reasons.push("scan plan is unavailable");
+    if (!summariesComplete) {
+      reasons.push(summariesAvailable ? "normalized summary artifacts are incomplete" : "normalized summary artifacts are unavailable");
+    }
+    if (freshnessError) reasons.push(`scan freshness evidence is unavailable: ${safeReason(freshnessError.message)}`);
     if (completeness === "plan-incomplete") reasons.push("at least one active App-selected repository is missing from the immutable scan plan");
     if (completeness === "identity-mismatch") reasons.push("selection and scan plan identities disagree");
     throw new Error(reasons.join("; ") || `organization reconciliation is incomplete: ${completeness}`);
@@ -473,6 +537,7 @@ module.exports = reconcile;
 module.exports._internal = {
   currentStatus,
   isStale,
+  latestSummaryArtifactTimes,
   loadPlan,
   loadSelection,
   planMatchesSelection,
@@ -480,5 +545,6 @@ module.exports._internal = {
   renderSelectionError,
   repositoryId,
   selectionFromIssue,
+  summaryCoverageComplete,
   writeOrganizationSummary,
 };
