@@ -73,7 +73,15 @@ function parseActionlint(resultsDir, outcome) {
   if (!exists(file)) return result("actionlint", "error", 0, "actions");
   try {
     const raw = fs.readFileSync(file, "utf8").trim();
-    const findings = raw === "" ? [] : raw.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    let findings = [];
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        findings = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        findings = raw.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      }
+    }
     if (findings.length) return result("actionlint", "findings", findings.length, "actions");
     return result("actionlint", outcome === "success" ? "pass" : "error", 0, "actions");
   } catch {
@@ -107,8 +115,10 @@ function parseTrivy(resultsDir, outcome, kind, property, category) {
   try {
     const data = readJson(file);
     if (!data || typeof data !== "object" || Array.isArray(data)) return result(name, "error", 0, category);
-    const rows = Array.isArray(data.Results) ? data.Results : [];
-    if (data.Results !== undefined && !Array.isArray(data.Results)) return result(name, "error", 0, category);
+    let rows;
+    if (Array.isArray(data.Results)) rows = data.Results;
+    else if (outcome === "success" && data.Results === undefined && data.SchemaVersion === 2 && data.Trivy && typeof data.Trivy === "object") rows = [];
+    else return result(name, "error", 0, category);
     const findings = rows.reduce((count, row) => count + (Array.isArray(row?.[property]) ? row[property].length : 0), 0);
     if (findings) return result(name, "findings", findings, category);
     return result(name, outcome === "success" ? "pass" : "error", 0, category);
