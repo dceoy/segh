@@ -24,6 +24,8 @@ jobs:
         uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
         with:
           aqua_version: v2.62.1
+      - name: Validate workflow-only product
+        run: ruby scripts/validate-workflow-boundary.rb .
       - name: Validate credential boundaries
         run: ruby scripts/test-workflow-security.rb
       - name: Validate reconciliation workflow boundaries
@@ -54,24 +56,8 @@ jobs:
       - name: Verify Aqua checksums
         run: aqua i
 
-  workflow-only-boundary:
-    name: Candidate workflow-only boundary
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Check out candidate revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          lfs: false
-          submodules: false
-      - name: Reject removed product surfaces
-        run: ruby scripts/validate-workflow-boundary.rb .
-
   production-workflow:
-    needs: workflow-only-boundary
+    needs: static
     permissions:
       actions: read
       contents: read

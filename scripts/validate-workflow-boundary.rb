@@ -9,7 +9,6 @@ ORGANIZATION_WORKFLOW = ".github/workflows/organization-scan.yml"
 SELECTION_WORKFLOW = ".github/workflows/organization-selection.yml"
 RECONCILE_WORKFLOW = ".github/workflows/dashboard-reconcile.yml"
 VALIDATION_WORKFLOW = ".github/workflows/validation.yml"
-TRUSTED_BOUNDARY_WORKFLOW = ".github/workflows/trusted-boundary.yml"
 
 ALLOWED_REMOTE_ACTIONS = %w[
   actions/checkout
@@ -183,13 +182,11 @@ Dir.chdir(ROOT) do
     ORGANIZATION_WORKFLOW,
     SELECTION_WORKFLOW,
     RECONCILE_WORKFLOW,
-    VALIDATION_WORKFLOW,
-    TRUSTED_BOUNDARY_WORKFLOW,
     "scripts/preflight.sh",
     "scripts/validate-workflow-boundary.rb"
   ]
   missing = required_files - tracked_files
-  Boundary.fail!(missing.first, "Required trusted product surface is missing.") unless missing.empty?
+  Boundary.fail!(missing.first, "Required workflow-only product surface is missing.") unless missing.empty?
 
   action_files = tracked_files.select do |path|
     path.match?(%r{\A\.github/workflows/.*\.ya?ml\z}) || File.basename(path).match?(/\Aaction\.ya?ml\z/)
@@ -253,113 +250,6 @@ Dir.chdir(ROOT) do
         Boundary.action_identity(step["uses"], path) if step.key?("uses")
       end
     end
-  end
-
-  validation = documents.fetch(VALIDATION_WORKFLOW)
-  validation_jobs = validation.fetch("jobs")
-  candidate_steps = Array(validation_jobs.fetch("workflow-only-boundary")["steps"])
-  candidate_validator = candidate_steps.find { |step| step["name"] == "Reject removed product surfaces" }
-  expected_caller_permissions = WRITE_JOB_PERMISSIONS.fetch([VALIDATION_WORKFLOW, "production-workflow"])
-  unless candidate_validator&.fetch("run", nil) == "ruby scripts/validate-workflow-boundary.rb ." &&
-         validation_jobs.dig("production-workflow", "needs") == "workflow-only-boundary" &&
-         validation_jobs.dig("production-workflow", "uses") == "./.github/workflows/organization-scan.yml" &&
-         validation_jobs.dig("production-workflow", "permissions") == expected_caller_permissions
-    Boundary.fail!(VALIDATION_WORKFLOW, "Candidate validation must retain the boundary gate and exact reusable-workflow caller permissions before the production-path matrix.")
-  end
-
-  trusted = documents.fetch(TRUSTED_BOUNDARY_WORKFLOW)
-  trusted_source = file_contents.fetch(TRUSTED_BOUNDARY_WORKFLOW)
-  unless trusted_source.match?(/\bpull_request_target:\s*#/) && trusted_source.match?(/\n\s+branches:\s*\n\s+- main\s*\n/)
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must remain base-sourced from pull_request_target on main.")
-  end
-
-  trusted_job = trusted.fetch("jobs").fetch("trusted-workflow-only-boundary")
-  unless trusted_job["environment"] == "trusted-boundary" && trusted_job["permissions"] == {"contents" => "read"}
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must use the main-only trusted-boundary environment with read-only GITHUB_TOKEN permissions.")
-  end
-  trusted_steps = Array(trusted_job["steps"])
-  token_index = trusted_steps.index { |step| step["id"] == "boundary-token" }
-  token_step = token_index && trusted_steps[token_index]
-  Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The dedicated boundary App token step is missing.") unless token_step
-  Boundary.action_identity(token_step.fetch("uses"), TRUSTED_BOUNDARY_WORKFLOW)
-  expected_token_with = {
-    "app-id" => "${{ secrets.SEGH_BOUNDARY_APP_ID }}",
-    "private-key" => "${{ secrets.SEGH_BOUNDARY_APP_PRIVATE_KEY }}",
-    "owner" => "${{ github.repository_owner }}",
-    "repositories" => "${{ github.event.repository.name }}",
-    "permission-checks" => "write",
-    "permission-metadata" => "read"
-  }
-  unless token_step["with"] == expected_token_with
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The boundary App token must be repository-scoped with only metadata:read and checks:write.")
-  end
-
-  expected_secret_nodes = {
-    ["jobs", "trusted-workflow-only-boundary", "steps", token_index, "with", "app-id"] => "${{ secrets.SEGH_BOUNDARY_APP_ID }}",
-    ["jobs", "trusted-workflow-only-boundary", "steps", token_index, "with", "private-key"] => "${{ secrets.SEGH_BOUNDARY_APP_PRIVATE_KEY }}"
-  }
-  actual_secret_nodes = {}
-  Boundary.walk_strings(trusted) do |path, value|
-    actual_secret_nodes[path] = value if value.include?("SEGH_BOUNDARY_APP_")
-  end
-  unless actual_secret_nodes == expected_secret_nodes
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Boundary App credentials must be exposed only to the token-minting action.")
-  end
-
-  trusted_checkout = trusted_steps.find { |step| step["id"] == "trusted-checkout" }
-  candidate_checkout = trusted_steps.find { |step| step["id"] == "candidate-checkout" }
-  unless trusted_checkout&.dig("with", "ref") == "${{ github.event.pull_request.base.sha }}" &&
-         trusted_checkout&.dig("with", "persist-credentials") == false &&
-         candidate_checkout&.dig("with", "repository") == "${{ github.event.pull_request.head.repo.full_name }}" &&
-         candidate_checkout&.dig("with", "ref") == "${{ github.event.pull_request.head.sha }}" &&
-         candidate_checkout&.dig("with", "persist-credentials") == false &&
-         candidate_checkout&.dig("with", "allow-unsafe-pr-checkout") == true
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted and candidate revisions must remain explicitly separated with no persisted checkout credentials.")
-  end
-
-  policy_step = trusted_steps.find { |step| step["id"] == "trusted-policy" }
-  policy_run = policy_step&.fetch("run", "")
-  %w[
-    .github/workflows/trusted-boundary.yml
-    scripts/preflight.sh
-    scripts/validate-workflow-boundary.rb
-  ].each do |path|
-    unless policy_run.include?("compare_trusted_entry #{path}")
-      Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted policy source #{path} must be immutable to ordinary pull requests.")
-    end
-  end
-  unless policy_run.include?("tracked_tree_shape(\"_candidate\") == tracked_tree_shape(\"_trusted\")")
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Trusted validation must compare the complete base/candidate path, type, and mode shape.")
-  end
-  [ORCHESTRATOR_WORKFLOW, ORGANIZATION_WORKFLOW, SELECTION_WORKFLOW, RECONCILE_WORKFLOW, VALIDATION_WORKFLOW].each do |path|
-    unless policy_run.include?("\"#{path}\"")
-      Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "Security-sensitive workflow #{path} must remain in the base-sourced structural comparison.")
-    end
-  end
-
-  attestation = trusted_steps.find { |step| step["id"] == "boundary-attestation" }
-  Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The dedicated-App attestation step is missing.") unless attestation
-  expected_attestation_env = {
-    "GH_TOKEN" => "${{ steps.boundary-token.outputs.token }}",
-    "REPOSITORY" => "${{ github.repository }}",
-    "HEAD_SHA" => "${{ github.event.pull_request.head.sha }}",
-    "RUN_URL" => "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-    "TRUSTED_CHECKOUT_OUTCOME" => "${{ steps.trusted-checkout.outcome }}",
-    "CANDIDATE_CHECKOUT_OUTCOME" => "${{ steps.candidate-checkout.outcome }}",
-    "TRUSTED_POLICY_OUTCOME" => "${{ steps.trusted-policy.outcome }}",
-    "CANDIDATE_BOUNDARY_OUTCOME" => "${{ steps.candidate-boundary.outcome }}"
-  }
-  unless attestation["if"] == "always() && steps.boundary-token.outcome == 'success'" && attestation["env"] == expected_attestation_env
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The attestation must always publish through only the dedicated App token after token creation succeeds.")
-  end
-  attestation_run = attestation.fetch("run", "")
-  unless attestation_run.scan(/\bgh\s+api\b/).length == 1 &&
-         attestation_run.include?("repos/$REPOSITORY/check-runs") &&
-         attestation_run.include?("Trusted workflow-only boundary attestation") &&
-         attestation_run.include?('head_sha="$HEAD_SHA"') &&
-         attestation_run.include?("status=completed") &&
-         attestation_run.include?('conclusion="$conclusion"')
-    Boundary.fail!(TRUSTED_BOUNDARY_WORKFLOW, "The trusted App must publish exactly one fixed-name completed check on the pull-request head SHA.")
   end
 
   orchestrator = documents.fetch(ORCHESTRATOR_WORKFLOW)

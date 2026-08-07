@@ -16,17 +16,9 @@ For every target, the workflow resolves an immutable commit, mints a token scope
 
 Scanner evidence may contain sensitive organization information and must remain in a private control repository. Dashboard bodies are bounded summaries; they must not include source excerpts, private paths, secrets, logs, or stack traces.
 
+Repository contribution and merge protection are outside this threat model.
+
 The exact token permissions and consumers are defined in [CREDENTIALS.md](CREDENTIALS.md).
-
-## Merge protection
-
-The authoritative PR boundary for `dceoy/segh` is the base-sourced `Trusted workflow-only boundary` plus the dedicated-App check `Trusted workflow-only boundary attestation` required by the default-branch repository ruleset.
-
-The trusted workflow compares the candidate's tracked path/type/mode shape with the protected base, protects its trusted workflow/validator/preflight sources, and evaluates the candidate with the base validator. Candidate-owned code is not executed.
-
-The built-in workflow token is read-only. The attestation is published by a separate App installed only on `dceoy/segh`; its runtime token is limited to Metadata read and Checks write. App credentials exist only in the `trusted-boundary` environment restricted to `main`.
-
-A same-named check from another integration is not an accepted trust signal. Changing the trusted workflow, validator, preflight script, App/environment configuration, or ruleset binding is an administrator break-glass operation.
 
 ## Scorecard limitations
 
@@ -42,7 +34,7 @@ Authentication values must remain masked. Do not add environment dumps, shell tr
 
 ## Deployment validation
 
-Pull-request CI validates repository-contained structure and controlled fixtures, but it cannot prove external App installation scope, private repository access, or private artifact visibility.
+Repository CI validates repository-contained structure and controlled fixtures, but it cannot prove external App installation scope, private repository access, or private artifact visibility.
 
 Before deploying a reviewed scanner revision from the intended private control repository, verify:
 
@@ -52,7 +44,5 @@ Before deploying a reviewed scanner revision from the intended private control r
 - Scorecard execution with the documented read-only permission set;
 - private artifact retention and token redaction on representative failures;
 - fail-closed behavior when production publication would target a public repository.
-
-For the merge boundary, verify representative positive and negative PRs show that the attestation is produced by the dedicated App on the candidate head SHA, only that App satisfies the required check, trusted policy-source changes are blocked, tracked path additions/removals are blocked, and disallowed product surfaces are rejected.
 
 Publish only sanitized run references, expected conclusions, and bounded file-presence confirmation.
