@@ -73,7 +73,10 @@ jobs:
           require "yaml"
 
           WORKFLOWS = [
+            ".github/workflows/dashboard-reconcile.yml",
+            ".github/workflows/organization-dashboard.yml",
             ".github/workflows/organization-scan.yml",
+            ".github/workflows/organization-selection.yml",
             ".github/workflows/validation.yml"
           ].freeze
 
