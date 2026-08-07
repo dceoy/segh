@@ -69,6 +69,16 @@ function disableOctokitRetries(github) {
   return {...github,rest:{...github.rest,issues}};
 }
 function historyChanged(before,after){return managedDashboard(after)&&(marker(before,OVERALL_STATUS)!==marker(after,OVERALL_STATUS)||marker(before,FINDING_FINGERPRINT)!==marker(after,FINDING_FINGERPRINT));}
+function transitionIdentity(before,after){
+  const integrity=String(before||"").match(BODY_INTEGRITY)?.[1];
+  const source=integrity?`source-integrity:sha256:${integrity}`:`source-body:sha256:${sha256(String(before||""))}`;
+  return [
+    source,
+    `desired-result:${marker(after,RESULT_DIGEST)}`,
+    `desired-status:${marker(after,OVERALL_STATUS)}`,
+    `desired-fingerprint:${marker(after,FINDING_FINGERPRINT)}`,
+  ].join("\n");
+}
 function issueKey(params){return `${params.owner}/${params.repo}#${params.issue_number}`;}
 async function findIssue(github,params){const issues=await list(github.rest.issues.listForRepo,{owner:params.owner,repo:params.repo,state:"all"}); return issues.find((issue)=>!issue.pull_request&&issue.number===params.issue_number)||null;}
 function sameLabel(left,right){return String(left||"").toLowerCase()===String(right||"").toLowerCase();}
@@ -81,8 +91,8 @@ function idempotentGitHub(github) {
   hardened.rest.issues.update=(params)=>update(withManagedBodyIntegrity(params));
   const persistUpdate=hardened.rest.issues.update; const createComment=idempotentComment(hardened); const pendingUpdates=new Map();
   issues.createLabel=idempotentLabel(hardened); issues.create=idempotentCreate(hardened);
-  issues.update=async(params)=>{if(typeof params.body!=="string"||!managedDashboard(params.body))return persistUpdate(params); const current=await findIssue(hardened,params); if(!current||!historyChanged(current.body,params.body))return persistUpdate(params); pendingUpdates.set(issueKey(params),params); return{data:current};};
-  issues.createComment=async(params)=>{const key=issueKey(params); const pending=pendingUpdates.get(key); const result=await createComment({...params,event_identity:pending?`desired-body:sha256:${sha256(pending.body)}`:""}); if(pending){await persistUpdate(pending); pendingUpdates.delete(key);} return result;};
+  issues.update=async(params)=>{if(typeof params.body!=="string"||!managedDashboard(params.body))return persistUpdate(params); const current=await findIssue(hardened,params); if(!current||!historyChanged(current.body,params.body))return persistUpdate(params); pendingUpdates.set(issueKey(params),{params,eventIdentity:transitionIdentity(current.body,params.body)}); return{data:current};};
+  issues.createComment=async(params)=>{const key=issueKey(params); const pending=pendingUpdates.get(key); const result=await createComment({...params,event_identity:pending?.eventIdentity||""}); if(pending){await persistUpdate(pending.params); pendingUpdates.delete(key);} return result;};
   return {...hardened,rest:{...hardened.rest,issues}};
 }
 module.exports={RENDERER_VERSION,hasCurrentRendererContract,hasValidBodyIntegrity,idempotentGitHub,repositoryId,withBodyIntegrity,withRendererContract};
