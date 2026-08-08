@@ -224,6 +224,12 @@ test("publisher fails closed for missing, malformed, or mismatched summaries", a
     undefined,
     "{not-json",
     summary({...TARGET, full_name: "example/wrong"}),
+    (() => {
+      const value = summary();
+      delete value.evidence_artifact;
+      return value;
+    })(),
+    {...summary(), evidence_artifact: "repository-scan-999"},
   ]) {
     const root = tempDir();
     try {
