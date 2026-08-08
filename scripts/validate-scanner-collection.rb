@@ -29,6 +29,10 @@ file_array_boundary = lambda do |id, expected_append|
     "#{id} must initialize files once and mutate it only through the trusted collector"
   )
   assert.call(
+    body.scan(/^\s*files=\(\)\s*$/).length == 1,
+    "#{id} scanner input array must start empty"
+  )
+  assert.call(
     body.scan(Regexp.new(Regexp.escape(expected_append))).length == 1,
     "#{id} must append scanner inputs only through the trusted collector"
   )
