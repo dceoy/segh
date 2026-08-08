@@ -57,7 +57,8 @@ assert.call(shellcheck.include?("printf '[]\\n' > results/shellcheck.json"), "Sh
   trivy = run.call(id)
   assert.call(trivy.include?("trivy filesystem"), "#{id} must keep Trivy native filesystem collection")
   assert.call(trivy.include?("--config /dev/null --ignorefile /dev/null"), "#{id} must disable target-owned Trivy config and ignore files")
-  assert.call(trivy.include?("--skip-dirs _target/.git") && trivy.include?("_target"), "#{id} must scan the preflighted target while excluding Git metadata")
+  assert.call(trivy.include?("--skip-dirs _target/.git"), "#{id} must exclude Git metadata")
+  assert.call(trivy.match?(/--skip-version-check\s+_target(?:\s|\\|$)/), "#{id} must scan the preflighted target as the positional filesystem operand")
   assert.call(!trivy.include?("git -C _target ls-files"), "#{id} must not duplicate Trivy's native filesystem collection")
 end
 
