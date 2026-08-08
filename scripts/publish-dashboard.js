@@ -17,6 +17,15 @@ const MANAGED_LABELS = new Set([
   "finding:secret",
   "finding:misconfiguration",
 ]);
+const EXPECTED_SCANNERS = new Set([
+  "scorecard",
+  "zizmor",
+  "actionlint",
+  "shellcheck",
+  "trivy-vulnerability",
+  "trivy-secret",
+  "trivy-misconfiguration",
+]);
 const VALID_STATUS = new Set(["pass", "findings", "incomplete", "error"]);
 const VALID_SCANNER_STATUS = new Set(["pass", "findings", "skipped", "error"]);
 
@@ -96,6 +105,9 @@ function validateSummary(target, summary) {
     Number.isSafeInteger(scanner.findings) && scanner.findings >= 0 &&
     (scanner.status === "findings" ? scanner.findings > 0 : scanner.findings === 0) &&
     (scanner.category === undefined || typeof scanner.category === "string"))) return false;
+  const scannerNames = new Set(summary.scanners.map((scanner) => scanner.name));
+  if (summary.scanners.length !== EXPECTED_SCANNERS.size || scannerNames.size !== EXPECTED_SCANNERS.size ||
+      summary.scanners.some((scanner) => !EXPECTED_SCANNERS.has(scanner.name))) return false;
 
   const statuses = summary.scanners.map((scanner) => scanner.status);
   if (summary.overall_status === "pass") {
