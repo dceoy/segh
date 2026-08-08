@@ -251,6 +251,21 @@ test("publisher fails closed for missing, malformed, or mismatched summaries", a
       value.scanners[value.scanners.length - 1] = {...value.scanners[0]};
       return value;
     })(),
+    (() => {
+      const value = summary();
+      value.scanners[0] = {name: "scorecard", status: "findings", findings: 1, category: "secret"};
+      return value;
+    })(),
+    (() => {
+      const value = summary();
+      value.scanners[1].category = "secret";
+      return value;
+    })(),
+    (() => {
+      const value = summary(TARGET, "pass");
+      value.scanners[1].category = "actions";
+      return value;
+    })(),
     {...summary(TARGET, "pass"), scanners: [{name: "zizmor", status: "pass", findings: 1}]},
     {...summary(), scanners: [{name: "zizmor", status: "findings", findings: 0, category: "actions"}]},
     {...summary(TARGET, "pass"), scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}]},
