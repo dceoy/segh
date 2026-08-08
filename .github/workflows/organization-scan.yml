@@ -92,218 +92,174 @@ jobs:
           permission-metadata: read
       - name: Resolve complete immutable target plan
         id: targets
-        shell: bash
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           VALIDATION_MODE: ${{ inputs.validation_mode }}
           CALLER_REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          SEGH_PLAN_TOKEN: ${{ steps.app-token.outputs.token }}
           REPOSITORY_LIMIT: ${{ inputs.repository_limit || '50' }}
           MAX_PARALLEL: ${{ inputs.max_parallel || '4' }}
-        run: |
-          echo "::add-mask::$SEGH_PLAN_TOKEN"
-          export GH_TOKEN="$SEGH_PLAN_TOKEN"
-
-          enforce_selection_bound() {
-            local count=$1
-            local limit=$2
-            ((count >= 0 && count <= limit))
-          }
-
-          validate_repository_pages() {
-            jq -e '
-              . as $pages |
-              ($pages | type == "array" and length > 0) and
-              all($pages[];
-                type == "object" and
-                (.total_count | type == "number" and floor == . and . >= 0) and
-                (.repositories | type == "array")
-              ) and
-              (($pages | map(.total_count) | unique | length) == 1) and
-              (($pages | map(.repositories | length) | add) == $pages[0].total_count)
-            ' "$1" > /dev/null
-          }
-
-          validate_matrix() {
-            jq -e '
-              type == "object" and (.include | type == "array") and
-              all(.include[];
-                (.id | type == "number" and floor == . and . > 0) and
-                (.owner | type == "string" and length > 0 and (contains("/") | not)) and
-                (.name | type == "string" and length > 0 and (contains("/") | not)) and
-                (.full_name | type == "string") and
-                (.full_name == (.owner + "/" + .name)) and
-                (.visibility == "public" or .visibility == "private" or .visibility == "internal") and
-                (.fork | type == "boolean") and
-                (.default_branch | type == "string" and length > 0) and
-                (.commit_sha | type == "string" and test("^[0-9a-f]{40}$"))
-              )
-            ' "$1" > /dev/null
-          }
-
-          if [[ ! "$REPOSITORY_LIMIT" =~ ^[0-9]+$ ]]; then
-            echo "::error::repository_limit must be an integer from 1 to 100."
-            exit 1
-          fi
-          if [[ ! "$MAX_PARALLEL" =~ ^[0-9]+$ ]]; then
-            echo "::error::max_parallel must be an integer from 1 to 10."
-            exit 1
-          fi
-          repository_limit=$((10#$REPOSITORY_LIMIT))
-          max_parallel=$((10#$MAX_PARALLEL))
-          if ((repository_limit < 1 || repository_limit > 100)); then
-            echo "::error::repository_limit must be an integer from 1 to 100."
-            exit 1
-          fi
-          if ((max_parallel < 1 || max_parallel > 10)); then
-            echo "::error::max_parallel must be an integer from 1 to 10."
-            exit 1
-          fi
-
-          if [[ "$VALIDATION_MODE" == true ]]; then
-            if [[ "$CALLER_REPOSITORY" != dceoy/segh || "$EVENT_NAME" != pull_request ]]; then
-              echo "::error::validation_mode is restricted to pull requests in dceoy/segh."
-              exit 1
-            fi
-            if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "::error::The validation pull request head must resolve to an immutable commit SHA."
-              exit 1
-            fi
-            if enforce_selection_bound 2 1 || ! enforce_selection_bound 1 1 || ! enforce_selection_bound 0 1; then
-              echo "::error::The production repository-limit predicate accepted an oversized selection or rejected an empty authoritative plan."
-              exit 1
-            fi
-            if ! validate_repository_pages <(printf '%s\n' \
-              '[{"total_count":2,"repositories":[{"id":1}]},{"total_count":2,"repositories":[{"id":2}]}]') || \
-               validate_repository_pages <(printf '%s\n' \
-              '[{"total_count":2,"repositories":[{"id":1}]}]') || \
-               validate_matrix <(printf '%s\n' '{"include":[{"id":1}]}'); then
-              echo "::error::The production plan predicates accepted incomplete or malformed data."
-              exit 1
-            fi
-            jq -n --arg commit_sha "$HEAD_SHA" '
-              def target($id; $case; $sha): {
-                id: $id,
-                full_name: "dceoy/segh",
-                owner: "dceoy",
-                name: "segh",
-                visibility: "public",
-                fork: false,
-                default_branch: "main",
-                commit_sha: $sha,
-                validation_case: $case
-              };
-              {include: [
-                target(900001; "clean"; $commit_sha),
-                target(900002; "no-exec"; $commit_sha),
-                target(900003; "scanner-runtime-error"; $commit_sha),
-                target(900004; "checkout-failure"; "0000000000000000000000000000000000000000")
-              ]}' > matrix.json
-          else
-            if ! gh api --paginate --slurp /installation/repositories > repositories.json; then
-              echo "::error::GitHub App installation repository enumeration failed."
-              exit 1
-            fi
-            if ! validate_repository_pages repositories.json; then
-              echo "::error::GitHub App repository pagination returned incomplete or malformed data."
-              exit 1
-            fi
-            if ! jq -e '
-              [.[].repositories[]] as $repositories |
-              ($repositories | length) == ($repositories | map(.id) | unique | length)
-            ' repositories.json > /dev/null; then
-              echo "::error::GitHub App repository pagination returned duplicate repository IDs."
-              exit 1
-            fi
-            jq '[
-              .[].repositories[]
-              | select(.disabled != true and .archived != true)
-              | {
-                  id,
-                  full_name,
-                  owner: .owner.login,
-                  name,
-                  visibility,
-                  fork,
-                  default_branch
+        with:
+          github-token: ${{ inputs.validation_mode && github.token || steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const shaPattern = /^[0-9a-f]{40}$/;
+            const boundedInteger = (raw, name, min, max) => {
+              const value = Number(raw);
+              if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < min || value > max) {
+                throw new Error(`${name} must be an integer from ${min} to ${max}.`);
+              }
+              return value;
+            };
+            const validRepository = (repository) => Number.isInteger(repository?.id) && repository.id > 0 &&
+              typeof repository.owner === 'string' && repository.owner.length > 0 && !repository.owner.includes('/') &&
+              typeof repository.name === 'string' && repository.name.length > 0 && !repository.name.includes('/') &&
+              repository.full_name === `${repository.owner}/${repository.name}` &&
+              ['public', 'private', 'internal'].includes(repository.visibility) && typeof repository.fork === 'boolean' &&
+              typeof repository.default_branch === 'string' && repository.default_branch.length > 0;
+            const selectRepositories = (repositories, limit) => {
+              if (!Array.isArray(repositories)) throw new Error('GitHub App repository enumeration returned malformed data.');
+              const ids = new Set();
+              const selected = [];
+              for (const repository of repositories) {
+                if (ids.has(repository?.id)) throw new Error('GitHub App repository enumeration returned duplicate repository IDs.');
+                ids.add(repository?.id);
+                if (repository?.disabled === true || repository?.archived === true) continue;
+                const candidate = {
+                  id: repository?.id, full_name: repository?.full_name, owner: repository?.owner?.login,
+                  name: repository?.name, visibility: repository?.visibility, fork: repository?.fork,
+                  default_branch: repository?.default_branch,
+                };
+                if (!validRepository(candidate)) throw new Error('At least one selected repository has malformed or missing identity metadata.');
+                selected.push(candidate);
+              }
+              selected.sort((left, right) => left.full_name < right.full_name ? -1 : left.full_name > right.full_name ? 1 : 0);
+              if (selected.length > limit) {
+                throw new Error(`GitHub App selected ${selected.length} repositories, exceeding repository_limit=${limit}; refusing incomplete coverage.`);
+              }
+              return selected;
+            };
+            const listInstallationRepositories = async (client) => {
+              const totalCount = async () => {
+                const {data} = await client.request('GET /installation/repositories', {per_page: 1});
+                if (!data || !Number.isInteger(data.total_count) || data.total_count < 0 || !Array.isArray(data.repositories)) {
+                  throw new Error('GitHub App installation repository enumeration returned malformed count metadata.');
                 }
-            ] | sort_by(.full_name)' repositories.json > selected.json
-            if ! jq -e '
-              type == "array" and
-              all(.[];
-                (.id | type == "number" and floor == . and . > 0) and
-                (.owner | type == "string" and length > 0 and (contains("/") | not)) and
-                (.name | type == "string" and length > 0 and (contains("/") | not)) and
-                (.full_name | type == "string") and
-                (.full_name == (.owner + "/" + .name)) and
-                (.visibility == "public" or .visibility == "private" or .visibility == "internal") and
-                (.fork | type == "boolean") and
-                (.default_branch | type == "string" and length > 0)
-              )
-            ' selected.json > /dev/null; then
-              echo "::error::At least one selected repository has malformed or missing identity metadata."
-              exit 1
-            fi
-            selected_count=$(jq 'length' selected.json)
-            if ! enforce_selection_bound "$selected_count" "$repository_limit"; then
-              echo "::error::GitHub App selected $selected_count repositories, exceeding repository_limit=$repository_limit; refusing incomplete coverage."
-              exit 1
-            fi
+                return data.total_count;
+              };
+              const before = await totalCount();
+              const repositories = await client.paginate(
+                'GET /installation/repositories',
+                {per_page: 100},
+                (response) => {
+                  const pageTotal = response.data?.total_count;
+                  if (!Array.isArray(response.data) || !Number.isInteger(pageTotal) || pageTotal < 0) {
+                    throw new Error('GitHub App installation repository pagination returned malformed count metadata.');
+                  }
+                  if (pageTotal !== before) {
+                    throw new Error(`GitHub App repository pagination was not stable and complete: before=${before}, page=${pageTotal}.`);
+                  }
+                  return response.data;
+                },
+              );
+              const after = await totalCount();
+              if (before !== after || repositories.length !== before) {
+                throw new Error(`GitHub App repository pagination was not stable and complete: before=${before}, fetched=${repositories.length}, after=${after}.`);
+              }
+              return repositories;
+            };
+            const resolveMatrix = async (client, repositories) => {
+              const include = [];
+              for (const repository of repositories) {
+                try {
+                  const {data} = await client.rest.repos.getCommit({
+                    owner: repository.owner, repo: repository.name, ref: repository.default_branch,
+                  });
+                  if (!shaPattern.test(data?.sha || '')) throw new Error('response did not contain a lowercase 40-character SHA');
+                  include.push({...repository, commit_sha: data.sha});
+                } catch (error) {
+                  throw new Error(`${repository.full_name}: failed to resolve default branch ${repository.default_branch}: ${error.message}`);
+                }
+              }
+              return {include};
+            };
+            const validateMatrix = (matrix) => {
+              if (!Array.isArray(matrix?.include) || matrix.include.some((target) =>
+                !validRepository(target) || !shaPattern.test(target.commit_sha || ''))) {
+                throw new Error('Refusing to emit a malformed or incomplete scan matrix.');
+              }
+            };
+            const expectFailure = async (operation, pattern) => {
+              try { await operation(); } catch (error) { if (pattern.test(error.message)) return; throw error; }
+              throw new Error(`Expected validation failure matching ${pattern}.`);
+            };
+            const repositoryLimit = boundedInteger(process.env.REPOSITORY_LIMIT, 'repository_limit', 1, 100);
+            const maxParallel = boundedInteger(process.env.MAX_PARALLEL, 'max_parallel', 1, 10);
+            let matrix;
 
-            : > targets.jsonl
-            while IFS= read -r repository; do
-              id=$(jq -r '.id' <<<"$repository")
-              full_name=$(jq -r '.full_name' <<<"$repository")
-              owner=$(jq -r '.owner' <<<"$repository")
-              name=$(jq -r '.name' <<<"$repository")
-              visibility=$(jq -r '.visibility' <<<"$repository")
-              fork=$(jq -r '.fork' <<<"$repository")
-              default_branch=$(jq -r '.default_branch' <<<"$repository")
-              if ! gh api --method GET "repos/$full_name/commits" \
-                -f sha="$default_branch" -f per_page=1 > resolved.json; then
-                echo "::error::$full_name: failed to resolve default branch $default_branch."
-                exit 1
-              fi
-              if ! commit_sha=$(jq -er '
-                if type == "array" and length == 1 and
-                   (.[0].sha | type == "string" and test("^[0-9a-f]{40}$"))
-                then .[0].sha else error("invalid commit response") end
-              ' resolved.json); then
-                echo "::error::$full_name: default branch did not resolve to exactly one lowercase immutable commit SHA."
-                exit 1
-              fi
-              jq -cn \
-                --argjson id "$id" \
-                --arg full_name "$full_name" \
-                --arg owner "$owner" \
-                --arg name "$name" \
-                --arg visibility "$visibility" \
-                --argjson fork "$fork" \
-                --arg default_branch "$default_branch" \
-                --arg commit_sha "$commit_sha" \
-                '{id, full_name, owner, name, visibility, fork, default_branch, commit_sha}' \
-                >> targets.jsonl
-            done < <(jq -c '.[]' selected.json)
-            jq -sc '{include: .}' targets.jsonl > matrix.json
-          fi
+            if (process.env.VALIDATION_MODE === 'true') {
+              if (process.env.CALLER_REPOSITORY !== 'dceoy/segh' || process.env.EVENT_NAME !== 'pull_request') {
+                throw new Error('validation_mode is restricted to pull requests in dceoy/segh.');
+              }
+              if (!shaPattern.test(process.env.HEAD_SHA || '')) {
+                throw new Error('The validation pull request head must resolve to an immutable commit SHA.');
+              }
+              const repository = (id, name, extra = {}) => ({
+                id, name, full_name: `dceoy/${name}`, owner: {login: 'dceoy'}, visibility: 'public', fork: false,
+                default_branch: 'main', archived: false, disabled: false, ...extra,
+              });
+              const alpha = repository(1, 'alpha');
+              const beta = repository(2, 'beta', {fork: true});
+              const page = (repositories, totalCount) => Object.assign([...repositories], {total_count: totalCount});
+              const paginate = (pages) => async (_route, _parameters, map) => pages.flatMap((data) => map({data}));
+              const request = async () => ({data: {total_count: 2, repositories: [alpha]}});
+              const paginated = await listInstallationRepositories({
+                request,
+                paginate: paginate([page([alpha], 2), page([beta], 2)]),
+              });
+              if (paginated.length !== 2) throw new Error('Octokit pagination validation did not preserve complete coverage.');
+              await expectFailure(() => listInstallationRepositories({
+                request,
+                paginate: paginate([page([alpha], 2), page([beta], 3)]),
+              }), /pagination was not stable and complete/);
+              const selected = selectRepositories([
+                repository(3, 'zeta'), beta, alpha, repository(4, 'archived', {archived: true}),
+                repository(5, 'disabled', {disabled: true}),
+              ], 3);
+              if (selected.map(({full_name}) => full_name).join(',') !== 'dceoy/alpha,dceoy/beta,dceoy/zeta' || !selected[1].fork) {
+                throw new Error('Repository filtering, fork inclusion, or deterministic ordering changed.');
+              }
+              await expectFailure(() => selectRepositories([alpha, alpha], 2), /duplicate repository IDs/);
+              await expectFailure(() => selectRepositories([repository(6, 'bad', {owner: {login: ''}})], 1), /malformed or missing identity/);
+              await expectFailure(() => selectRepositories([alpha, beta], 1), /exceeding repository_limit=1/);
+              if (selectRepositories([], 1).length !== 0) throw new Error('Empty installation selection must remain valid.');
+              await expectFailure(() => resolveMatrix({rest: {repos: {getCommit: async () => { throw new Error('not found'); }}}}, [alpha]), /failed to resolve default branch/);
+              const resolved = await resolveMatrix({rest: {repos: {getCommit: async () => ({data: {sha: process.env.HEAD_SHA}})}}}, selected);
+              validateMatrix(resolved);
+              const target = (id, validationCase, commitSha) => ({
+                id, full_name: 'dceoy/segh', owner: 'dceoy', name: 'segh', visibility: 'public', fork: false,
+                default_branch: 'main', commit_sha: commitSha, validation_case: validationCase,
+              });
+              matrix = {include: [
+                target(900001, 'clean', process.env.HEAD_SHA), target(900002, 'no-exec', process.env.HEAD_SHA),
+                target(900003, 'scanner-runtime-error', process.env.HEAD_SHA),
+                target(900004, 'checkout-failure', '0000000000000000000000000000000000000000'),
+              ]};
+            } else {
+              let repositories;
+              try { repositories = await listInstallationRepositories(github); }
+              catch (error) { throw new Error(`GitHub App installation repository enumeration failed: ${error.message}`); }
+              matrix = await resolveMatrix(github, selectRepositories(repositories, repositoryLimit));
+            }
 
-          if ! validate_matrix matrix.json; then
-            echo "::error::Refusing to emit a malformed or incomplete scan matrix."
-            exit 1
-          fi
-          matrix_count=$(jq '.include | length' matrix.json)
-          if ! enforce_selection_bound "$matrix_count" "$repository_limit"; then
-            echo "::error::Resolved scan matrix violates repository_limit=$repository_limit."
-            exit 1
-          fi
-          printf 'matrix=%s\n' "$(jq -c . matrix.json)" >> "$GITHUB_OUTPUT"
-          if ((matrix_count > 0)); then
-            printf 'has_targets=true\n' >> "$GITHUB_OUTPUT"
-          else
-            printf 'has_targets=false\n' >> "$GITHUB_OUTPUT"
-          fi
-          printf 'max_parallel=%s\n' "$max_parallel" >> "$GITHUB_OUTPUT"
+            validateMatrix(matrix);
+            if (matrix.include.length > repositoryLimit) throw new Error(`Resolved scan matrix violates repository_limit=${repositoryLimit}.`);
+            const matrixJson = JSON.stringify(matrix);
+            fs.writeFileSync('matrix.json', `${matrixJson}\n`);
+            core.setOutput('matrix', matrixJson);
+            core.setOutput('has_targets', matrix.include.length > 0 ? 'true' : 'false');
+            core.setOutput('max_parallel', String(maxParallel));
       - name: Retain bounded publication plan
         if: steps.targets.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
