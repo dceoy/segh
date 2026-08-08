@@ -31,8 +31,8 @@ assert_present() {
   [[ "$text" == *"$pattern"* ]] || fail "$message"
 }
 
-assert_yq '.permissions == {}' 'top-level permissions must be empty'
-assert_yq '.jobs.plan.permissions == {}' 'plan job must not receive GITHUB_TOKEN permissions'
+assert_yq '.permissions | (tag == "!!map" and length == 0)' 'top-level permissions must be empty'
+assert_yq '.jobs.plan.permissions | (tag == "!!map" and length == 0)' 'plan job must not receive GITHUB_TOKEN permissions'
 assert_yq '.jobs.scan.permissions == {"contents":"read","checks":"read","issues":"read","pull-requests":"read"}' \
   'scan job permissions must stay read-only'
 
