@@ -52,9 +52,9 @@ assert_json '.jobs.scan.permissions' \
 assert_value '[.jobs.plan.steps[] | select(.id == "app-token")] | length' '1' \
   'plan must mint the organization installation token'
 assert_value '[.jobs.plan.steps[] | select(.id == "app-token")][0].with."app-id"' \
-  '${{ secrets.SEGH_ORG_SCAN_APP_ID }}' 'plan must use the organization scan App ID'
+  "\${{ secrets.SEGH_ORG_SCAN_APP_ID }}" 'plan must use the organization scan App ID'
 assert_value '[.jobs.plan.steps[] | select(.id == "app-token")][0].with."private-key"' \
-  '${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}' 'plan must use the organization scan App private key'
+  "\${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}" 'plan must use the organization scan App private key'
 assert_json \
   '[.jobs.plan.steps[] | select(.id == "app-token")][0].with | with_entries(select(.key | test("^permission-")))' \
   '{"permission-contents":"read","permission-metadata":"read"}' \
@@ -63,9 +63,9 @@ assert_json \
 assert_value '[.jobs.scan.steps[] | select(.id == "target-token")] | length' '1' \
   'scan must mint a repository-scoped token'
 assert_value '[.jobs.scan.steps[] | select(.id == "target-token")][0].with.owner' \
-  '${{ matrix.owner }}' 'target token owner must come from the matrix'
+  "\${{ matrix.owner }}" 'target token owner must come from the matrix'
 assert_value '[.jobs.scan.steps[] | select(.id == "target-token")][0].with.repositories' \
-  '${{ matrix.name }}' 'target token must be scoped to one repository'
+  "\${{ matrix.name }}" 'target token must be scoped to one repository'
 assert_json \
   '[.jobs.scan.steps[] | select(.id == "target-token")][0].with | with_entries(select(.key | test("^permission-")))' \
   '{"permission-checks":"read","permission-contents":"read","permission-issues":"read","permission-metadata":"read","permission-pull-requests":"read"}' \
@@ -73,7 +73,7 @@ assert_json \
 
 assert_value '[.jobs.scan.steps[] | select(.id == "checkout")] | length' '1' 'target checkout is required'
 assert_value '[.jobs.scan.steps[] | select(.id == "checkout")][0].with.ref' \
-  '${{ matrix.commit_sha }}' 'target checkout must bind to the immutable planned SHA'
+  "\${{ matrix.commit_sha }}" 'target checkout must bind to the immutable planned SHA'
 assert_value '[.jobs.scan.steps[] | select(.id == "checkout")][0].with."persist-credentials"' 'false' \
   'target checkout must not persist credentials'
 assert_value '[.jobs.scan.steps[] | select(.id == "checkout")][0].with.lfs' 'false' \
@@ -81,12 +81,12 @@ assert_value '[.jobs.scan.steps[] | select(.id == "checkout")][0].with.lfs' 'fal
 assert_value '[.jobs.scan.steps[] | select(.id == "checkout")][0].with.submodules' 'false' \
   'target checkout must not expand LFS or submodules'
 assert_value '[.jobs.scan.steps[] | select(.id == "checkout")][0].with.token' \
-  '${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}' \
+  "\${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}" \
   'target checkout must use only the current target token'
 
 assert_value '[.jobs.scan.steps[] | select(.id == "scorecard")] | length' '1' 'Scorecard step is required'
 assert_value '[.jobs.scan.steps[] | select(.id == "scorecard")][0].env.SEGH_TARGET_SCORECARD_TOKEN' \
-  '${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}' \
+  "\${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}" \
   'Scorecard must use only the target token'
 assert_value '.jobs.scan.env.SEGH_TARGET_SCORECARD_TOKEN // ""' '' \
   'target token must not be promoted to job environment'
