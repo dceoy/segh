@@ -12,6 +12,11 @@ git -C "$target" ls-files --stage -z > "$index"
 
 regular=0
 rejected=0
+while IFS= read -r -d '' path; do
+  printf 'Rejected untracked path: %s\n' "$path" >&2
+  rejected=1
+done < <(git -C "$target" ls-files --others -z)
+
 while IFS= read -r -d '' entry; do
   mode=${entry%% *}
   path=${entry#*$'\t'}
@@ -47,4 +52,4 @@ if ((rejected != 0)); then
   exit 1
 fi
 
-printf 'Validated %d tracked regular files.\n' "$regular"
+printf 'Validated %d tracked regular files with no untracked paths.\n' "$regular"
