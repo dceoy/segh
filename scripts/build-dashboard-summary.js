@@ -4,15 +4,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const SCORECARD_CHECKS = new Set([
-  "Branch-Protection",
-  "Code-Review",
-  "Dangerous-Workflow",
-  "Pinned-Dependencies",
-  "Token-Permissions",
-  "Vulnerabilities",
-]);
-
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
@@ -25,32 +16,26 @@ function exists(file) {
   }
 }
 
-function result(name, status, findings = 0, category = null, selectedChecks = []) {
+function result(name, status, findings = 0, category = null) {
   const scanner = {name, status, findings};
   if (category) scanner.category = category;
-  if (selectedChecks.length) scanner.selected_checks = selectedChecks;
   return scanner;
 }
 
 function parseScorecard(resultsDir, outcome) {
-  const validation = path.join(resultsDir, "validation-scorecard.json");
-  const usingValidationEvidence = exists(validation);
-  if (usingValidationEvidence) outcome = "success";
   if (outcome === "skipped") return result("scorecard", "skipped");
   if (outcome !== "success") return result("scorecard", "error");
-  const file = usingValidationEvidence ? validation : path.join(resultsDir, "scorecard.json");
+  const file = path.join(resultsDir, "scorecard.json");
   if (!exists(file)) return result("scorecard", "error");
   try {
     const data = readJson(file);
-    if (!Array.isArray(data?.checks)) return result("scorecard", "error");
-    const selected = data.checks
-      .map((check) => ({name: check.Name ?? check.name, score: check.Score ?? check.score}))
-      .filter((check) => SCORECARD_CHECKS.has(check.name) && Number.isFinite(check.score) && check.score >= 0)
-      .map((check) => ({name: check.name, score: Math.min(10, check.score)}))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    if (!selected.length) return result("scorecard", "error");
-    const findings = selected.filter((check) => check.score < 7).length;
-    return result("scorecard", findings ? "findings" : "pass", findings, "scorecard", selected);
+    if (!Array.isArray(data?.checks) || data.checks.length === 0 || !data.checks.every((check) => {
+      if (!check || typeof check !== "object") return false;
+      const name = check.name ?? check.Name;
+      const score = check.score ?? check.Score;
+      return typeof name === "string" && name.trim().length > 0 && Number.isFinite(score);
+    })) return result("scorecard", "error");
+    return result("scorecard", "pass");
   } catch {
     return result("scorecard", "error");
   }

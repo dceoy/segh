@@ -14,6 +14,8 @@ The production workflow installs checksum-verified tools with Aqua and runs:
 - ShellCheck
 - Trivy vulnerability, secret, and misconfiguration scanners
 
+OpenSSF Scorecard is informational evidence. A successful execution with parseable native Scorecard JSON is reported as `pass` regardless of aggregate or individual check scores; only execution or evidence-integrity failures become scanner errors. `segh` does not translate Scorecard scores into findings, thresholds, or finding labels.
+
 Target repositories are treated as untrusted data. Their scripts, actions, hooks, package managers, builds, tests, Terraform providers, submodules, and Git LFS objects are not executed or expanded.
 
 ## Architecture
@@ -70,7 +72,7 @@ Dashboard issues use these primary labels:
 - `scan:incomplete`
 - `scan:error`
 
-Finding labels identify Scorecard, GitHub Actions, shell, vulnerability, secret, and misconfiguration categories.
+Finding labels identify GitHub Actions, shell, vulnerability, secret, and misconfiguration categories. Scorecard remains visible in the scanner-results table as informational `pass`/`error` evidence but does not produce `finding:*` labels.
 
 ## Validation
 

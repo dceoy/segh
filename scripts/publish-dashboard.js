@@ -11,7 +11,6 @@ const LABELS = Object.freeze({
   "scan:findings": ["d1242f", "Latest security scan has actionable findings"],
   "scan:incomplete": ["bf8700", "Latest security scan has incomplete coverage"],
   "scan:error": ["b60205", "Latest security scan encountered an error"],
-  "finding:scorecard": ["8250df", "OpenSSF Scorecard finding category"],
   "finding:actions": ["0969da", "GitHub Actions finding category"],
   "finding:shell": ["0550ae", "Shell finding category"],
   "finding:vulnerability": ["cf222e", "Dependency vulnerability finding category"],
