@@ -91,10 +91,20 @@ function validateSummary(target, summary) {
   if (summary.repository?.id !== target.id || summary.repository?.full_name !== target.full_name ||
       summary.repository?.commit_sha !== target.commit_sha) return false;
   if (summary.evidence_artifact !== `repository-scan-${target.id}`) return false;
-  return summary.scanners.every((scanner) =>
+  if (!summary.scanners.every((scanner) =>
     scanner && typeof scanner.name === "string" && VALID_SCANNER_STATUS.has(scanner.status) &&
     Number.isSafeInteger(scanner.findings) && scanner.findings >= 0 &&
-    (scanner.category === undefined || typeof scanner.category === "string"));
+    (scanner.category === undefined || typeof scanner.category === "string"))) return false;
+
+  const statuses = summary.scanners.map((scanner) => scanner.status);
+  if (summary.overall_status === "pass") {
+    return statuses.some((status) => status === "pass") && statuses.every((status) => status === "pass" || status === "skipped");
+  }
+  if (summary.overall_status === "findings") {
+    return statuses.includes("findings") && !statuses.includes("error");
+  }
+  if (summary.overall_status === "incomplete") return statuses.every((status) => status === "skipped");
+  return true;
 }
 
 function render(target, summary, context) {
