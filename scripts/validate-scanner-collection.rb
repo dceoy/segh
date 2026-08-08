@@ -23,7 +23,7 @@ normalize = ->(text) { text.gsub(/\\\n\s*/, " ").gsub(/\s+/, " ").strip }
 normalized_run = ->(id) { normalize.call(run.call(id)) }
 file_array_boundary = lambda do |id, expected_append|
   body = run.call(id)
-  references = body.lines.map(&:strip).select { |line| line.match?(/\bfiles\b/) }
+  references = body.lines.map(&:strip).select { |line| line.gsub("ls-files", "").match?(/\bfiles\b/) }
   assert.call(
     references.length == 4 && references[0] == "files=()",
     "#{id} scanner input array must have exactly the trusted references and start empty"
@@ -124,7 +124,7 @@ path_case_end = path_case_start && shellcheck.index("esac", path_case_start)
 failure.call("ShellCheck extension policy is missing") unless path_case_start && path_case_end
 path_case = normalize.call(shellcheck[path_case_start...(path_case_end + "esac".length)])
 assert.call(path_case == 'case "$path" in *.sh|*.bash|*.bats) include=true ;; esac', "ShellCheck extension selection must stay limited to .sh, .bash, and .bats")
-accepted_interpreters = shellcheck.scan(/^\s*([^\n)]+\)\s+return 0 ;;/).flatten.map(&:strip)
+accepted_interpreters = shellcheck.scan(/^\s*([^\n)]+)\)\s+return 0 ;;/).flatten.map(&:strip)
 assert.call(accepted_interpreters == ["sh|bash|dash|ksh", "sh|bash|dash|ksh"], "ShellCheck shebang selection must stay limited to sh, bash, dash, and ksh")
 file_array_boundary.call("shellcheck", %q{files+=("$path")})
 exact_scanner_invocation.call(
