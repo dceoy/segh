@@ -7,8 +7,8 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const {buildSummary} = require("./build-dashboard-summary.js");
-const publish = require("./publish-dashboard.js");
+const {buildSummary} = require("../scripts/build-dashboard-summary.js");
+const publish = require("../scripts/publish-dashboard.js");
 
 const TARGET = {
   id: 7,

@@ -11,5 +11,6 @@ packages:
   - name: ossf/scorecard@v5.5.0
   - name: zizmorcore/zizmor@v1.28.0
   - name: rhysd/actionlint@v1.7.12
+  - name: mikefarah/yq@v4.53.3
   - name: koalaman/shellcheck@v0.11.0
   - name: aquasecurity/trivy@v0.72.0
