@@ -94,6 +94,7 @@ function validateSummary(target, summary) {
   if (!summary.scanners.every((scanner) =>
     scanner && typeof scanner.name === "string" && VALID_SCANNER_STATUS.has(scanner.status) &&
     Number.isSafeInteger(scanner.findings) && scanner.findings >= 0 &&
+    (scanner.status === "findings" ? scanner.findings > 0 : scanner.findings === 0) &&
     (scanner.category === undefined || typeof scanner.category === "string"))) return false;
 
   const statuses = summary.scanners.map((scanner) => scanner.status);
