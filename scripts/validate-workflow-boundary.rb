@@ -137,6 +137,9 @@ Dir.chdir(ROOT) do
   Boundary.assert(!publisher_text.include?("SEGH_ORG_SCAN_APP_"), SCAN_WORKFLOW, "publisher must not receive organization scan credentials")
   Boundary.assert(!publisher_text.include?("target-token"), SCAN_WORKFLOW, "publisher must not receive target credentials")
   Boundary.assert(publisher_text.include?("github.event.repository.private"), SCAN_WORKFLOW, "publisher must enforce a private control repository")
+  Boundary.assert(publisher_text.include?("organization-scan-plan"), SCAN_WORKFLOW, "publisher must consume the current run plan")
+  Boundary.assert(publisher_text.include?("repository-summary-*"), SCAN_WORKFLOW, "publisher must consume current run summaries")
+  Boundary.assert(publisher_text.include?("_trusted/scripts/publish-dashboard.js"), SCAN_WORKFLOW, "publisher must use the trusted implementation")
 
   jobs.each do |name, job|
     text = Boundary.stringify(job)
