@@ -1,221 +1,232 @@
 "use strict";
 
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
-const core = require("./core/publish-dashboard.js");
-const {hardenedSummaryCopy, completeScannerSet} = require("./dashboard-summary-contract.js");
-const {idempotentGitHub, repositoryId} = require("./dashboard-idempotent-github.js");
 
-const MANAGED_DASHBOARD = /<!-- segh-dashboard: v1 -->/;
-const RETIRED_LABEL = {
-  name: "scan:retired",
-  color: "6e7781",
-  description: "Repository is no longer in the active scan selection",
-};
-const MAX_API_PAGES = 10;
-const API_PAGE_SIZE = 100;
+const MANAGED = /<!-- segh-dashboard: v1 -->/;
+const REPOSITORY_ID = /<!-- segh-repository-id: ([0-9]+) -->/;
+const OWNED_LABEL = /^(?:scan|finding):/;
+const LABELS = Object.freeze({
+  "scan:pass": ["1f883d", "Latest security scan passed"],
+  "scan:findings": ["d1242f", "Latest security scan has actionable findings"],
+  "scan:incomplete": ["bf8700", "Latest security scan has incomplete coverage"],
+  "scan:error": ["b60205", "Latest security scan encountered an error"],
+  "finding:scorecard": ["8250df", "OpenSSF Scorecard finding category"],
+  "finding:actions": ["0969da", "GitHub Actions finding category"],
+  "finding:shell": ["0550ae", "Shell finding category"],
+  "finding:vulnerability": ["cf222e", "Dependency vulnerability finding category"],
+  "finding:secret": ["a40e26", "Secret exposure finding category"],
+  "finding:misconfiguration": ["9a6700", "Configuration finding category"],
+});
+const VALID_STATUS = new Set(["pass", "findings", "incomplete", "error"]);
 
-function hasAuthoritativeEmptyPlan(planPath) {
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function readPlan(file) {
+  const plan = readJson(file);
+  if (!Array.isArray(plan?.include) || plan.include.length > 100) throw new Error("invalid scan plan");
+  for (const target of plan.include) {
+    if (!Number.isSafeInteger(target?.id) || target.id <= 0 || typeof target.full_name !== "string") {
+      throw new Error("invalid scan target");
+    }
+  }
+  return plan.include;
+}
+
+function summaryFiles(root) {
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root, {withFileTypes: true}).flatMap((entry) => {
+    const candidate = path.join(root, entry.name);
+    if (entry.isDirectory()) return summaryFiles(candidate);
+    return entry.isFile() && entry.name === "summary.json" ? [candidate] : [];
+  });
+}
+
+function loadSummaries(root) {
+  const summaries = new Map();
+  for (const file of summaryFiles(root)) {
+    const summary = readJson(file);
+    const id = summary?.repository?.id;
+    if (!Number.isSafeInteger(id) || id <= 0 || summaries.has(id)) throw new Error("invalid or duplicate dashboard summary");
+    summaries.set(id, summary);
+  }
+  return summaries;
+}
+
+function repositoryId(issue) {
+  const value = String(issue?.body || "").match(REPOSITORY_ID)?.[1];
+  const id = Number.parseInt(value || "", 10);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function labelNames(labels) {
+  return (labels || []).map((label) => typeof label === "string" ? label : label?.name).filter(Boolean).sort();
+}
+
+function desiredLabels(summary) {
+  const names = [`scan:${summary.overall_status}`];
+  for (const scanner of summary.scanners || []) {
+    if (scanner.status === "findings" && scanner.category) names.push(`finding:${scanner.category}`);
+  }
+  return [...new Set(names)].filter((name) => Object.hasOwn(LABELS, name)).sort();
+}
+
+function mergedLabels(existing, desired) {
+  const unmanaged = labelNames(existing?.labels).filter((name) => !OWNED_LABEL.test(name));
+  return [...new Set([...unmanaged, ...desired.labels])].sort();
+}
+
+function validateSummary(target, summary) {
+  if (!summary || !VALID_STATUS.has(summary.overall_status) || !Array.isArray(summary.scanners)) return false;
+  return summary.repository?.id === target.id && summary.repository?.full_name === target.full_name &&
+    summary.repository?.commit_sha === target.commit_sha;
+}
+
+function render(target, summary, context) {
+  const valid = validateSummary(target, summary);
+  const status = valid ? summary.overall_status : "error";
+  const labels = valid ? desiredLabels(summary) : ["scan:error"];
+  const title = `[Security dashboard] ${target.full_name}`;
+  const state = status === "pass" ? "closed" : "open";
+  const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+  const lines = [
+    "<!-- segh-dashboard: v1 -->",
+    `<!-- segh-repository-id: ${target.id} -->`,
+    "",
+    `# Security dashboard: ${target.full_name}`,
+    "",
+    "## Current state",
+    "",
+    `- **Overall status:** ${status}`,
+    `- **Repository ID:** ${target.id}`,
+    `- **Visibility:** ${target.visibility}`,
+    `- **Default branch:** ${target.default_branch}`,
+    `- **Scanned commit:** ${target.commit_sha}`,
+    `- **Workflow run:** ${runUrl}`,
+    "",
+  ];
+
+  if (!valid) {
+    lines.push("The current run did not produce a valid normalized summary for this repository.", "");
+  } else {
+    lines.push("## Scanner results", "", "| Scanner | Status | Findings |", "| --- | --- | ---: |");
+    for (const scanner of summary.scanners) {
+      lines.push(`| ${scanner.name} | ${scanner.status} | ${scanner.findings} |`);
+    }
+    lines.push("", `Raw evidence remains in the private workflow artifact \`${summary.scan?.evidence_artifact || `repository-scan-${target.id}`}\`.`, "");
+  }
+
+  return {title, state, labels, body: `${lines.join("\n")}\n`, status};
+}
+
+async function ensureLabels(github, owner, repo) {
+  for (const [name, [color, description]] of Object.entries(LABELS)) {
+    try {
+      await github.rest.issues.createLabel({owner, repo, name, color, description});
+    } catch (error) {
+      if ((error?.status || error?.response?.status) !== 422) throw error;
+    }
+  }
+}
+
+async function managedIssues(github, owner, repo) {
+  const issues = await github.paginate(github.rest.issues.listForRepo, {owner, repo, state: "all", per_page: 100});
+  return issues.filter((issue) => !issue.pull_request && MANAGED.test(String(issue.body || "")));
+}
+
+function retryable(error) {
+  const status = error?.status || error?.response?.status;
+  return status === 429 || (Number.isInteger(status) && status >= 500 && status <= 599) ||
+    (status === 403 && /secondary rate limit|rate limit/i.test(String(error?.message || "")));
+}
+
+async function findManagedIssue(github, owner, repo, id) {
+  const matches = (await managedIssues(github, owner, repo)).filter((issue) => repositoryId(issue) === id);
+  if (matches.length > 1) throw new Error(`repository id ${id} has ${matches.length} managed dashboard issues`);
+  return matches[0] || null;
+}
+
+async function createIssue(github, owner, repo, desired) {
+  const id = repositoryId({body: desired.body});
+  if (!id) throw new Error("managed dashboard body lacks a repository id");
+  const params = {
+    owner,
+    repo,
+    title: desired.title,
+    body: desired.body,
+    labels: desired.labels,
+    request: {retries: 0},
+  };
   try {
-    const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
-    return Boolean(plan && typeof plan === "object" && Array.isArray(plan.include) && plan.include.length === 0);
-  } catch {
-    return false;
+    return await github.rest.issues.create(params);
+  } catch (error) {
+    if (!retryable(error)) throw error;
+    const existing = await findManagedIssue(github, owner, repo, id);
+    if (existing) return {data: existing};
+    throw error;
   }
 }
 
-async function listManagedIssues(github, owner, repo) {
-  const issues = [];
-  for (let page = 1; page <= MAX_API_PAGES; page += 1) {
-    const response = await core._internal.requestWithRetry(() => github.rest.issues.listForRepo({
-      owner,
-      repo,
-      state: "all",
-      per_page: API_PAGE_SIZE,
-      page,
-    }));
-    if (!Array.isArray(response?.data)) throw new Error("GitHub list API returned a malformed response");
-    issues.push(...response.data.filter((issue) => !issue.pull_request && MANAGED_DASHBOARD.test(String(issue.body || ""))));
-    if (response.data.length < API_PAGE_SIZE) return issues;
-  }
-  throw new Error(`GitHub list API exceeded the ${MAX_API_PAGES * API_PAGE_SIZE} item bound`);
+function sameIssue(issue, desired, labels = desired.labels) {
+  return issue.title === desired.title && issue.body === desired.body && issue.state === desired.state &&
+    JSON.stringify(labelNames(issue.labels)) === JSON.stringify([...labels].sort());
 }
 
-async function retireEmptySelection(options, github) {
-  const {owner, repo} = options.context.repo;
-  const managed = await listManagedIssues(github, owner, repo);
-  const issueById = core._internal.indexManagedIssues(managed);
-  if (issueById.size > 0) {
-    await core._internal.requestWithRetry(() => github.rest.issues.createLabel({owner, repo, ...RETIRED_LABEL}));
+async function apply(github, owner, repo, existing, desired) {
+  if (!existing) {
+    const created = await createIssue(github, owner, repo, desired);
+    if (desired.state === "closed") {
+      await github.rest.issues.update({owner, repo, issue_number: created.data.number, state: "closed"});
+    }
+    return "created";
   }
-  const results = [];
-  for (const [id, entries] of [...issueById.entries()].sort((a, b) => a[0] - b[0])) {
-    const desired = core._internal.renderRetiredIssue(entries[0]);
-    const result = await core._internal.applyDesired(github, owner, repo, entries[0], desired);
-    results.push({repository_id: id, action: result.action});
-  }
-  const counts = results.reduce((acc, result) => {
-    acc[result.action] = (acc[result.action] || 0) + 1;
-    return acc;
-  }, {});
-  options.core.info(`dashboard publication complete: ${JSON.stringify(counts)}`);
-  return results;
+  const labels = mergedLabels(existing, desired);
+  if (sameIssue(existing, desired, labels)) return "unchanged";
+  await github.rest.issues.update({
+    owner,
+    repo,
+    issue_number: existing.number,
+    title: desired.title,
+    body: desired.body,
+    labels,
+    state: desired.state,
+  });
+  return "updated";
 }
 
 async function publish(options) {
-  const github = idempotentGitHub(options.github);
-  if (hasAuthoritativeEmptyPlan(options.planPath)) {
-    return retireEmptySelection(options, github);
-  }
-  const summariesPath = hardenedSummaryCopy(options.summariesPath);
-  try {
-    return await core({...options, github, summariesPath});
-  } finally {
-    fs.rmSync(summariesPath, {recursive: true, force: true});
-  }
-}
-
-function workflowRunTimestamp(run, field) {
-  const value = Date.parse(run?.[field]);
-  return Number.isFinite(value) ? value : null;
-}
-
-async function trustedSuccessfulWorkflowRuns(github, context) {
-  const {owner, repo} = context.repo;
-  const current = await github.rest.actions.getWorkflowRun({owner, repo, run_id: context.runId});
-  const workflowId = current?.data?.workflow_id;
-  if (!Number.isSafeInteger(workflowId) || workflowId <= 0) {
-    throw new Error("current reconciliation run has no valid workflow identity");
+  if (String(options.repositoryPrivate) !== "true") throw new Error("dashboard publication requires a private control repository");
+  const targets = readPlan(options.planPath);
+  const summaries = loadSummaries(options.summariesPath);
+  const {owner, repo} = options.context.repo;
+  await ensureLabels(options.github, owner, repo);
+  const existing = await managedIssues(options.github, owner, repo);
+  const byId = new Map();
+  for (const issue of existing.sort((a, b) => a.number - b.number)) {
+    const id = repositoryId(issue);
+    if (id && !byId.has(id)) byId.set(id, issue);
   }
 
-  const trusted = new Map();
-  for (let page = 1; page <= MAX_API_PAGES; page += 1) {
-    const response = await github.rest.actions.listWorkflowRuns({
-      owner,
-      repo,
-      workflow_id: workflowId,
-      status: "completed",
-      per_page: API_PAGE_SIZE,
-      page,
-    });
-    const runs = response?.data?.workflow_runs;
-    if (!Array.isArray(runs)) throw new Error("GitHub Actions workflow-run API returned a malformed response");
-    for (const run of runs) {
-      if (run?.conclusion !== "success" || !Number.isSafeInteger(run?.id) || run.id <= 0) continue;
-      const startedAt = workflowRunTimestamp(run, "run_started_at") ?? workflowRunTimestamp(run, "created_at");
-      const completedAt = workflowRunTimestamp(run, "updated_at");
-      if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt) || completedAt < startedAt) continue;
-      trusted.set(run.id, {startedAt, completedAt});
+  const results = [];
+  for (const target of targets) {
+    try {
+      const desired = render(target, summaries.get(target.id), options.context);
+      const action = await apply(options.github, owner, repo, byId.get(target.id), desired);
+      results.push({repository_id: target.id, status: desired.status, action});
+    } catch (error) {
+      options.core.warning(`dashboard publication failed for repository id ${target.id}: ${error.message}`);
+      results.push({repository_id: target.id, status: "error", action: "failed"});
     }
-    if (runs.length < API_PAGE_SIZE) return trusted;
   }
-  throw new Error(`GitHub Actions workflow-run API exceeded the ${MAX_API_PAGES * API_PAGE_SIZE} item bound`);
-}
-
-function withTrustedSummaryArtifacts(github, context) {
-  const actions = github?.rest?.actions;
-  if (!actions || typeof actions.listArtifactsForRepo !== "function" ||
-      typeof actions.getWorkflowRun !== "function" || typeof actions.listWorkflowRuns !== "function") {
-    throw new Error("GitHub Actions read API is unavailable for authoritative scan freshness");
+  options.core.info(`dashboard publication complete: ${JSON.stringify(results)}`);
+  const failures = results.filter((result) => result.action === "failed");
+  if (failures.length) {
+    throw new Error(`dashboard publication failed for repository ids: ${failures.map((result) => result.repository_id).join(", ")}`);
   }
-
-  const listArtifactsForRepo = actions.listArtifactsForRepo.bind(actions);
-  let trustedRunsPromise = null;
-  let trustedArtifactsPromise = null;
-
-  const loadTrustedRuns = () => {
-    trustedRunsPromise ||= trustedSuccessfulWorkflowRuns(github, context);
-    return trustedRunsPromise;
-  };
-
-  const loadTrustedArtifacts = async (owner, repo) => {
-    if (!trustedArtifactsPromise) {
-      trustedArtifactsPromise = (async () => {
-        const artifacts = [];
-        for (let page = 1; page <= MAX_API_PAGES; page += 1) {
-          const response = await listArtifactsForRepo({owner, repo, per_page: API_PAGE_SIZE, page});
-          const pageArtifacts = response?.data?.artifacts;
-          if (!Array.isArray(pageArtifacts)) throw new Error("GitHub Actions artifact API returned a malformed response");
-          artifacts.push(...pageArtifacts);
-          if (pageArtifacts.length < API_PAGE_SIZE) break;
-          if (page === MAX_API_PAGES) {
-            throw new Error(`GitHub Actions artifact API exceeded the ${MAX_API_PAGES * API_PAGE_SIZE} item bound`);
-          }
-        }
-
-        const trustedRuns = await loadTrustedRuns();
-        return artifacts.flatMap((artifact) => {
-          const runId = artifact?.workflow_run?.id;
-          const trustedRun = trustedRuns.get(runId);
-          const createdAt = Date.parse(artifact?.created_at);
-          if (!trustedRun || !Number.isFinite(createdAt) || createdAt < trustedRun.startedAt || createdAt > trustedRun.completedAt) {
-            return [];
-          }
-          return [{...artifact, created_at: new Date(trustedRun.completedAt).toISOString()}];
-        });
-      })();
-    }
-    return trustedArtifactsPromise;
-  };
-
-  const trustedActions = {
-    ...actions,
-    listArtifactsForRepo: async (params = {}) => {
-      const owner = params.owner || context.repo.owner;
-      const repo = params.repo || context.repo.repo;
-      const perPage = Number.isSafeInteger(params.per_page) && params.per_page > 0 ? params.per_page : API_PAGE_SIZE;
-      const page = Number.isSafeInteger(params.page) && params.page > 0 ? params.page : 1;
-      const artifacts = await loadTrustedArtifacts(owner, repo);
-      const offset = (page - 1) * perPage;
-      return {
-        data: {
-          total_count: artifacts.length,
-          artifacts: artifacts.slice(offset, offset + perPage),
-        },
-      };
-    },
-  };
-
-  return {...github, rest: {...github.rest, actions: trustedActions}};
-}
-
-async function reconcileOrganization(options) {
-  const reconcileDashboard = require("./reconcile-organization-dashboard.js");
-  const scanResult = String(options.scanResult || "unknown");
-  const github = withTrustedSummaryArtifacts(options.github, options.context);
-  let suppressedSummaries = null;
-  const forwarded = {...options, github};
-
-  if (scanResult !== "success") {
-    suppressedSummaries = fs.mkdtempSync(path.join(os.tmpdir(), "segh-failed-scan-summaries-"));
-    forwarded.summariesAvailable = false;
-    forwarded.summariesPath = suppressedSummaries;
-  }
-
-  try {
-    const results = await reconcileDashboard(forwarded);
-    if (scanResult !== "success") throw new Error(`source scan result is ${scanResult}`);
-    return results;
-  } catch (error) {
-    if (scanResult !== "success" && !String(error.message || "").includes("source scan result is")) {
-      throw new Error(`source scan result is ${scanResult}; ${error.message}`);
-    }
-    throw error;
-  } finally {
-    if (suppressedSummaries) fs.rmSync(suppressedSummaries, {recursive: true, force: true});
-  }
+  return results;
 }
 
 module.exports = publish;
-module.exports.reconcileOrganization = reconcileOrganization;
-module.exports._internal = {
-  ...core._internal,
-  completeScannerSet,
-  hasAuthoritativeEmptyPlan,
-  idempotentGitHub,
-  repositoryId,
-  retireEmptySelection,
-  trustedSuccessfulWorkflowRuns,
-  withTrustedSummaryArtifacts,
-};
+module.exports._internal = {loadSummaries, readPlan, render, repositoryId};

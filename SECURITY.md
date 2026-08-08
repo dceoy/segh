@@ -1,48 +1,27 @@
-# Security Policy
-
-## Supported version
-
-Only the current `main` branch is supported. Consume reusable workflows at a reviewed immutable commit. Remote actions and scanner dependencies must remain commit- or checksum-pinned.
-
-## Reporting a vulnerability
-
-Use GitHub private vulnerability reporting. Do not disclose credentials, private repository identities, source paths, scanner artifacts, or undisclosed findings in a public issue.
+# Security policy
 
 ## Trust model
 
-`segh` treats target repositories as untrusted input and separates read-only scan credentials from write-capable control-plane credentials.
+The `segh` workflow implementation is trusted; scanned repositories are untrusted input. Production scans must run from a private control repository at a reviewed immutable `segh` commit.
 
-For every target, the workflow resolves an immutable commit, mints a token scoped to that repository, disables persisted checkout credentials, Git LFS, and submodules, removes tracked symlinks, rejects unsupported repository shapes, installs scanners only from the trusted `segh` revision, and never executes target scripts, actions, hooks, package managers, installers, builds, tests, or Terraform providers.
+The scanner checks out target source only as data. It does not execute target workflows, scripts, hooks, package managers, builds, tests, Terraform providers, submodules, or Git LFS objects.
 
-Scanner evidence may contain sensitive organization information and must remain in a private control repository. Dashboard bodies are bounded summaries; they must not include source excerpts, private paths, secrets, logs, or stack traces.
+## Credential isolation
 
-Repository contribution and merge protection are outside this threat model.
+Organization discovery and target scanning use short-lived GitHub App installation tokens with read-only permissions. Dashboard publication uses the caller repository's `GITHUB_TOKEN` with issue-write permission and never receives the scan App credential or a target token.
 
-The exact token permissions and consumers are defined in [CREDENTIALS.md](CREDENTIALS.md).
+See [CREDENTIALS.md](CREDENTIALS.md) for the exact permission sets.
 
-## Scorecard limitations
+## Toolchain
 
-The target App grants Metadata, Contents, Checks, Issues, and Pull requests read access. Actions and Administration are intentionally absent. Administrator-only classic branch-protection fields and the experimental Webhooks check are therefore unavailable and are recorded as limitations rather than silently treated as passing evidence.
+Scanner binaries are installed with Aqua using required checksums. GitHub Actions are pinned to full commit SHAs. CI uses actionlint and zizmor for generic workflow validation and ShellCheck for shell code.
 
-Revalidate a private target whenever the Scorecard version, selected checks, or App permission profile changes.
+## Data handling
 
-## Public/private boundary
+Raw scanner evidence can contain sensitive repository information and is retained only as private workflow artifacts in the control repository. Dashboard issues contain bounded normalized status/count information and must not include source excerpts, private paths, secret values, scanner logs, or stack traces.
 
-The public `dceoy/segh` repository is not a production scan or dashboard target. Organization scans, selection snapshots, raw evidence, normalized summaries, and managed dashboard issues must run in a private control repository.
+The dashboard intentionally has no custom integrity ledger, transition journal, or stale/retired reconciliation database. The current successful workflow run is authoritative and overwrites the managed issue state for repositories it scans.
 
-Authentication values must remain masked. Do not add environment dumps, shell tracing, token-bearing command output, arbitrary workspace uploads, or direct publication of raw scanner findings.
+## Reporting vulnerabilities
 
-## Deployment validation
-
-Repository CI validates repository-contained structure and controlled fixtures, but it cannot prove external App installation scope, private repository access, or private artifact visibility.
-
-Before deploying a reviewed scanner revision from the intended private control repository, verify:
-
-- complete intended repository selection and immutable commit planning;
-- one read-only repository-scoped token per target;
-- immutable private checkout without persisted credentials;
-- Scorecard execution with the documented read-only permission set;
-- private artifact retention and token redaction on representative failures;
-- fail-closed behavior when production publication would target a public repository.
-
-Publish only sanitized run references, expected conclusions, and bounded file-presence confirmation.
+Report security issues through GitHub's private vulnerability reporting mechanism when available. Do not disclose credentials, private repository data, or exploitable details in public issues.

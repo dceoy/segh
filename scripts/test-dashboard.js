@@ -1,19 +1,307 @@
 #!/usr/bin/env node
-
 "use strict";
 
-const {execFileSync} = require("node:child_process");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const test = require("node:test");
 
-for (const file of [
-  "core/test-dashboard.js",
-  "test-dashboard-fingerprint.js",
-  "test-dashboard-scorecard.js",
-  "test-dashboard-publisher.js",
-  "test-dashboard-idempotency.js",
-  "test-dashboard-renderer.js",
-  "test-dashboard-native-output.js",
-  "test-dashboard-reconciliation.js",
-]) {
-  execFileSync(process.execPath, [path.join(__dirname, file)], {stdio: "inherit"});
+const {buildSummary} = require("./build-dashboard-summary.js");
+const publish = require("./publish-dashboard.js");
+
+function tempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "segh-dashboard-"));
 }
+
+function writeJson(file, value) {
+  fs.mkdirSync(path.dirname(file), {recursive: true});
+  fs.writeFileSync(file, `${JSON.stringify(value)}\n`);
+}
+
+function fixture(dir) {
+  writeJson(path.join(dir, "target.json"), {
+    repository_id: 7,
+    repository: "example/repo",
+    visibility: "private",
+    default_branch: "main",
+    commit_sha: "a".repeat(40),
+    workflow_run_id: 42,
+    workflow_run_attempt: 1,
+    trusted_workflow_repository: "dceoy/segh",
+  });
+  writeJson(path.join(dir, "scorecard.json"), {checks: [{Name: "Pinned-Dependencies", Score: 10}]});
+  writeJson(path.join(dir, "zizmor.json"), []);
+  fs.writeFileSync(path.join(dir, "actionlint.jsonl"), "");
+  writeJson(path.join(dir, "shellcheck.json"), []);
+  fs.writeFileSync(path.join(dir, "shellcheck-status.txt"), "0\n");
+  writeJson(path.join(dir, "trivy-vulnerability.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
+  writeJson(path.join(dir, "trivy-secret.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
+  writeJson(path.join(dir, "trivy-misconfiguration.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
+}
+
+function successEnv(overrides = {}) {
+  return {
+    CHECKOUT_OUTCOME: "success",
+    TOOLS_OUTCOME: "success",
+    VERSIONS_OUTCOME: "success",
+    PREFLIGHT_OUTCOME: "success",
+    SCORECARD_OUTCOME: "success",
+    ZIZMOR_OUTCOME: "success",
+    ACTIONLINT_OUTCOME: "success",
+    SHELLCHECK_OUTCOME: "success",
+    TRIVY_VULNERABILITY_OUTCOME: "success",
+    TRIVY_SECRET_OUTCOME: "success",
+    TRIVY_MISCONFIGURATION_OUTCOME: "success",
+    DASHBOARD_REPOSITORY: "control/private",
+    ...overrides,
+  };
+}
+
+test("summary reports pass and findings from native scanner outputs", () => {
+  const dir = tempDir();
+  try {
+    fixture(dir);
+    const clean = buildSummary({resultsDir: dir, env: successEnv(), now: new Date("2026-01-01T00:00:00Z")});
+    assert.equal(clean.overall_status, "pass");
+    assert.equal(clean.findings.total, 0);
+
+    writeJson(path.join(dir, "zizmor.json"), [{rule: "unpinned-uses"}]);
+    const findings = buildSummary({resultsDir: dir, env: successEnv({ZIZMOR_OUTCOME: "failure"})});
+    assert.equal(findings.overall_status, "findings");
+    assert.equal(findings.scanners.find((scanner) => scanner.name === "zizmor").findings, 1);
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test("summary fails closed on a failed Scorecard step with parseable output", () => {
+  const dir = tempDir();
+  try {
+    fixture(dir);
+    const summary = buildSummary({resultsDir: dir, env: successEnv({SCORECARD_OUTCOME: "failure"})});
+    assert.equal(summary.overall_status, "error");
+    assert.equal(summary.scanners.find((scanner) => scanner.name === "scorecard").status, "error");
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test("summary distinguishes incomplete preflight from scanner runtime error", () => {
+  const dir = tempDir();
+  try {
+    fixture(dir);
+    assert.equal(buildSummary({resultsDir: dir, env: successEnv({PREFLIGHT_OUTCOME: "failure"})}).overall_status, "incomplete");
+    fs.writeFileSync(path.join(dir, "shellcheck-status.txt"), "2\n");
+    assert.equal(buildSummary({resultsDir: dir, env: successEnv({SHELLCHECK_OUTCOME: "failure"})}).overall_status, "error");
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+function mockGitHub(existing = [], {failCreateAmbiguously = false, failUpdate = false} = {}) {
+  const calls = {labels: [], creates: [], updates: []};
+  let ambiguousCreate = failCreateAmbiguously;
+  return {
+    calls,
+    issues: existing,
+    paginate: async () => existing,
+    rest: {
+      issues: {
+        listForRepo: async () => ({data: existing}),
+        createLabel: async (params) => { calls.labels.push(params.name); return {data: params}; },
+        create: async (params) => {
+          calls.creates.push(params);
+          const issue = {number: 99, ...params, state: "open"};
+          existing.push(issue);
+          if (ambiguousCreate) {
+            ambiguousCreate = false;
+            const error = new Error("ambiguous create failure");
+            error.status = 502;
+            throw error;
+          }
+          return {data: issue};
+        },
+        update: async (params) => {
+          calls.updates.push(params);
+          if (failUpdate) throw new Error("definitive update failure");
+          return {data: params};
+        },
+      },
+    },
+  };
+}
+
+test("publisher creates one current-run issue without reconciliation machinery", async () => {
+  const root = tempDir();
+  try {
+    const summaries = path.join(root, "summaries", "repository-summary-7");
+    fs.mkdirSync(summaries, {recursive: true});
+    writeJson(path.join(root, "matrix.json"), {include: [{
+      id: 7,
+      full_name: "example/repo",
+      visibility: "private",
+      default_branch: "main",
+      commit_sha: "a".repeat(40),
+    }]});
+    writeJson(path.join(summaries, "summary.json"), {
+      repository: {id: 7, full_name: "example/repo", commit_sha: "a".repeat(40)},
+      scan: {evidence_artifact: "repository-scan-7"},
+      overall_status: "findings",
+      scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}],
+    });
+    const github = mockGitHub();
+    const core = {info() {}, warning(message) { throw new Error(message); }};
+    const results = await publish({
+      github,
+      core,
+      context: {repo: {owner: "control", repo: "private"}, runId: 123},
+      planPath: path.join(root, "matrix.json"),
+      summariesPath: path.join(root, "summaries"),
+      repositoryPrivate: "true",
+    });
+    assert.deepEqual(results, [{repository_id: 7, status: "findings", action: "created"}]);
+    assert.equal(github.calls.creates.length, 1);
+    assert.equal(github.calls.creates[0].request.retries, 0);
+    assert.deepEqual(github.calls.creates[0].labels.sort(), ["finding:actions", "scan:findings"]);
+    assert.match(github.calls.creates[0].body, /Scanner results/);
+  } finally {
+    fs.rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test("publisher reconciles ambiguous issue creation without duplicates", async () => {
+  const root = tempDir();
+  try {
+    const summaries = path.join(root, "summaries", "repository-summary-7");
+    writeJson(path.join(root, "matrix.json"), {include: [{
+      id: 7,
+      full_name: "example/repo",
+      visibility: "private",
+      default_branch: "main",
+      commit_sha: "a".repeat(40),
+    }]});
+    writeJson(path.join(summaries, "summary.json"), {
+      repository: {id: 7, full_name: "example/repo", commit_sha: "a".repeat(40)},
+      scan: {evidence_artifact: "repository-scan-7"},
+      overall_status: "findings",
+      scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}],
+    });
+    const github = mockGitHub([], {failCreateAmbiguously: true});
+    const results = await publish({
+      github,
+      core: {info() {}, warning() {}},
+      context: {repo: {owner: "control", repo: "private"}, runId: 126},
+      planPath: path.join(root, "matrix.json"),
+      summariesPath: path.join(root, "summaries"),
+      repositoryPrivate: "true",
+    });
+    assert.deepEqual(results, [{repository_id: 7, status: "findings", action: "created"}]);
+    assert.equal(github.calls.creates.length, 1);
+    assert.equal(github.calls.creates[0].request.retries, 0);
+    assert.equal(github.issues.length, 1);
+    assert.equal(github.issues[0].number, 99);
+  } finally {
+    fs.rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test("publisher replaces stale managed labels and preserves unmanaged labels", async () => {
+  const root = tempDir();
+  try {
+    const summaries = path.join(root, "summaries");
+    fs.mkdirSync(summaries, {recursive: true});
+    writeJson(path.join(root, "matrix.json"), {include: [{
+      id: 7,
+      full_name: "example/repo",
+      visibility: "private",
+      default_branch: "main",
+      commit_sha: "a".repeat(40),
+    }]});
+    writeJson(path.join(summaries, "summary.json"), {
+      repository: {id: 7, full_name: "example/repo", commit_sha: "a".repeat(40)},
+      scan: {evidence_artifact: "repository-scan-7"},
+      overall_status: "pass",
+      scanners: [{name: "zizmor", status: "pass", findings: 0, category: "actions"}],
+    });
+    const github = mockGitHub([{
+      number: 3,
+      title: "[Security dashboard] example/repo",
+      body: "<!-- segh-dashboard: v1 -->\n<!-- segh-repository-id: 7 -->\nold\n",
+      state: "open",
+      labels: [{name: "scan:findings"}, {name: "scan:retired"}, {name: "owner:security"}],
+    }]);
+    await publish({
+      github,
+      core: {info() {}, warning() {}},
+      context: {repo: {owner: "control", repo: "private"}, runId: 124},
+      planPath: path.join(root, "matrix.json"),
+      summariesPath: summaries,
+      repositoryPrivate: "true",
+    });
+    assert.equal(github.calls.updates.length, 1);
+    assert.equal(github.calls.updates[0].state, "closed");
+    assert.deepEqual(github.calls.updates[0].labels, ["owner:security", "scan:pass"]);
+  } finally {
+    fs.rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test("publisher propagates write failures after processing remaining targets", async () => {
+  const root = tempDir();
+  try {
+    const summaries = path.join(root, "summaries");
+    writeJson(path.join(root, "matrix.json"), {include: [
+      {
+        id: 7,
+        full_name: "example/repo",
+        visibility: "private",
+        default_branch: "main",
+        commit_sha: "a".repeat(40),
+      },
+      {
+        id: 8,
+        full_name: "example/other",
+        visibility: "private",
+        default_branch: "main",
+        commit_sha: "b".repeat(40),
+      },
+    ]});
+    writeJson(path.join(summaries, "repository-summary-7", "summary.json"), {
+      repository: {id: 7, full_name: "example/repo", commit_sha: "a".repeat(40)},
+      scan: {evidence_artifact: "repository-scan-7"},
+      overall_status: "findings",
+      scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}],
+    });
+    writeJson(path.join(summaries, "repository-summary-8", "summary.json"), {
+      repository: {id: 8, full_name: "example/other", commit_sha: "b".repeat(40)},
+      scan: {evidence_artifact: "repository-scan-8"},
+      overall_status: "findings",
+      scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}],
+    });
+    const github = mockGitHub([{
+      number: 3,
+      title: "[Security dashboard] example/repo",
+      body: "<!-- segh-dashboard: v1 -->\n<!-- segh-repository-id: 7 -->\nold\n",
+      state: "open",
+      labels: [{name: "scan:pass"}],
+    }], {failUpdate: true});
+
+    await assert.rejects(
+      () => publish({
+        github,
+        core: {info() {}, warning() {}},
+        context: {repo: {owner: "control", repo: "private"}, runId: 125},
+        planPath: path.join(root, "matrix.json"),
+        summariesPath: summaries,
+        repositoryPrivate: "true",
+      }),
+      /dashboard publication failed for repository ids: 7/,
+    );
+    assert.equal(github.calls.updates.length, 1);
+    assert.equal(github.calls.creates.length, 1);
+    assert.equal(github.calls.creates[0].title, "[Security dashboard] example/other");
+  } finally {
+    fs.rmSync(root, {recursive: true, force: true});
+  }
+});
