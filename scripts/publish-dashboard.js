@@ -17,14 +17,14 @@ const MANAGED_LABELS = new Set([
   "finding:secret",
   "finding:misconfiguration",
 ]);
-const EXPECTED_SCANNERS = new Set([
-  "scorecard",
-  "zizmor",
-  "actionlint",
-  "shellcheck",
-  "trivy-vulnerability",
-  "trivy-secret",
-  "trivy-misconfiguration",
+const SCANNER_CATEGORIES = new Map([
+  ["scorecard", null],
+  ["zizmor", "actions"],
+  ["actionlint", "actions"],
+  ["shellcheck", "shell"],
+  ["trivy-vulnerability", "vulnerability"],
+  ["trivy-secret", "secret"],
+  ["trivy-misconfiguration", "misconfiguration"],
 ]);
 const VALID_STATUS = new Set(["pass", "findings", "incomplete", "error"]);
 const VALID_SCANNER_STATUS = new Set(["pass", "findings", "skipped", "error"]);
@@ -100,14 +100,17 @@ function validateSummary(target, summary) {
   if (summary.repository?.id !== target.id || summary.repository?.full_name !== target.full_name ||
       summary.repository?.commit_sha !== target.commit_sha) return false;
   if (summary.evidence_artifact !== `repository-scan-${target.id}`) return false;
-  if (!summary.scanners.every((scanner) =>
-    scanner && typeof scanner.name === "string" && VALID_SCANNER_STATUS.has(scanner.status) &&
-    Number.isSafeInteger(scanner.findings) && scanner.findings >= 0 &&
-    (scanner.status === "findings" ? scanner.findings > 0 : scanner.findings === 0) &&
-    (scanner.category === undefined || typeof scanner.category === "string"))) return false;
+  if (!summary.scanners.every((scanner) => {
+    if (!scanner || typeof scanner.name !== "string" || !SCANNER_CATEGORIES.has(scanner.name) ||
+        !VALID_SCANNER_STATUS.has(scanner.status) || !Number.isSafeInteger(scanner.findings) || scanner.findings < 0) return false;
+    const category = SCANNER_CATEGORIES.get(scanner.name);
+    if (scanner.status === "findings") {
+      return Boolean(category) && scanner.findings > 0 && scanner.category === category;
+    }
+    return scanner.findings === 0 && scanner.category === undefined;
+  })) return false;
   const scannerNames = new Set(summary.scanners.map((scanner) => scanner.name));
-  if (summary.scanners.length !== EXPECTED_SCANNERS.size || scannerNames.size !== EXPECTED_SCANNERS.size ||
-      summary.scanners.some((scanner) => !EXPECTED_SCANNERS.has(scanner.name))) return false;
+  if (summary.scanners.length !== SCANNER_CATEGORIES.size || scannerNames.size !== SCANNER_CATEGORIES.size) return false;
 
   const statuses = summary.scanners.map((scanner) => scanner.status);
   if (summary.overall_status === "pass") {
