@@ -29,7 +29,9 @@ function parseScorecard(resultsDir, outcome) {
   if (!exists(file)) return result("scorecard", "error");
   try {
     const data = readJson(file);
-    if (!Array.isArray(data?.checks) || data.checks.length === 0) return result("scorecard", "error");
+    if (!Array.isArray(data?.checks) || data.checks.length === 0 || !data.checks.every((check) =>
+      check && typeof check === "object" && typeof check.Name === "string" && check.Name.trim().length > 0 &&
+      Number.isFinite(check.Score))) return result("scorecard", "error");
     return result("scorecard", "pass");
   } catch {
     return result("scorecard", "error");
