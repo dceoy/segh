@@ -31,9 +31,9 @@ Dashboard publication uses only the private caller repository's built-in `GITHUB
 | --- | --- | --- |
 | Actions | Read | Download the current run's plan and summary artifacts |
 | Contents | Read | Check out the reviewed publisher implementation |
-| Issues | Write | Create/update managed dashboard issues and labels |
+| Issues | Write | Create/update managed dashboard issues |
 
-The publisher receives no configured secrets, organization App credential, or target token. It publishes only to `${{ github.repository }}` and requires the caller repository to be private.
+The publisher receives no configured secrets, organization App credential, or target token. It publishes only to `${{ github.repository }}` and requires the caller repository to be private. Managed dashboard label definitions are an operational prerequisite in that private repository and are not provisioned at runtime.
 
 ## Caller contract
 
