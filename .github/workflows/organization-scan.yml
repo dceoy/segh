@@ -104,202 +104,137 @@ jobs:
           github-token: ${{ inputs.validation_mode && github.token || steps.app-token.outputs.token }}
           script: |
             const fs = require('fs');
-
             const shaPattern = /^[0-9a-f]{40}$/;
-            const parseBoundedInteger = (raw, name, min, max) => {
-              if (!/^\d+$/.test(raw)) {
-                throw new Error(`${name} must be an integer from ${min} to ${max}.`);
-              }
+            const boundedInteger = (raw, name, min, max) => {
               const value = Number(raw);
-              if (!Number.isSafeInteger(value) || value < min || value > max) {
+              if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < min || value > max) {
                 throw new Error(`${name} must be an integer from ${min} to ${max}.`);
               }
               return value;
             };
-            const assertSelectionBound = (count, limit) => {
-              if (!Number.isInteger(count) || count < 0 || count > limit) {
-                throw new Error(`Selected ${count} repositories, exceeding repository_limit=${limit}; refusing incomplete coverage.`);
-              }
-            };
-            const validateIdentity = (repository) => {
-              const owner = repository?.owner?.login;
-              return Number.isInteger(repository?.id) && repository.id > 0 &&
-                typeof owner === 'string' && owner.length > 0 && !owner.includes('/') &&
-                typeof repository?.name === 'string' && repository.name.length > 0 && !repository.name.includes('/') &&
-                typeof repository?.full_name === 'string' && repository.full_name === `${owner}/${repository.name}` &&
-                ['public', 'private', 'internal'].includes(repository?.visibility) &&
-                typeof repository?.fork === 'boolean' &&
-                typeof repository?.default_branch === 'string' && repository.default_branch.length > 0;
-            };
+            const validRepository = (repository) => Number.isInteger(repository?.id) && repository.id > 0 &&
+              typeof repository.owner === 'string' && repository.owner.length > 0 && !repository.owner.includes('/') &&
+              typeof repository.name === 'string' && repository.name.length > 0 && !repository.name.includes('/') &&
+              repository.full_name === `${repository.owner}/${repository.name}` &&
+              ['public', 'private', 'internal'].includes(repository.visibility) && typeof repository.fork === 'boolean' &&
+              typeof repository.default_branch === 'string' && repository.default_branch.length > 0;
             const selectRepositories = (repositories, limit) => {
-              if (!Array.isArray(repositories)) {
-                throw new Error('GitHub App repository enumeration returned malformed data.');
-              }
+              if (!Array.isArray(repositories)) throw new Error('GitHub App repository enumeration returned malformed data.');
               const ids = new Set();
+              const selected = [];
               for (const repository of repositories) {
-                if (ids.has(repository?.id)) {
-                  throw new Error('GitHub App repository enumeration returned duplicate repository IDs.');
-                }
+                if (ids.has(repository?.id)) throw new Error('GitHub App repository enumeration returned duplicate repository IDs.');
                 ids.add(repository?.id);
+                if (repository?.disabled === true || repository?.archived === true) continue;
+                const candidate = {
+                  id: repository?.id, full_name: repository?.full_name, owner: repository?.owner?.login,
+                  name: repository?.name, visibility: repository?.visibility, fork: repository?.fork,
+                  default_branch: repository?.default_branch,
+                };
+                if (!validRepository(candidate)) throw new Error('At least one selected repository has malformed or missing identity metadata.');
+                selected.push(candidate);
               }
-              const selected = repositories
-                .filter((repository) => repository?.disabled !== true && repository?.archived !== true)
-                .map((repository) => {
-                  if (!validateIdentity(repository)) {
-                    throw new Error('At least one selected repository has malformed or missing identity metadata.');
-                  }
-                  return {
-                    id: repository.id,
-                    full_name: repository.full_name,
-                    owner: repository.owner.login,
-                    name: repository.name,
-                    visibility: repository.visibility,
-                    fork: repository.fork,
-                    default_branch: repository.default_branch,
-                  };
-                })
-                .sort((left, right) => left.full_name < right.full_name ? -1 : left.full_name > right.full_name ? 1 : 0);
-              assertSelectionBound(selected.length, limit);
+              selected.sort((left, right) => left.full_name < right.full_name ? -1 : left.full_name > right.full_name ? 1 : 0);
+              if (selected.length > limit) {
+                throw new Error(`GitHub App selected ${selected.length} repositories, exceeding repository_limit=${limit}; refusing incomplete coverage.`);
+              }
               return selected;
             };
             const listInstallationRepositories = async (client) => {
-              const readTotalCount = async () => {
+              const totalCount = async () => {
                 const {data} = await client.request('GET /installation/repositories', {per_page: 1});
                 if (!data || !Number.isInteger(data.total_count) || data.total_count < 0 || !Array.isArray(data.repositories)) {
                   throw new Error('GitHub App installation repository enumeration returned malformed count metadata.');
                 }
                 return data.total_count;
               };
-              const before = await readTotalCount();
+              const before = await totalCount();
               const repositories = await client.paginate('GET /installation/repositories', {per_page: 100});
-              const after = await readTotalCount();
+              const after = await totalCount();
               if (before !== after || repositories.length !== before) {
                 throw new Error(`GitHub App repository pagination was not stable and complete: before=${before}, fetched=${repositories.length}, after=${after}.`);
               }
               return repositories;
             };
-            const resolveMatrix = async (client, selected) => {
+            const resolveMatrix = async (client, repositories) => {
               const include = [];
-              for (const repository of selected) {
-                let data;
+              for (const repository of repositories) {
                 try {
-                  ({data} = await client.rest.repos.getCommit({
-                    owner: repository.owner,
-                    repo: repository.name,
-                    ref: repository.default_branch,
-                  }));
+                  const {data} = await client.rest.repos.getCommit({
+                    owner: repository.owner, repo: repository.name, ref: repository.default_branch,
+                  });
+                  if (!shaPattern.test(data?.sha || '')) throw new Error('response did not contain a lowercase 40-character SHA');
+                  include.push({...repository, commit_sha: data.sha});
                 } catch (error) {
                   throw new Error(`${repository.full_name}: failed to resolve default branch ${repository.default_branch}: ${error.message}`);
                 }
-                if (!data || typeof data.sha !== 'string' || !shaPattern.test(data.sha)) {
-                  throw new Error(`${repository.full_name}: default branch did not resolve to a lowercase immutable commit SHA.`);
-                }
-                include.push({...repository, commit_sha: data.sha});
               }
               return {include};
             };
             const validateMatrix = (matrix) => {
-              if (!matrix || !Array.isArray(matrix.include) || !matrix.include.every((target) =>
-                Number.isInteger(target.id) && target.id > 0 &&
-                typeof target.owner === 'string' && target.owner.length > 0 && !target.owner.includes('/') &&
-                typeof target.name === 'string' && target.name.length > 0 && !target.name.includes('/') &&
-                target.full_name === `${target.owner}/${target.name}` &&
-                ['public', 'private', 'internal'].includes(target.visibility) &&
-                typeof target.fork === 'boolean' &&
-                typeof target.default_branch === 'string' && target.default_branch.length > 0 &&
-                typeof target.commit_sha === 'string' && shaPattern.test(target.commit_sha))) {
+              if (!Array.isArray(matrix?.include) || matrix.include.some((target) =>
+                !validRepository(target) || !shaPattern.test(target.commit_sha || ''))) {
                 throw new Error('Refusing to emit a malformed or incomplete scan matrix.');
               }
             };
             const expectFailure = async (operation, pattern) => {
-              try {
-                await operation();
-              } catch (error) {
-                if (pattern.test(error.message)) return;
-                throw error;
-              }
+              try { await operation(); } catch (error) { if (pattern.test(error.message)) return; throw error; }
               throw new Error(`Expected validation failure matching ${pattern}.`);
             };
-            const sampleRepository = (id, name, extra = {}) => ({
-              id,
-              name,
-              full_name: `dceoy/${name}`,
-              owner: {login: 'dceoy'},
-              visibility: 'public',
-              fork: false,
-              default_branch: 'main',
-              archived: false,
-              disabled: false,
-              ...extra,
-            });
-
-            const repositoryLimit = parseBoundedInteger(process.env.REPOSITORY_LIMIT, 'repository_limit', 1, 100);
-            const maxParallel = parseBoundedInteger(process.env.MAX_PARALLEL, 'max_parallel', 1, 10);
-            const validationMode = process.env.VALIDATION_MODE === 'true';
+            const repositoryLimit = boundedInteger(process.env.REPOSITORY_LIMIT, 'repository_limit', 1, 100);
+            const maxParallel = boundedInteger(process.env.MAX_PARALLEL, 'max_parallel', 1, 10);
             let matrix;
 
-            if (validationMode) {
+            if (process.env.VALIDATION_MODE === 'true') {
               if (process.env.CALLER_REPOSITORY !== 'dceoy/segh' || process.env.EVENT_NAME !== 'pull_request') {
                 throw new Error('validation_mode is restricted to pull requests in dceoy/segh.');
               }
               if (!shaPattern.test(process.env.HEAD_SHA || '')) {
                 throw new Error('The validation pull request head must resolve to an immutable commit SHA.');
               }
-
-              const first = sampleRepository(1, 'alpha');
-              const second = sampleRepository(2, 'beta', {fork: true});
-              const fakeClient = {
-                request: async () => ({data: {total_count: 2, repositories: [first]}}),
-                paginate: async () => [first, second],
-              };
-              const paginated = await listInstallationRepositories(fakeClient);
+              const repository = (id, name, extra = {}) => ({
+                id, name, full_name: `dceoy/${name}`, owner: {login: 'dceoy'}, visibility: 'public', fork: false,
+                default_branch: 'main', archived: false, disabled: false, ...extra,
+              });
+              const alpha = repository(1, 'alpha');
+              const beta = repository(2, 'beta', {fork: true});
+              const paginated = await listInstallationRepositories({
+                request: async () => ({data: {total_count: 2, repositories: [alpha]}}),
+                paginate: async () => [alpha, beta],
+              });
               if (paginated.length !== 2) throw new Error('Octokit pagination validation did not preserve complete coverage.');
               const selected = selectRepositories([
-                sampleRepository(3, 'zeta'), second, first,
-                sampleRepository(4, 'archived', {archived: true}),
-                sampleRepository(5, 'disabled', {disabled: true}),
+                repository(3, 'zeta'), beta, alpha, repository(4, 'archived', {archived: true}),
+                repository(5, 'disabled', {disabled: true}),
               ], 3);
               if (selected.map(({full_name}) => full_name).join(',') !== 'dceoy/alpha,dceoy/beta,dceoy/zeta' || !selected[1].fork) {
                 throw new Error('Repository filtering, fork inclusion, or deterministic ordering changed.');
               }
-              await expectFailure(async () => selectRepositories([first, first], 2), /duplicate repository IDs/);
-              await expectFailure(async () => selectRepositories([sampleRepository(6, 'bad', {owner: {login: ''}})], 1), /malformed or missing identity/);
-              await expectFailure(async () => selectRepositories([first, second], 1), /exceeding repository_limit=1/);
+              await expectFailure(() => selectRepositories([alpha, alpha], 2), /duplicate repository IDs/);
+              await expectFailure(() => selectRepositories([repository(6, 'bad', {owner: {login: ''}})], 1), /malformed or missing identity/);
+              await expectFailure(() => selectRepositories([alpha, beta], 1), /exceeding repository_limit=1/);
               if (selectRepositories([], 1).length !== 0) throw new Error('Empty installation selection must remain valid.');
-              await expectFailure(async () => resolveMatrix({rest: {repos: {getCommit: async () => { throw new Error('not found'); }}}}, [first]), /failed to resolve default branch/);
+              await expectFailure(() => resolveMatrix({rest: {repos: {getCommit: async () => { throw new Error('not found'); }}}}, [alpha]), /failed to resolve default branch/);
               const resolved = await resolveMatrix({rest: {repos: {getCommit: async () => ({data: {sha: process.env.HEAD_SHA}})}}}, selected);
               validateMatrix(resolved);
-
               const target = (id, validationCase, commitSha) => ({
-                id,
-                full_name: 'dceoy/segh',
-                owner: 'dceoy',
-                name: 'segh',
-                visibility: 'public',
-                fork: false,
-                default_branch: 'main',
-                commit_sha: commitSha,
-                validation_case: validationCase,
+                id, full_name: 'dceoy/segh', owner: 'dceoy', name: 'segh', visibility: 'public', fork: false,
+                default_branch: 'main', commit_sha: commitSha, validation_case: validationCase,
               });
               matrix = {include: [
-                target(900001, 'clean', process.env.HEAD_SHA),
-                target(900002, 'no-exec', process.env.HEAD_SHA),
+                target(900001, 'clean', process.env.HEAD_SHA), target(900002, 'no-exec', process.env.HEAD_SHA),
                 target(900003, 'scanner-runtime-error', process.env.HEAD_SHA),
                 target(900004, 'checkout-failure', '0000000000000000000000000000000000000000'),
               ]};
             } else {
               let repositories;
-              try {
-                repositories = await listInstallationRepositories(github);
-              } catch (error) {
-                throw new Error(`GitHub App installation repository enumeration failed: ${error.message}`);
-              }
-              const selected = selectRepositories(repositories, repositoryLimit);
-              matrix = await resolveMatrix(github, selected);
+              try { repositories = await listInstallationRepositories(github); }
+              catch (error) { throw new Error(`GitHub App installation repository enumeration failed: ${error.message}`); }
+              matrix = await resolveMatrix(github, selectRepositories(repositories, repositoryLimit));
             }
 
             validateMatrix(matrix);
-            assertSelectionBound(matrix.include.length, repositoryLimit);
+            if (matrix.include.length > repositoryLimit) throw new Error(`Resolved scan matrix violates repository_limit=${repositoryLimit}.`);
             const matrixJson = JSON.stringify(matrix);
             fs.writeFileSync('matrix.json', `${matrixJson}\n`);
             core.setOutput('matrix', matrixJson);
