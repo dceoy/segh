@@ -6,17 +6,6 @@ const path = require("node:path");
 const MANAGED = /<!-- segh-dashboard: v1 -->/;
 const REPOSITORY_ID = /<!-- segh-repository-id: ([0-9]+) -->/;
 const OWNED_LABEL = /^(?:scan|finding):/;
-const MANAGED_LABELS = new Set([
-  "scan:pass",
-  "scan:findings",
-  "scan:incomplete",
-  "scan:error",
-  "finding:actions",
-  "finding:shell",
-  "finding:vulnerability",
-  "finding:secret",
-  "finding:misconfiguration",
-]);
 const SCANNER_CATEGORIES = new Map([
   ["scorecard", null],
   ["zizmor", "actions"],
@@ -87,7 +76,7 @@ function desiredLabels(summary) {
   for (const scanner of summary.scanners || []) {
     if (scanner.status === "findings" && scanner.category) names.push(`finding:${scanner.category}`);
   }
-  return [...new Set(names)].filter((name) => MANAGED_LABELS.has(name)).sort();
+  return [...new Set(names)].sort();
 }
 
 function mergedLabels(existing, desired) {
@@ -104,21 +93,15 @@ function validateSummary(target, summary) {
     if (!scanner || typeof scanner.name !== "string" || !SCANNER_CATEGORIES.has(scanner.name) ||
         !VALID_SCANNER_STATUS.has(scanner.status) || !Number.isSafeInteger(scanner.findings) || scanner.findings < 0) return false;
     const category = SCANNER_CATEGORIES.get(scanner.name);
-    if (scanner.status === "findings") {
-      return Boolean(category) && scanner.findings > 0 && scanner.category === category;
-    }
+    if (scanner.status === "findings") return Boolean(category) && scanner.findings > 0 && scanner.category === category;
     return scanner.findings === 0 && scanner.category === undefined;
   })) return false;
-  const scannerNames = new Set(summary.scanners.map((scanner) => scanner.name));
-  if (summary.scanners.length !== SCANNER_CATEGORIES.size || scannerNames.size !== SCANNER_CATEGORIES.size) return false;
+  if (summary.scanners.length !== SCANNER_CATEGORIES.size ||
+      new Set(summary.scanners.map((scanner) => scanner.name)).size !== SCANNER_CATEGORIES.size) return false;
 
   const statuses = summary.scanners.map((scanner) => scanner.status);
-  if (summary.overall_status === "pass") {
-    return statuses.some((status) => status === "pass") && statuses.every((status) => status === "pass" || status === "skipped");
-  }
-  if (summary.overall_status === "findings") {
-    return statuses.includes("findings") && !statuses.includes("error");
-  }
+  if (summary.overall_status === "pass") return statuses.includes("pass") && statuses.every((status) => status === "pass" || status === "skipped");
+  if (summary.overall_status === "findings") return statuses.includes("findings") && !statuses.includes("error");
   if (summary.overall_status === "incomplete") return statuses.every((status) => status === "skipped");
   return true;
 }
