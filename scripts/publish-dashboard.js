@@ -90,6 +90,7 @@ function validateSummary(target, summary) {
   if (!summary || !VALID_STATUS.has(summary.overall_status) || !Array.isArray(summary.scanners)) return false;
   if (summary.repository?.id !== target.id || summary.repository?.full_name !== target.full_name ||
       summary.repository?.commit_sha !== target.commit_sha) return false;
+  if (summary.evidence_artifact !== `repository-scan-${target.id}`) return false;
   return summary.scanners.every((scanner) =>
     scanner && typeof scanner.name === "string" && VALID_SCANNER_STATUS.has(scanner.status) &&
     Number.isSafeInteger(scanner.findings) && scanner.findings >= 0 &&
