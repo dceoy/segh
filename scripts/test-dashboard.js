@@ -17,6 +17,15 @@ const TARGET = {
   default_branch: "main",
   commit_sha: "a".repeat(40),
 };
+const SCANNER_NAMES = [
+  "scorecard",
+  "zizmor",
+  "actionlint",
+  "shellcheck",
+  "trivy-vulnerability",
+  "trivy-secret",
+  "trivy-misconfiguration",
+];
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "segh-dashboard-"));
@@ -61,12 +70,14 @@ function successEnv(overrides = {}) {
 }
 
 function summary(target = TARGET, status = "findings") {
+  const scanners = SCANNER_NAMES.map((name) => ({name, status: "pass", findings: 0}));
+  if (status === "findings") scanners[1] = {name: "zizmor", status: "findings", findings: 1, category: "actions"};
+  else if (status === "incomplete") scanners.forEach((scanner) => { scanner.status = "skipped"; });
+  else if (status === "error") scanners[0].status = "error";
   return {
     repository: {id: target.id, full_name: target.full_name, commit_sha: target.commit_sha},
     overall_status: status,
-    scanners: status === "findings"
-      ? [{name: "zizmor", status: "findings", findings: 1, category: "actions"}]
-      : [{name: "zizmor", status: "pass", findings: 0}],
+    scanners,
     evidence_artifact: `repository-scan-${target.id}`,
   };
 }
@@ -230,6 +241,16 @@ test("publisher fails closed for missing, malformed, or mismatched summaries", a
       return value;
     })(),
     {...summary(), evidence_artifact: "repository-scan-999"},
+    (() => {
+      const value = summary(TARGET, "pass");
+      value.scanners.pop();
+      return value;
+    })(),
+    (() => {
+      const value = summary(TARGET, "pass");
+      value.scanners[value.scanners.length - 1] = {...value.scanners[0]};
+      return value;
+    })(),
     {...summary(TARGET, "pass"), scanners: [{name: "zizmor", status: "pass", findings: 1}]},
     {...summary(), scanners: [{name: "zizmor", status: "findings", findings: 0, category: "actions"}]},
     {...summary(TARGET, "pass"), scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}]},
