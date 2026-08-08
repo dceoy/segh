@@ -149,7 +149,20 @@ jobs:
                 return data.total_count;
               };
               const before = await totalCount();
-              const repositories = await client.paginate('GET /installation/repositories', {per_page: 100});
+              const repositories = await client.paginate(
+                'GET /installation/repositories',
+                {per_page: 100},
+                (response) => {
+                  const pageTotal = response.data?.total_count;
+                  if (!Array.isArray(response.data) || !Number.isInteger(pageTotal) || pageTotal < 0) {
+                    throw new Error('GitHub App installation repository pagination returned malformed count metadata.');
+                  }
+                  if (pageTotal !== before) {
+                    throw new Error(`GitHub App repository pagination was not stable and complete: before=${before}, page=${pageTotal}.`);
+                  }
+                  return response.data;
+                },
+              );
               const after = await totalCount();
               if (before !== after || repositories.length !== before) {
                 throw new Error(`GitHub App repository pagination was not stable and complete: before=${before}, fetched=${repositories.length}, after=${after}.`);
@@ -198,11 +211,18 @@ jobs:
               });
               const alpha = repository(1, 'alpha');
               const beta = repository(2, 'beta', {fork: true});
+              const page = (repositories, totalCount) => Object.assign([...repositories], {total_count: totalCount});
+              const paginate = (pages) => async (_route, _parameters, map) => pages.flatMap((data) => map({data}));
+              const request = async () => ({data: {total_count: 2, repositories: [alpha]}});
               const paginated = await listInstallationRepositories({
-                request: async () => ({data: {total_count: 2, repositories: [alpha]}}),
-                paginate: async () => [alpha, beta],
+                request,
+                paginate: paginate([page([alpha], 2), page([beta], 2)]),
               });
               if (paginated.length !== 2) throw new Error('Octokit pagination validation did not preserve complete coverage.');
+              await expectFailure(() => listInstallationRepositories({
+                request,
+                paginate: paginate([page([alpha], 2), page([beta], 3)]),
+              }), /pagination was not stable and complete/);
               const selected = selectRepositories([
                 repository(3, 'zeta'), beta, alpha, repository(4, 'archived', {archived: true}),
                 repository(5, 'disabled', {disabled: true}),
