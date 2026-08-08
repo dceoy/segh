@@ -30,7 +30,7 @@ function fixture(dir) {
     workflow_run_attempt: 1,
     trusted_workflow_repository: "dceoy/segh",
   });
-  writeJson(path.join(dir, "scorecard.json"), {checks: [{Name: "Pinned-Dependencies", Score: 1}]});
+  writeJson(path.join(dir, "scorecard.json"), {checks: [{name: "Pinned-Dependencies", score: 1}]});
   writeJson(path.join(dir, "zizmor.json"), []);
   fs.writeFileSync(path.join(dir, "actionlint.jsonl"), "");
   writeJson(path.join(dir, "shellcheck.json"), []);
@@ -101,9 +101,9 @@ test("summary fails closed on Scorecard runtime and evidence errors", () => {
     for (const checks of [
       [null],
       [{}],
-      [{Name: "Pinned-Dependencies"}],
-      [{Name: "", Score: 1}],
-      [{Name: "Pinned-Dependencies", Score: "1"}],
+      [{name: "Pinned-Dependencies"}],
+      [{name: "", score: 1}],
+      [{name: "Pinned-Dependencies", score: "1"}],
     ]) {
       writeJson(path.join(dir, "scorecard.json"), {checks});
       summary = buildSummary({resultsDir: dir, env: successEnv()});
