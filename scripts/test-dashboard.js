@@ -230,6 +230,8 @@ test("publisher fails closed for missing, malformed, or mismatched summaries", a
       return value;
     })(),
     {...summary(), evidence_artifact: "repository-scan-999"},
+    {...summary(TARGET, "pass"), scanners: [{name: "zizmor", status: "pass", findings: 1}]},
+    {...summary(), scanners: [{name: "zizmor", status: "findings", findings: 0, category: "actions"}]},
     {...summary(TARGET, "pass"), scanners: [{name: "zizmor", status: "findings", findings: 1, category: "actions"}]},
     {...summary(TARGET, "pass"), scanners: [{name: "zizmor", status: "error", findings: 0}]},
     {...summary(TARGET, "findings"), scanners: [{name: "zizmor", status: "pass", findings: 0}]},
