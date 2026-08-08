@@ -4,12 +4,17 @@ set -euo pipefail
 
 readonly root=${1:-.}
 readonly workflow=.github/workflows/organization-scan.yml
-readonly scan="$root/$workflow"
+readonly source_scan="$root/$workflow"
 
 fail() {
   printf '::error file=%s::%s\n' "$workflow" "$1" >&2
   exit 1
 }
+
+scan=$(mktemp)
+trap 'rm -f "$scan"' EXIT
+yq --yaml-fix-merge-anchor-to-spec=true 'explode(.)' "$source_scan" > "$scan" || fail 'invalid YAML'
+readonly scan
 
 assert_value() {
   local expression=$1
