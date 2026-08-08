@@ -24,6 +24,36 @@ git -C "$repo" add real.txt link.txt
 [[ -f "$repo/real.txt" && ! -e "$repo/link.txt" ]]
 grep -F 'Removed tracked symlink: link.txt' "$root/symlink.log" > /dev/null
 
+repo=$(new_repo untracked)
+printf 'safe\n' > "$repo/README.md"
+printf 'ignored.txt\n' > "$repo/.gitignore"
+git -C "$repo" add README.md .gitignore
+printf 'generated\n' > "$repo/ignored.txt"
+if "$preflight" "$repo" > "$root/untracked.log" 2>&1; then
+  echo 'preflight accepted an ignored untracked path' >&2
+  exit 1
+fi
+grep -F 'Rejected untracked path: ignored.txt' "$root/untracked.log" > /dev/null
+
+repo=$(new_repo untracked-enumeration-failure)
+printf 'safe\n' > "$repo/README.md"
+git -C "$repo" add README.md
+mkdir "$root/bin"
+real_git=$(command -v git)
+cat > "$root/bin/git" <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${3:-} == ls-files && ${4:-} == --others && ${5:-} == -z ]]; then
+  exit 42
+fi
+exec "$REAL_GIT" "$@"
+WRAPPER
+chmod +x "$root/bin/git"
+if REAL_GIT="$real_git" PATH="$root/bin:$PATH" "$preflight" "$repo" > "$root/untracked-enumeration-failure.log" 2>&1; then
+  echo 'preflight accepted a failed untracked-file enumeration' >&2
+  exit 1
+fi
+
 repo=$(new_repo submodule)
 printf 'safe\n' > "$repo/README.md"
 git -C "$repo" add README.md
