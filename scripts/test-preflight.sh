@@ -24,6 +24,17 @@ git -C "$repo" add real.txt link.txt
 [[ -f "$repo/real.txt" && ! -e "$repo/link.txt" ]]
 grep -F 'Removed tracked symlink: link.txt' "$root/symlink.log" > /dev/null
 
+repo=$(new_repo untracked)
+printf 'safe\n' > "$repo/README.md"
+printf 'ignored.txt\n' > "$repo/.gitignore"
+git -C "$repo" add README.md .gitignore
+printf 'generated\n' > "$repo/ignored.txt"
+if "$preflight" "$repo" > "$root/untracked.log" 2>&1; then
+  echo 'preflight accepted an ignored untracked path' >&2
+  exit 1
+fi
+grep -F 'Rejected untracked path: ignored.txt' "$root/untracked.log" > /dev/null
+
 repo=$(new_repo submodule)
 printf 'safe\n' > "$repo/README.md"
 git -C "$repo" add README.md
