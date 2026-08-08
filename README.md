@@ -16,7 +16,18 @@ The production workflow installs checksum-verified tools with Aqua and runs:
 
 OpenSSF Scorecard is informational evidence. A successful execution with parseable native Scorecard JSON is reported as `pass` regardless of aggregate or individual check scores; only execution or evidence-integrity failures become scanner errors. `segh` does not translate Scorecard scores into findings, thresholds, or finding labels.
 
-Target repositories are treated as untrusted data. Their scripts, actions, hooks, package managers, builds, tests, Terraform providers, submodules, and Git LFS objects are not executed or expanded.
+Target repositories are treated as untrusted data. Their scripts, actions, hooks, package managers, builds, tests, Terraform providers, submodules, and Git LFS objects are not executed or expanded. Preflight rejects every untracked path, including paths hidden by target-owned ignore files, removes tracked symlinks, and rejects unmaterialized submodules and Git LFS pointers before scanners run.
+
+### Scanner input collection
+
+Scanner-native collection is used only when it preserves the preflighted target boundary and native result semantics:
+
+- **zizmor:** keep explicit Git-index selection for workflow and action YAML. Native workflow/action collection honors target-owned `.gitignore`; disabling that behavior with `--collect=all` broadens the collected input kinds. Explicit selection also preserves a successful empty result when no matching files exist.
+- **actionlint:** keep explicit Git-index selection. Repository-native discovery recursively walks `.github/workflows` from the filesystem and treats an empty workflow set as a fatal error, so it is not coverage- or no-match-equivalent.
+- **ShellCheck:** keep explicit Git-index selection because ShellCheck has no repository-native collector matching segh's extension-plus-supported-shebang policy.
+- **Trivy:** keep native `filesystem` collection. It runs only after preflight has excluded untracked content and unsafe Git object types; target-owned Trivy configuration and ignore files are disabled with `/dev/null`, and `.git` is excluded.
+
+These decisions are enforced by `scripts/validate-scanner-collection.rb` so future simplification cannot silently broaden scanner inputs or change empty-selection behavior.
 
 ## Architecture
 
@@ -83,7 +94,8 @@ Scorecard remains visible in the scanner-results table as informational `pass`/`
 
 Pull-request CI runs:
 
-- a small Ruby credential-boundary validator for segh-specific invariants;
+- small Ruby validators for credential and scanner-collection boundaries;
+- shell tests for the target preflight boundary;
 - Node tests for summary normalization and issue publication;
 - actionlint, zizmor, and ShellCheck;
 - YAML/JSON parsing and Aqua checksum verification; and
