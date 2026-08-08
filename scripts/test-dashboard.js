@@ -97,6 +97,19 @@ test("summary fails closed on Scorecard runtime and evidence errors", () => {
     summary = buildSummary({resultsDir: dir, env: successEnv()});
     assert.equal(summary.overall_status, "error");
     assert.equal(summary.scanners.find((scanner) => scanner.name === "scorecard").status, "error");
+
+    for (const checks of [
+      [null],
+      [{}],
+      [{Name: "Pinned-Dependencies"}],
+      [{Name: "", Score: 1}],
+      [{Name: "Pinned-Dependencies", Score: "1"}],
+    ]) {
+      writeJson(path.join(dir, "scorecard.json"), {checks});
+      summary = buildSummary({resultsDir: dir, env: successEnv()});
+      assert.equal(summary.overall_status, "error");
+      assert.equal(summary.scanners.find((scanner) => scanner.name === "scorecard").status, "error");
+    }
   } finally {
     fs.rmSync(dir, {recursive: true, force: true});
   }
