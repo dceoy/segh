@@ -23,18 +23,22 @@ normalize = ->(text) { text.gsub(/\\\n\s*/, " ").gsub(/\s+/, " ").strip }
 normalized_run = ->(id) { normalize.call(run.call(id)) }
 file_array_boundary = lambda do |id, expected_append|
   body = run.call(id)
-  mutations = body.scan(/\bfiles(?:\[[^\]\n]+\])?\s*(?:\+=|=)/).map { |mutation| mutation.gsub(/\s+/, "") }
+  references = body.lines.map(&:strip).select { |line| line.match?(/\bfiles\b/) }
   assert.call(
-    mutations == ["files=", "files+="],
-    "#{id} must initialize files once and mutate it only through the trusted collector"
+    references.length == 4 && references[0] == "files=()",
+    "#{id} scanner input array must have exactly the trusted references and start empty"
   )
   assert.call(
-    body.scan(/^\s*files=\(\)\s*$/).length == 1,
-    "#{id} scanner input array must start empty"
-  )
-  assert.call(
-    body.scan(Regexp.new(Regexp.escape(expected_append))).length == 1,
+    references[1].scan(Regexp.new(Regexp.escape(expected_append))).length == 1,
     "#{id} must append scanner inputs only through the trusted collector"
+  )
+  assert.call(
+    references[2] == 'if ((${#files[@]} == 0)); then',
+    "#{id} must preserve the trusted empty-selection check"
+  )
+  assert.call(
+    references[3].scan(/\$\{files\[@\]\}/).length == 1,
+    "#{id} scanner invocation must be the only consumer of the collected files array"
   )
 end
 git_index_command = lambda do |id|
@@ -120,7 +124,7 @@ path_case_end = path_case_start && shellcheck.index("esac", path_case_start)
 failure.call("ShellCheck extension policy is missing") unless path_case_start && path_case_end
 path_case = normalize.call(shellcheck[path_case_start...(path_case_end + "esac".length)])
 assert.call(path_case == 'case "$path" in *.sh|*.bash|*.bats) include=true ;; esac', "ShellCheck extension selection must stay limited to .sh, .bash, and .bats")
-accepted_interpreters = shellcheck.scan(/^\s*([^\n)]+)\)\s+return 0 ;;/).flatten.map(&:strip)
+accepted_interpreters = shellcheck.scan(/^\s*([^\n)]+\)\s+return 0 ;;/).flatten.map(&:strip)
 assert.call(accepted_interpreters == ["sh|bash|dash|ksh", "sh|bash|dash|ksh"], "ShellCheck shebang selection must stay limited to sh, bash, dash, and ksh")
 file_array_boundary.call("shellcheck", %q{files+=("$path")})
 exact_scanner_invocation.call(
