@@ -21,6 +21,18 @@ end
 run = ->(id) { step.call(id).fetch("run") }
 normalize = ->(text) { text.gsub(/\\\n\s*/, " ").gsub(/\s+/, " ").strip }
 normalized_run = ->(id) { normalize.call(run.call(id)) }
+file_array_boundary = lambda do |id, expected_append|
+  body = run.call(id)
+  mutations = body.scan(/\bfiles(?:\[[^\]\n]+\])?\s*(?:\+=|=)/).map { |mutation| mutation.gsub(/\s+/, "") }
+  assert.call(
+    mutations == ["files=", "files+="],
+    "#{id} must initialize files once and mutate it only through the trusted collector"
+  )
+  assert.call(
+    body.scan(Regexp.new(Regexp.escape(expected_append))).length == 1,
+    "#{id} must append scanner inputs only through the trusted collector"
+  )
+end
 git_index_command = lambda do |id|
   lines = run.call(id).lines
   index = lines.index { |line| line.include?("done < <(git -C _target ls-files") }
@@ -71,6 +83,7 @@ zizmor = run.call("zizmor")
 expected_zizmor_index = "git -C _target ls-files --stage -z -- '.github/workflows/*.yml' '.github/workflows/*.yaml' ':(glob)**/action.yml' ':(glob)**/action.yaml'"
 assert.call(git_index_command.call("zizmor") == expected_zizmor_index, "zizmor Git-index selection must be exactly the workflow/action YAML policy")
 regular_file_collector.call("zizmor")
+file_array_boundary.call("zizmor", %q{files+=("${entry#*$'\t'}")})
 exact_scanner_invocation.call(
   "zizmor",
   "zizmor",
@@ -84,6 +97,7 @@ actionlint = run.call("actionlint")
 expected_actionlint_index = "git -C _target ls-files --stage -z -- '.github/workflows/*.yml' '.github/workflows/*.yaml'"
 assert.call(git_index_command.call("actionlint") == expected_actionlint_index, "actionlint Git-index selection must be exactly the workflow YAML policy")
 regular_file_collector.call("actionlint")
+file_array_boundary.call("actionlint", %q{files+=("${entry#*$'\t'}")})
 exact_scanner_invocation.call(
   "actionlint",
   "actionlint",
@@ -104,6 +118,7 @@ path_case = normalize.call(shellcheck[path_case_start...(path_case_end + "esac".
 assert.call(path_case == 'case "$path" in *.sh|*.bash|*.bats) include=true ;; esac', "ShellCheck extension selection must stay limited to .sh, .bash, and .bats")
 accepted_interpreters = shellcheck.scan(/^\s*([^\n)]+)\)\s+return 0 ;;/).flatten.map(&:strip)
 assert.call(accepted_interpreters == ["sh|bash|dash|ksh", "sh|bash|dash|ksh"], "ShellCheck shebang selection must stay limited to sh, bash, dash, and ksh")
+file_array_boundary.call("shellcheck", %q{files+=("$path")})
 exact_scanner_invocation.call(
   "shellcheck",
   "shellcheck",
