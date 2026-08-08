@@ -18,7 +18,7 @@ function exists(file) {
 
 function result(name, status, findings = 0, category = null) {
   const scanner = {name, status, findings};
-  if (category) scanner.category = category;
+  if (category && status === "findings") scanner.category = category;
   return scanner;
 }
 
@@ -42,23 +42,23 @@ function parseScorecard(resultsDir, outcome) {
 }
 
 function parseJsonArrayScanner(resultsDir, outcome, name, fileName, category) {
-  if (outcome === "skipped") return result(name, "skipped", 0, category);
+  if (outcome === "skipped") return result(name, "skipped");
   const file = path.join(resultsDir, fileName);
-  if (!exists(file)) return result(name, "error", 0, category);
+  if (!exists(file)) return result(name, "error");
   try {
     const findings = readJson(file);
-    if (!Array.isArray(findings)) return result(name, "error", 0, category);
+    if (!Array.isArray(findings)) return result(name, "error");
     if (findings.length) return result(name, "findings", findings.length, category);
-    return result(name, outcome === "success" ? "pass" : "error", 0, category);
+    return result(name, outcome === "success" ? "pass" : "error");
   } catch {
-    return result(name, "error", 0, category);
+    return result(name, "error");
   }
 }
 
 function parseActionlint(resultsDir, outcome) {
-  if (outcome === "skipped") return result("actionlint", "skipped", 0, "actions");
+  if (outcome === "skipped") return result("actionlint", "skipped");
   const file = path.join(resultsDir, "actionlint.jsonl");
-  if (!exists(file)) return result("actionlint", "error", 0, "actions");
+  if (!exists(file)) return result("actionlint", "error");
   try {
     const raw = fs.readFileSync(file, "utf8").trim();
     let findings = [];
@@ -71,47 +71,47 @@ function parseActionlint(resultsDir, outcome) {
       }
     }
     if (findings.length) return result("actionlint", "findings", findings.length, "actions");
-    return result("actionlint", outcome === "success" ? "pass" : "error", 0, "actions");
+    return result("actionlint", outcome === "success" ? "pass" : "error");
   } catch {
-    return result("actionlint", "error", 0, "actions");
+    return result("actionlint", "error");
   }
 }
 
 function parseShellcheck(resultsDir, outcome) {
-  if (outcome === "skipped") return result("shellcheck", "skipped", 0, "shell");
+  if (outcome === "skipped") return result("shellcheck", "skipped");
   const file = path.join(resultsDir, "shellcheck.json");
   const statusFile = path.join(resultsDir, "shellcheck-status.txt");
-  if (!exists(file) || !exists(statusFile)) return result("shellcheck", "error", 0, "shell");
+  if (!exists(file) || !exists(statusFile)) return result("shellcheck", "error");
   try {
     const data = readJson(file);
     const comments = Array.isArray(data) ? data : data.comments;
     const status = Number.parseInt(fs.readFileSync(statusFile, "utf8").trim(), 10);
-    if (!Array.isArray(comments) || !Number.isInteger(status)) return result("shellcheck", "error", 0, "shell");
+    if (!Array.isArray(comments) || !Number.isInteger(status)) return result("shellcheck", "error");
     if (status === 1 && comments.length) return result("shellcheck", "findings", comments.length, "shell");
-    if (status === 0 && outcome === "success" && comments.length === 0) return result("shellcheck", "pass", 0, "shell");
-    return result("shellcheck", "error", 0, "shell");
+    if (status === 0 && outcome === "success" && comments.length === 0) return result("shellcheck", "pass");
+    return result("shellcheck", "error");
   } catch {
-    return result("shellcheck", "error", 0, "shell");
+    return result("shellcheck", "error");
   }
 }
 
 function parseTrivy(resultsDir, outcome, kind, property, category) {
   const name = `trivy-${kind}`;
-  if (outcome === "skipped") return result(name, "skipped", 0, category);
+  if (outcome === "skipped") return result(name, "skipped");
   const file = path.join(resultsDir, `${name}.json`);
-  if (!exists(file)) return result(name, "error", 0, category);
+  if (!exists(file)) return result(name, "error");
   try {
     const data = readJson(file);
-    if (!data || typeof data !== "object" || Array.isArray(data)) return result(name, "error", 0, category);
+    if (!data || typeof data !== "object" || Array.isArray(data)) return result(name, "error");
     let rows;
     if (Array.isArray(data.Results)) rows = data.Results;
     else if (outcome === "success" && data.Results === undefined && data.SchemaVersion === 2 && data.Trivy && typeof data.Trivy === "object") rows = [];
-    else return result(name, "error", 0, category);
+    else return result(name, "error");
     const findings = rows.reduce((count, row) => count + (Array.isArray(row?.[property]) ? row[property].length : 0), 0);
     if (findings) return result(name, "findings", findings, category);
-    return result(name, outcome === "success" ? "pass" : "error", 0, category);
+    return result(name, outcome === "success" ? "pass" : "error");
   } catch {
-    return result(name, "error", 0, category);
+    return result(name, "error");
   }
 }
 
@@ -123,10 +123,9 @@ function validateTarget(target) {
   if (!Number.isSafeInteger(target?.repository_id) || target.repository_id <= 0) throw new Error("invalid repository_id");
   if (typeof target.repository !== "string" || !target.repository.includes("/")) throw new Error("invalid repository");
   if (!/^[0-9a-f]{40}$/.test(target.commit_sha || "")) throw new Error("invalid commit_sha");
-  if (!["public", "private", "internal"].includes(target.visibility)) throw new Error("invalid visibility");
 }
 
-function buildSummary({resultsDir, env = process.env, now = new Date()}) {
+function buildSummary({resultsDir, env = process.env}) {
   const target = readJson(path.join(resultsDir, "target.json"));
   validateTarget(target);
   const outcomes = {
@@ -161,28 +160,14 @@ function buildSummary({resultsDir, env = process.env, now = new Date()}) {
   else if (scanners.every((scanner) => scanner.status === "skipped")) overallStatus = "error";
 
   return {
-    schema_version: 1,
     repository: {
       id: target.repository_id,
       full_name: target.repository,
-      visibility: target.visibility,
-      default_branch: target.default_branch,
       commit_sha: target.commit_sha,
-    },
-    scan: {
-      timestamp: now.toISOString(),
-      workflow_run_id: target.workflow_run_id,
-      workflow_run_attempt: target.workflow_run_attempt,
-      workflow_repository: target.trusted_workflow_repository || env.WORKFLOW_REPOSITORY || "",
-      workflow_url: `https://github.com/${env.DASHBOARD_REPOSITORY || target.repository}/actions/runs/${target.workflow_run_id}`,
-      evidence_artifact: `repository-scan-${target.repository_id}`,
     },
     overall_status: overallStatus,
     scanners,
-    findings: {
-      total: scanners.reduce((sum, scanner) => sum + scanner.findings, 0),
-      categories: [...new Set(scanners.filter((scanner) => scanner.status === "findings" && scanner.category).map((scanner) => scanner.category))].sort(),
-    },
+    evidence_artifact: `repository-scan-${target.repository_id}`,
   };
 }
 
