@@ -23,7 +23,12 @@ run = ->(id) { step.call(id).fetch("run") }
 preflight_index = steps.index(step.call("preflight"))
 scanner_ids = %w[zizmor actionlint shellcheck trivy-vulnerability trivy-secret trivy-misconfiguration]
 scanner_ids.each do |id|
-  assert.call(steps.index(step.call(id)) > preflight_index, "#{id} must run after target preflight")
+  scanner = step.call(id)
+  assert.call(steps.index(scanner) > preflight_index, "#{id} must run after target preflight")
+  assert.call(
+    scanner.fetch("if", "").include?("steps.preflight.outcome == 'success'"),
+    "#{id} must run only after successful target preflight"
+  )
 end
 assert.call(
   run.call("preflight").include?("_trusted/scripts/preflight.sh _target"),
