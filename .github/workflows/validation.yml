@@ -26,6 +26,8 @@ jobs:
           aqua_version: v2.62.1
       - name: Validate workflow credential boundary
         run: ruby scripts/validate-workflow-boundary.rb .
+      - name: Validate scanner collection boundary
+        run: ruby scripts/validate-scanner-collection.rb .
       - name: Test target preflight boundary
         run: bash scripts/test-preflight.sh
       - name: Test dashboard normalization and publication
@@ -48,6 +50,7 @@ jobs:
       - name: Validate Ruby, YAML, and JSON
         run: |
           ruby -c scripts/validate-workflow-boundary.rb
+          ruby -c scripts/validate-scanner-collection.rb
           ruby -e 'require "yaml"; Dir["**/*.{yml,yaml}"].sort.each { |path| YAML.safe_load_file(path, aliases: false) }'
           ruby -e 'require "json"; JSON.parse(File.read("aqua-checksums.json"))'
       - name: Verify Aqua checksums
