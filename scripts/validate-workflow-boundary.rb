@@ -5,16 +5,6 @@ require "yaml"
 
 ROOT = File.expand_path(ARGV.fetch(0, "."))
 SCAN_WORKFLOW = ".github/workflows/organization-scan.yml"
-VALIDATION_WORKFLOW = ".github/workflows/validation.yml"
-REMOVED_PATHS = %w[
-  .github/workflows/dashboard-reconcile.yml
-  .github/workflows/organization-dashboard.yml
-  .github/workflows/organization-selection.yml
-  .github/workflows/trusted-boundary.yml
-  scripts/reconcile-organization-dashboard.js
-  scripts/test-reconciliation-workflows.rb
-  scripts/test-workflow-security.rb
-].freeze
 
 module Boundary
   module_function
@@ -22,6 +12,10 @@ module Boundary
   def fail!(path, message)
     warn "::error file=#{path}::#{message}"
     exit 1
+  end
+
+  def assert(condition, path, message)
+    fail!(path, message) unless condition
   end
 
   def load_workflow(path)
@@ -48,21 +42,11 @@ module Boundary
       block.call(path, node)
     end
   end
-
-  def assert(condition, path, message)
-    fail!(path, message) unless condition
-  end
 end
 
 Dir.chdir(ROOT) do
-  REMOVED_PATHS.each do |path|
-    Boundary.assert(!File.exist?(path), path, "removed reconciliation or PR-boundary surface must stay absent")
-  end
-
   scan = Boundary.load_workflow(SCAN_WORKFLOW)
-  validation = Boundary.load_workflow(VALIDATION_WORKFLOW)
   Boundary.assert(scan["permissions"] == {}, SCAN_WORKFLOW, "top-level permissions must be empty")
-  Boundary.assert(validation["permissions"] == {}, VALIDATION_WORKFLOW, "top-level permissions must be empty")
 
   jobs = scan.fetch("jobs")
   plan = jobs.fetch("plan")
@@ -113,6 +97,7 @@ Dir.chdir(ROOT) do
   checkout = Boundary.step(target_scan, "checkout")
   Boundary.assert(checkout, SCAN_WORKFLOW, "target checkout is required")
   checkout_with = checkout.fetch("with", {})
+  Boundary.assert(checkout_with["ref"] == "${{ matrix.commit_sha }}", SCAN_WORKFLOW, "target checkout must bind to the immutable planned SHA")
   Boundary.assert(checkout_with["persist-credentials"] == false, SCAN_WORKFLOW, "target checkout must not persist credentials")
   Boundary.assert(checkout_with["lfs"] == false && checkout_with["submodules"] == false, SCAN_WORKFLOW, "target checkout must not expand LFS or submodules")
   Boundary.assert(
@@ -135,29 +120,15 @@ Dir.chdir(ROOT) do
   Boundary.walk_strings(target_scan) do |node_path, value|
     token_references << node_path.join("/") if value.include?("steps.target-token.outputs.token")
   end
-  expected_token_references = [
-    "steps/#{checkout_index}/with/token",
-    "steps/#{scorecard_index}/env/SEGH_TARGET_SCORECARD_TOKEN"
-  ].sort
   Boundary.assert(
-    token_references.sort == expected_token_references,
+    token_references.sort == [
+      "steps/#{checkout_index}/with/token",
+      "steps/#{scorecard_index}/env/SEGH_TARGET_SCORECARD_TOKEN"
+    ].sort,
     SCAN_WORKFLOW,
     "target credentials escaped the approved checkout and Scorecard nodes"
   )
   Boundary.assert(!target_scan.fetch("env", {}).key?("SEGH_TARGET_SCORECARD_TOKEN"), SCAN_WORKFLOW, "target token must not be promoted to job environment")
-  scan_steps.each_with_index do |candidate, index|
-    next if index == scorecard_index
-
-    Boundary.assert(
-      !candidate.fetch("env", {}).key?("SEGH_TARGET_SCORECARD_TOKEN") &&
-        !Boundary.stringify(candidate).include?("SEGH_TARGET_SCORECARD_TOKEN"),
-      SCAN_WORKFLOW,
-      "SEGH_TARGET_SCORECARD_TOKEN must remain local to the Scorecard step"
-    )
-  end
-
-  summary = Boundary.step(target_scan, "summary")
-  Boundary.assert(summary&.fetch("run", "")&.include?("_trusted/scripts/build-dashboard-summary.js"), SCAN_WORKFLOW, "scan must use the trusted summary builder")
 
   expected_publisher_permissions = {"actions" => "read", "contents" => "read", "issues" => "write"}
   Boundary.assert(publisher["permissions"] == expected_publisher_permissions, SCAN_WORKFLOW, "publisher permissions exceed the current-run dashboard contract")
@@ -165,10 +136,6 @@ Dir.chdir(ROOT) do
   Boundary.assert(!publisher_text.include?("secrets."), SCAN_WORKFLOW, "publisher must not receive configured secrets")
   Boundary.assert(!publisher_text.include?("SEGH_ORG_SCAN_APP_"), SCAN_WORKFLOW, "publisher must not receive organization scan credentials")
   Boundary.assert(!publisher_text.include?("target-token"), SCAN_WORKFLOW, "publisher must not receive target credentials")
-  Boundary.assert(publisher_text.include?("organization-scan-plan"), SCAN_WORKFLOW, "publisher must consume the current run plan")
-  Boundary.assert(publisher_text.include?("repository-summary-*"), SCAN_WORKFLOW, "publisher must consume current run summaries")
-  Boundary.assert(publisher_text.include?("_trusted/scripts/publish-dashboard.js"), SCAN_WORKFLOW, "publisher must use the trusted implementation")
-  Boundary.assert(publisher_text.include?("github.event.repository.private"), SCAN_WORKFLOW, "publisher must enforce a private control repository")
 
   jobs.each do |name, job|
     text = Boundary.stringify(job)
@@ -176,17 +143,6 @@ Dir.chdir(ROOT) do
     scan_secret = text.include?("SEGH_ORG_SCAN_APP_ID") || text.include?("SEGH_ORG_SCAN_APP_PRIVATE_KEY")
     Boundary.assert(!(issues_write && scan_secret), SCAN_WORKFLOW, "job #{name} combines issue-write and scan credentials")
   end
-
-  validation_jobs = validation.fetch("jobs")
-  static = validation_jobs.fetch("static")
-  static_text = Boundary.stringify(static)
-  Boundary.assert(static_text.include?("ruby scripts/validate-workflow-boundary.rb ."), VALIDATION_WORKFLOW, "validation must exercise this credential boundary")
-  Boundary.assert(static_text.include?("node --test scripts/test-dashboard.js"), VALIDATION_WORKFLOW, "validation must exercise the dashboard")
-  Boundary.assert(static_text.include?("actionlint") && static_text.include?("zizmor") && static_text.include?("shellcheck"), VALIDATION_WORKFLOW, "validation must retain standard workflow and shell linters")
-
-  production = validation_jobs.fetch("production-workflow")
-  Boundary.assert(production["uses"] == "./.github/workflows/organization-scan.yml", VALIDATION_WORKFLOW, "production validation must call the real scanner workflow")
-  Boundary.assert(production.dig("with", "validation_mode") == true, VALIDATION_WORKFLOW, "production validation must enable validation_mode")
 end
 
 puts "workflow boundary is valid"

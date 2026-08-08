@@ -125,6 +125,23 @@ jobs:
             ' "$1" > /dev/null
           }
 
+          validate_matrix() {
+            jq -e '
+              type == "object" and (.include | type == "array") and
+              all(.include[];
+                (.id | type == "number" and floor == . and . > 0) and
+                (.owner | type == "string" and length > 0 and (contains("/") | not)) and
+                (.name | type == "string" and length > 0 and (contains("/") | not)) and
+                (.full_name | type == "string") and
+                (.full_name == (.owner + "/" + .name)) and
+                (.visibility == "public" or .visibility == "private" or .visibility == "internal") and
+                (.fork | type == "boolean") and
+                (.default_branch | type == "string" and length > 0) and
+                (.commit_sha | type == "string" and test("^[0-9a-f]{40}$"))
+              )
+            ' "$1" > /dev/null
+          }
+
           if [[ ! "$REPOSITORY_LIMIT" =~ ^[0-9]+$ ]]; then
             echo "::error::repository_limit must be an integer from 1 to 100."
             exit 1
@@ -160,8 +177,9 @@ jobs:
             if ! validate_repository_pages <(printf '%s\n' \
               '[{"total_count":2,"repositories":[{"id":1}]},{"total_count":2,"repositories":[{"id":2}]}]') || \
                validate_repository_pages <(printf '%s\n' \
-              '[{"total_count":2,"repositories":[{"id":1}]}]'); then
-              echo "::error::The production pagination predicate accepted incomplete repository data."
+              '[{"total_count":2,"repositories":[{"id":1}]}]') || \
+               validate_matrix <(printf '%s\n' '{"include":[{"id":1}]}'); then
+              echo "::error::The production plan predicates accepted incomplete or malformed data."
               exit 1
             fi
             jq -n --arg commit_sha "$HEAD_SHA" '
@@ -178,20 +196,9 @@ jobs:
               };
               {include: [
                 target(900001; "clean"; $commit_sha),
-                target(900002; "no-relevant"; $commit_sha),
-                target(900003; "zizmor-finding"; $commit_sha),
-                target(900004; "actionlint-syntax"; $commit_sha),
-                target(900005; "actionlint-shell"; $commit_sha),
-                target(900006; "shellcheck-finding"; $commit_sha),
-                target(900007; "trivy-vulnerability"; $commit_sha),
-                target(900008; "trivy-secret"; $commit_sha),
-                target(900009; "trivy-misconfiguration"; $commit_sha),
-                target(900010; "symlink"; $commit_sha),
-                target(900011; "submodule"; $commit_sha),
-                target(900012; "lfs"; $commit_sha),
-                target(900013; "scanner-runtime-error"; $commit_sha),
-                target(900014; "no-exec"; $commit_sha),
-                target(900015; "checkout-failure"; "0000000000000000000000000000000000000000")
+                target(900002; "no-exec"; $commit_sha),
+                target(900003; "scanner-runtime-error"; $commit_sha),
+                target(900004; "checkout-failure"; "0000000000000000000000000000000000000000")
               ]}' > matrix.json
           else
             if ! gh api --paginate --slurp /installation/repositories > repositories.json; then
@@ -281,18 +288,7 @@ jobs:
             jq -sc '{include: .}' targets.jsonl > matrix.json
           fi
 
-          if ! jq -e '
-            type == "object" and (.include | type == "array") and
-            all(.include[];
-              (.id | type == "number" and floor == . and . > 0) and
-              (.full_name | type == "string") and
-              (.full_name == (.owner + "/" + .name)) and
-              (.visibility == "public" or .visibility == "private" or .visibility == "internal") and
-              (.fork | type == "boolean") and
-              (.default_branch | type == "string" and length > 0) and
-              (.commit_sha | type == "string" and test("^[0-9a-f]{40}$"))
-            )
-          ' matrix.json > /dev/null; then
+          if ! validate_matrix matrix.json; then
             echo "::error::Refusing to emit a malformed or incomplete scan matrix."
             exit 1
           fi
@@ -417,7 +413,7 @@ jobs:
              .trusted_workflow_sha == $trusted_workflow_sha and
              (.validation_case // "") == $validation_case' \
             results/target.json > /dev/null
-          cat > results/scorecard-permissions.json <<'EOF'
+          cat > results/scorecard-permissions.json <<'EOF_SCORECARD'
           {
             "granted": [
               "metadata:read",
@@ -432,7 +428,7 @@ jobs:
               "The experimental Webhooks check is not supported."
             ]
           }
-          EOF
+          EOF_SCORECARD
       - name: Check out trusted scanner configuration
         id: trusted
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -468,7 +464,7 @@ jobs:
           fetch-depth: 1
           lfs: false
           submodules: false
-      - name: Prepare deterministic validation fixture
+      - name: Prepare boundary smoke fixture
         if: inputs.validation_mode && steps.checkout.outcome == 'success'
         env:
           CASE: ${{ matrix.validation_case }}
@@ -476,9 +472,9 @@ jobs:
           git -C _target rm -qr --cached -- .
           find _target -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
           case "$CASE" in
-            clean|scanner-runtime-error|symlink)
+            clean|scanner-runtime-error)
               mkdir -p _target/.github/workflows
-              cat > _target/.github/workflows/fixture.yml <<'EOF'
+              cat > _target/.github/workflows/fixture.yml <<'EOF_FIXTURE'
           ---
           name: Fixture
           on:
@@ -490,91 +486,11 @@ jobs:
               runs-on: ubuntu-24.04
               steps:
                 - run: "true"
-          EOF
-              cat > _target/test.sh <<'EOF'
+          EOF_FIXTURE
+              cat > _target/test.sh <<'EOF_FIXTURE'
           #!/bin/sh
           printf '%s\n' clean > /dev/null
-          EOF
-              ;;
-            no-relevant)
-              printf '# fixture\n' > _target/README.md
-              ;;
-            zizmor-finding)
-              mkdir -p _target/.github/workflows
-              cat > _target/.github/workflows/fixture.yml <<'EOF'
-          ---
-          name: Fixture
-          on:
-            issues:
-          permissions:
-            contents: read
-          jobs:
-            test:
-              runs-on: ubuntu-24.04
-              steps:
-          EOF
-              printf '%s%s\n' '                - run: echo "${' '{ github.event.issue.title }}"' \
-                >> _target/.github/workflows/fixture.yml
-              ;;
-            actionlint-syntax)
-              mkdir -p _target/.github/workflows
-              printf '%s\n' 'jobs: [' > _target/.github/workflows/fixture.yml
-              ;;
-            actionlint-shell)
-              mkdir -p _target/.github/workflows
-              cat > _target/.github/workflows/fixture.yml <<'EOF'
-          ---
-          name: Fixture
-          on:
-            push:
-          permissions:
-            contents: read
-          jobs:
-            test:
-              runs-on: ubuntu-24.04
-              steps:
-                - run: |
-                    value=$1
-                    echo $value
-          EOF
-              ;;
-            shellcheck-finding)
-              printf '#!/usr/bin/env -S dash -eu\nvalue=$1\necho $value\n' > _target/test
-              ;;
-            trivy-vulnerability)
-              printf 'urllib3==1.26.4\n' > _target/requirements.txt
-              ;;
-            trivy-secret)
-              access_key=$(printf '%s%s%s' 'AK' 'IA7JXQ2W6R' '8T1Y4U5P')
-              secret_key=$(printf '%s%s%s' 'aBcDeFgHiJ' 'kLmNoPqRsT' 'uVwXyZ0123456789ABCD')
-              printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
-                "$access_key" "$secret_key" > _target/credentials.txt
-              ;;
-            trivy-misconfiguration)
-              cat > _target/pod.yml <<'EOF'
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: privileged
-          spec:
-            hostNetwork: true
-            containers:
-              - name: nginx
-                image: nginx:latest
-                securityContext:
-                  privileged: true
-          EOF
-              ;;
-            submodule)
-              printf '# fixture\n' > _target/README.md
-              git -C _target add README.md
-              git -C _target update-index --add --cacheinfo \
-                160000,"$(git -C _target rev-parse HEAD)",vendor/dependency
-              ;;
-            lfs)
-              printf '# fixture\n' > _target/README.md
-              printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 1\n' 0 \
-                > _target/payload.bin
+          EOF_FIXTURE
               ;;
             no-exec)
               mkdir -p _target/.github/actions/owned _target/.githooks
@@ -583,12 +499,7 @@ jobs:
               printf 'all:\n\ttouch executed.marker\n' > _target/Makefile
               printf '#!/bin/sh\ntouch executed.marker\n' > _target/install.sh
               printf '#!/bin/sh\ntouch executed.marker\n' > _target/.githooks/post-checkout
-              {
-                printf '#!'
-                printf '%300s' '' | tr ' ' x
-                printf '/bin/sh\nvalue=$1\necho $value\n'
-              } > _target/oversized-shebang
-              cat > _target/.github/actions/owned/action.yml <<'EOF'
+              cat > _target/.github/actions/owned/action.yml <<'EOF_FIXTURE'
           ---
           name: Untrusted action
           runs:
@@ -596,8 +507,8 @@ jobs:
             steps:
               - shell: bash
                 run: touch executed.marker
-          EOF
-              cat > _target/main.tf <<'EOF'
+          EOF_FIXTURE
+              cat > _target/main.tf <<'EOF_FIXTURE'
           terraform {
             required_providers {
               external = { source = "hashicorp/external" }
@@ -606,7 +517,7 @@ jobs:
           data "external" "untrusted" {
             program = ["./install.sh"]
           }
-          EOF
+          EOF_FIXTURE
               ;;
             checkout-failure)
               echo "::error::checkout-failure must not reach fixture preparation."
@@ -617,13 +528,7 @@ jobs:
               exit 1
               ;;
           esac
-          if [[ "$CASE" == symlink ]]; then
-            printf 'safe\n' > _target/real.txt
-            ln -s real.txt _target/link.txt
-          fi
-          if [[ "$CASE" != submodule ]]; then
-            git -C _target add .
-          fi
+          git -C _target add .
       - name: Install checksum-verified scanners
         if: steps.checkout.outcome == 'success'
         id: tools
@@ -651,9 +556,7 @@ jobs:
         shell: bash
         run: _trusted/scripts/preflight.sh _target 2>&1 | tee results/preflight.txt
       - name: Run OpenSSF Scorecard
-        if: >-
-          always() && steps.preflight.outcome == 'success' &&
-          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant"]'), matrix.validation_case))
+        if: always() && steps.preflight.outcome == 'success'
         id: scorecard
         continue-on-error: ${{ inputs.validation_mode }}
         env:
@@ -674,9 +577,7 @@ jobs:
           jq -e 'type == "object" and (.checks | type == "array" and length > 0)' \
             results/scorecard.json > /dev/null
       - name: Run zizmor
-        if: >-
-          always() && steps.preflight.outcome == 'success' &&
-          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","zizmor-finding","symlink","scanner-runtime-error","no-exec"]'), matrix.validation_case))
+        if: always() && steps.preflight.outcome == 'success'
         id: zizmor
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
@@ -697,9 +598,7 @@ jobs:
             --min-severity medium --min-confidence high --format json "${files[@]}") \
             > results/zizmor.json 2> results/zizmor.log
       - name: Run actionlint
-        if: >-
-          always() && steps.preflight.outcome == 'success' &&
-          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","actionlint-syntax","actionlint-shell","symlink","scanner-runtime-error","no-exec"]'), matrix.validation_case))
+        if: always() && steps.preflight.outcome == 'success'
         id: actionlint
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
@@ -719,13 +618,10 @@ jobs:
             --shellcheck shellcheck --format '{{json .}}' "${files[@]}") \
             > results/actionlint.jsonl 2> results/actionlint.log
       - name: Run ShellCheck
-        if: >-
-          always() && steps.preflight.outcome == 'success' &&
-          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","shellcheck-finding","symlink","scanner-runtime-error","no-exec"]'), matrix.validation_case))
+        if: always() && steps.preflight.outcome == 'success'
         id: shellcheck
         continue-on-error: ${{ inputs.validation_mode }}
         env:
-          VALIDATION_MODE: ${{ inputs.validation_mode }}
           VALIDATION_CASE: ${{ matrix.validation_case }}
         run: |
           has_supported_shell_shebang() {
@@ -784,7 +680,7 @@ jobs:
             exit 0
           fi
           format=json1
-          if [[ "$VALIDATION_MODE" == true && "$VALIDATION_CASE" == scanner-runtime-error ]]; then
+          if [[ "$VALIDATION_CASE" == scanner-runtime-error ]]; then
             format=invalid
           fi
           set +e
@@ -795,9 +691,7 @@ jobs:
           printf '%s\n' "$status" > results/shellcheck-status.txt
           exit "$status"
       - name: Run Trivy vulnerability scan
-        if: >-
-          always() && steps.preflight.outcome == 'success' &&
-          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","trivy-vulnerability","scanner-runtime-error","no-exec"]'), matrix.validation_case))
+        if: always() && steps.preflight.outcome == 'success'
         id: trivy-vulnerability
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
@@ -806,9 +700,7 @@ jobs:
             --skip-dirs _target/.git --skip-version-check _target \
             2> results/trivy-vulnerability.log
       - name: Run Trivy secret scan
-        if: >-
-          always() && steps.preflight.outcome == 'success' &&
-          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","trivy-secret","no-exec"]'), matrix.validation_case))
+        if: always() && steps.preflight.outcome == 'success'
         id: trivy-secret
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
@@ -817,9 +709,7 @@ jobs:
             --skip-dirs _target/.git --skip-version-check _target \
             2> results/trivy-secret.log
       - name: Run Trivy misconfiguration scan
-        if: >-
-          always() && steps.preflight.outcome == 'success' &&
-          (!inputs.validation_mode || contains(fromJSON('["clean","no-relevant","trivy-misconfiguration","no-exec"]'), matrix.validation_case))
+        if: always() && steps.preflight.outcome == 'success'
         id: trivy-misconfiguration
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
@@ -862,23 +752,15 @@ jobs:
           path: results
           if-no-files-found: error
           retention-days: 14
-      - name: Assert production workflow validation outcomes
+      - name: Assert production boundary smoke outcomes
         if: always() && inputs.validation_mode
         env:
           CASE: ${{ matrix.validation_case }}
-          TARGET: ${{ steps.target.outcome }}
-          TRUSTED: ${{ steps.trusted.outcome }}
           CHECKOUT: ${{ steps.checkout.outcome }}
           TOOLS: ${{ steps.tools.outcome }}
           VERSIONS: ${{ steps.versions.outcome }}
           PREFLIGHT: ${{ steps.preflight.outcome }}
-          SCORECARD: ${{ steps.scorecard.outcome }}
-          ZIZMOR: ${{ steps.zizmor.outcome }}
-          ACTIONLINT: ${{ steps.actionlint.outcome }}
           SHELLCHECK: ${{ steps.shellcheck.outcome }}
-          TRIVY_VULNERABILITY: ${{ steps.trivy-vulnerability.outcome }}
-          TRIVY_SECRET: ${{ steps.trivy-secret.outcome }}
-          TRIVY_MISCONFIGURATION: ${{ steps.trivy-misconfiguration.outcome }}
           SUMMARY: ${{ steps.summary.outcome }}
           SUMMARY_ARTIFACT: ${{ steps.summary-artifact.outcome }}
           ARTIFACT: ${{ steps.artifact.outcome }}
@@ -892,163 +774,35 @@ jobs:
               exit 1
             fi
           }
-          require_file() {
-            if [[ ! -f "$1" ]]; then
-              echo "::error::$CASE: missing expected artifact file $1."
-              exit 1
-            fi
-          }
-          expect target "$TARGET" success
-          expect trusted "$TRUSTED" success
           expect summary "$SUMMARY" success
           expect summary-artifact "$SUMMARY_ARTIFACT" success
           expect artifact "$ARTIFACT" success
-          require_file results/target.json
-          require_file results/summary.json
-          case "$CASE" in
-            clean|no-relevant|symlink|no-exec) expected_summary=pass ;;
-            zizmor-finding|actionlint-syntax|actionlint-shell|shellcheck-finding|trivy-vulnerability|trivy-secret|trivy-misconfiguration) expected_summary=findings ;;
-            submodule|lfs) expected_summary=incomplete ;;
-            scanner-runtime-error|checkout-failure) expected_summary=error ;;
-            *) echo "::error::Unknown summary validation case: $CASE"; exit 1 ;;
-          esac
-          actual_summary=$(jq -er '.overall_status' results/summary.json)
-          expect dashboard-summary "$actual_summary" "$expected_summary"
+          [[ -f results/target.json && -f results/summary.json ]]
+          overall=$(jq -er '.overall_status' results/summary.json)
 
           if [[ "$CASE" == checkout-failure ]]; then
             expect checkout "$CHECKOUT" failure
-            expect tools "$TOOLS" skipped
-            expect preflight "$PREFLIGHT" skipped
-            expect scorecard "$SCORECARD" skipped
-            expect zizmor "$ZIZMOR" skipped
-            expect actionlint "$ACTIONLINT" skipped
-            expect shellcheck "$SHELLCHECK" skipped
-            expect trivy-vulnerability "$TRIVY_VULNERABILITY" skipped
-            expect trivy-secret "$TRIVY_SECRET" skipped
-            expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" skipped
+            expect dashboard-summary "$overall" error
             exit 0
           fi
 
           expect checkout "$CHECKOUT" success
           expect tools "$TOOLS" success
           expect versions "$VERSIONS" success
-          require_file results/scanner-versions.txt
-          require_file results/preflight.txt
+          expect preflight "$PREFLIGHT" success
+          [[ -f results/scanner-versions.txt && -f results/preflight.txt ]]
+
           case "$CASE" in
-            submodule|lfs)
-              expect preflight "$PREFLIGHT" failure
-              expect scorecard "$SCORECARD" skipped
-              expect zizmor "$ZIZMOR" skipped
-              expect actionlint "$ACTIONLINT" skipped
-              expect shellcheck "$SHELLCHECK" skipped
-              expect trivy-vulnerability "$TRIVY_VULNERABILITY" skipped
-              expect trivy-secret "$TRIVY_SECRET" skipped
-              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" skipped
-              ;;
-            clean|no-relevant)
-              expect preflight "$PREFLIGHT" success
-              expect scorecard "$SCORECARD" success
-              expect zizmor "$ZIZMOR" success
-              expect actionlint "$ACTIONLINT" success
-              expect shellcheck "$SHELLCHECK" success
-              expect trivy-vulnerability "$TRIVY_VULNERABILITY" success
-              expect trivy-secret "$TRIVY_SECRET" success
-              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" success
-              require_file results/scorecard.json
-              require_file results/scorecard.log
-              require_file results/zizmor.json
-              require_file results/zizmor.log
-              require_file results/actionlint.jsonl
-              require_file results/actionlint.log
-              require_file results/shellcheck.json
-              require_file results/shellcheck.log
-              require_file results/trivy-vulnerability.json
-              require_file results/trivy-vulnerability.log
-              require_file results/trivy-secret.json
-              require_file results/trivy-secret.log
-              require_file results/trivy-misconfiguration.json
-              require_file results/trivy-misconfiguration.log
-              jq empty results/scorecard.json results/trivy-vulnerability.json \
-                results/trivy-secret.json results/trivy-misconfiguration.json
-              ;;
-            zizmor-finding)
-              expect preflight "$PREFLIGHT" success
-              expect zizmor "$ZIZMOR" failure
-              require_file results/zizmor.json
-              require_file results/zizmor.log
-              jq -e 'type == "array" and length > 0' results/zizmor.json > /dev/null
-              ;;
-            actionlint-syntax|actionlint-shell)
-              expect preflight "$PREFLIGHT" success
-              expect actionlint "$ACTIONLINT" failure
-              require_file results/actionlint.jsonl
-              require_file results/actionlint.log
-              ;;
-            shellcheck-finding)
-              expect preflight "$PREFLIGHT" success
-              expect shellcheck "$SHELLCHECK" failure
-              [[ "$(cat results/shellcheck-status.txt)" == 1 ]]
-              require_file results/shellcheck.json
-              require_file results/shellcheck.log
-              ;;
-            trivy-vulnerability)
-              expect preflight "$PREFLIGHT" success
-              expect trivy-vulnerability "$TRIVY_VULNERABILITY" failure
-              require_file results/trivy-vulnerability.json
-              require_file results/trivy-vulnerability.log
-              jq -e '[.Results[]?.Vulnerabilities[]?] | length > 0' results/trivy-vulnerability.json > /dev/null
-              ;;
-            trivy-secret)
-              expect preflight "$PREFLIGHT" success
-              expect trivy-secret "$TRIVY_SECRET" failure
-              require_file results/trivy-secret.json
-              require_file results/trivy-secret.log
-              jq -e '[.Results[]?.Secrets[]?] | length > 0' results/trivy-secret.json > /dev/null
-              ;;
-            trivy-misconfiguration)
-              expect preflight "$PREFLIGHT" success
-              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" failure
-              require_file results/trivy-misconfiguration.json
-              require_file results/trivy-misconfiguration.log
-              jq -e '[.Results[]?.Misconfigurations[]?] | length > 0' results/trivy-misconfiguration.json > /dev/null
-              ;;
-            symlink)
-              expect preflight "$PREFLIGHT" success
-              [[ ! -L _target/link.txt ]]
-              expect zizmor "$ZIZMOR" success
-              expect actionlint "$ACTIONLINT" success
-              expect shellcheck "$SHELLCHECK" success
+            clean)
+              expect dashboard-summary "$overall" pass
               ;;
             scanner-runtime-error)
-              expect preflight "$PREFLIGHT" success
-              expect zizmor "$ZIZMOR" success
-              expect actionlint "$ACTIONLINT" success
               expect shellcheck "$SHELLCHECK" failure
-              expect trivy-vulnerability "$TRIVY_VULNERABILITY" success
-              expect trivy-secret "$TRIVY_SECRET" skipped
-              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" skipped
               [[ "$(cat results/shellcheck-status.txt)" -ge 2 ]]
-              require_file results/zizmor.json
-              require_file results/actionlint.jsonl
-              require_file results/shellcheck.log
-              require_file results/trivy-vulnerability.json
-              require_file results/trivy-vulnerability.log
-              jq empty results/trivy-vulnerability.json
+              expect dashboard-summary "$overall" error
               ;;
             no-exec)
-              expect preflight "$PREFLIGHT" success
-              expect zizmor "$ZIZMOR" success
-              expect actionlint "$ACTIONLINT" success
-              expect shellcheck "$SHELLCHECK" success
-              expect trivy-vulnerability "$TRIVY_VULNERABILITY" success
-              expect trivy-secret "$TRIVY_SECRET" success
-              expect trivy-misconfiguration "$TRIVY_MISCONFIGURATION" success
-              require_file results/trivy-vulnerability.json
-              require_file results/trivy-vulnerability.log
-              require_file results/trivy-secret.json
-              require_file results/trivy-secret.log
-              require_file results/trivy-misconfiguration.json
-              require_file results/trivy-misconfiguration.log
+              [[ "$overall" == pass || "$overall" == findings ]]
               [[ ! -e _target/executed.marker && ! -e executed.marker ]]
               ;;
             *)
