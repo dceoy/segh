@@ -27,8 +27,6 @@ Scanner-native collection is used only when it preserves the preflighted target 
 - **ShellCheck:** keep explicit Git-index selection because ShellCheck has no repository-native collector matching segh's extension-plus-supported-shebang policy.
 - **Trivy:** keep native `filesystem` collection. It runs only after preflight has excluded untracked content and unsafe Git object types; target-owned Trivy configuration and ignore files are disabled with `/dev/null`, and `.git` is excluded.
 
-These decisions are enforced by `scripts/validate-scanner-collection.rb` so future simplification cannot silently broaden scanner inputs or change empty-selection behavior.
-
 ## Architecture
 
 ```text
@@ -94,7 +92,7 @@ Scorecard remains visible in the scanner-results table as informational `pass`/`
 
 Pull-request CI runs:
 
-- small Ruby validators for credential and scanner-collection boundaries;
+- a small Ruby credential-boundary validator for segh-specific invariants;
 - shell tests for the target preflight boundary;
 - Node tests for summary normalization and issue publication;
 - actionlint, zizmor, and ShellCheck;
