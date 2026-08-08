@@ -22,12 +22,13 @@ run = ->(id) { step.call(id).fetch("run") }
 
 preflight_index = steps.index(step.call("preflight"))
 scanner_ids = %w[zizmor actionlint shellcheck trivy-vulnerability trivy-secret trivy-misconfiguration]
+scanner_gate = "always() && steps.preflight.outcome == 'success'"
 scanner_ids.each do |id|
   scanner = step.call(id)
   assert.call(steps.index(scanner) > preflight_index, "#{id} must run after target preflight")
   assert.call(
-    scanner.fetch("if", "").include?("steps.preflight.outcome == 'success'"),
-    "#{id} must run only after successful target preflight"
+    scanner.fetch("if", "").strip == scanner_gate,
+    "#{id} must use the fail-closed target preflight gate"
   )
 end
 assert.call(
