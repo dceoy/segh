@@ -90,9 +90,11 @@ Scorecard remains visible in the scanner-results table as informational `pass`/`
 
 ## Validation
 
+Production helpers live in `scripts/`; test code lives separately in `tests/`.
+
 Pull-request CI runs:
 
-- a small Ruby credential-boundary validator for segh-specific invariants;
+- a small Shell/yq credential-boundary validator for segh-specific invariants;
 - shell tests for the target preflight boundary;
 - Node tests for summary normalization and issue publication;
 - actionlint, zizmor, and ShellCheck;
