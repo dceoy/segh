@@ -30,7 +30,7 @@ function fixture(dir) {
     workflow_run_attempt: 1,
     trusted_workflow_repository: "dceoy/segh",
   });
-  writeJson(path.join(dir, "scorecard.json"), {checks: [{Name: "Pinned-Dependencies", Score: 10}]});
+  writeJson(path.join(dir, "scorecard.json"), {checks: [{Name: "Pinned-Dependencies", Score: 1}]});
   writeJson(path.join(dir, "zizmor.json"), []);
   fs.writeFileSync(path.join(dir, "actionlint.jsonl"), "");
   writeJson(path.join(dir, "shellcheck.json"), []);
@@ -65,6 +65,11 @@ test("summary reports pass and findings from native scanner outputs", () => {
     const clean = buildSummary({resultsDir: dir, env: successEnv(), now: new Date("2026-01-01T00:00:00Z")});
     assert.equal(clean.overall_status, "pass");
     assert.equal(clean.findings.total, 0);
+    assert.deepEqual(clean.scanners.find((scanner) => scanner.name === "scorecard"), {
+      name: "scorecard",
+      status: "pass",
+      findings: 0,
+    });
 
     writeJson(path.join(dir, "zizmor.json"), [{rule: "unpinned-uses"}]);
     const findings = buildSummary({resultsDir: dir, env: successEnv({ZIZMOR_OUTCOME: "failure"})});
@@ -75,11 +80,21 @@ test("summary reports pass and findings from native scanner outputs", () => {
   }
 });
 
-test("summary fails closed on a failed Scorecard step with parseable output", () => {
+test("summary fails closed on Scorecard runtime and evidence errors", () => {
   const dir = tempDir();
   try {
     fixture(dir);
-    const summary = buildSummary({resultsDir: dir, env: successEnv({SCORECARD_OUTCOME: "failure"})});
+    let summary = buildSummary({resultsDir: dir, env: successEnv({SCORECARD_OUTCOME: "failure"})});
+    assert.equal(summary.overall_status, "error");
+    assert.equal(summary.scanners.find((scanner) => scanner.name === "scorecard").status, "error");
+
+    fs.rmSync(path.join(dir, "scorecard.json"));
+    summary = buildSummary({resultsDir: dir, env: successEnv()});
+    assert.equal(summary.overall_status, "error");
+    assert.equal(summary.scanners.find((scanner) => scanner.name === "scorecard").status, "error");
+
+    writeJson(path.join(dir, "scorecard.json"), {checks: []});
+    summary = buildSummary({resultsDir: dir, env: successEnv()});
     assert.equal(summary.overall_status, "error");
     assert.equal(summary.scanners.find((scanner) => scanner.name === "scorecard").status, "error");
   } finally {
