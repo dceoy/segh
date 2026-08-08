@@ -8,14 +8,14 @@ workflow_path = File.join(root, ".github/workflows/organization-scan.yml")
 workflow = YAML.safe_load_file(workflow_path, aliases: false)
 steps = workflow.fetch("jobs").fetch("scan").fetch("steps")
 
-fail! = lambda do |message|
+failure = lambda do |message|
   warn "::error file=.github/workflows/organization-scan.yml::#{message}"
   exit 1
 end
-assert = ->(condition, message) { fail!.call(message) unless condition }
+assert = ->(condition, message) { failure.call(message) unless condition }
 step = lambda do |id|
   found = steps.find { |candidate| candidate["id"] == id }
-  fail!.call("missing scan step #{id}") unless found
+  failure.call("missing scan step #{id}") unless found
   found
 end
 run = ->(id) { step.call(id).fetch("run") }
