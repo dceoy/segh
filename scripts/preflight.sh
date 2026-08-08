@@ -4,18 +4,20 @@ set -euo pipefail
 
 readonly target=${1:?target checkout is required}
 index=$(mktemp)
-readonly index
-trap 'rm -f "$index"' EXIT
+untracked=$(mktemp)
+readonly index untracked
+trap 'rm -f "$index" "$untracked"' EXIT
 
 git -C "$target" rev-parse --is-inside-work-tree > /dev/null
 git -C "$target" ls-files --stage -z > "$index"
+git -C "$target" ls-files --others -z > "$untracked"
 
 regular=0
 rejected=0
 while IFS= read -r -d '' path; do
   printf 'Rejected untracked path: %s\n' "$path" >&2
   rejected=1
-done < <(git -C "$target" ls-files --others -z)
+done < "$untracked"
 
 while IFS= read -r -d '' entry; do
   mode=${entry%% *}

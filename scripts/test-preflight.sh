@@ -35,6 +35,25 @@ if "$preflight" "$repo" > "$root/untracked.log" 2>&1; then
 fi
 grep -F 'Rejected untracked path: ignored.txt' "$root/untracked.log" > /dev/null
 
+repo=$(new_repo untracked-enumeration-failure)
+printf 'safe\n' > "$repo/README.md"
+git -C "$repo" add README.md
+mkdir "$root/bin"
+real_git=$(command -v git)
+cat > "$root/bin/git" <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${3:-} == ls-files && ${4:-} == --others && ${5:-} == -z ]]; then
+  exit 42
+fi
+exec "$REAL_GIT" "$@"
+WRAPPER
+chmod +x "$root/bin/git"
+if REAL_GIT="$real_git" PATH="$root/bin:$PATH" "$preflight" "$repo" > "$root/untracked-enumeration-failure.log" 2>&1; then
+  echo 'preflight accepted a failed untracked-file enumeration' >&2
+  exit 1
+fi
+
 repo=$(new_repo submodule)
 printf 'safe\n' > "$repo/README.md"
 git -C "$repo" add README.md
