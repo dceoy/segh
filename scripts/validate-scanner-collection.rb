@@ -32,7 +32,8 @@ assert.call(
 
 zizmor = run.call("zizmor")
 assert.call(zizmor.include?("git -C _target ls-files --stage -z"), "zizmor must keep Git-index file selection")
-assert.call(zizmor.include?(".github/workflows/*.yml") && zizmor.include?("**/action.yml"), "zizmor selection must stay limited to workflows and actions")
+zizmor_pathspecs = [".github/workflows/*.yml", ".github/workflows/*.yaml", "**/action.yml", "**/action.yaml"]
+assert.call(zizmor_pathspecs.all? { |pathspec| zizmor.include?(pathspec) }, "zizmor selection must stay limited to workflow and action YAML")
 assert.call(zizmor.include?("--offline --no-config --no-ignores --strict-collection"), "zizmor must disable target-owned configuration and ignores")
 assert.call(zizmor.include?("printf '[]\\n' > results/zizmor.json"), "zizmor must preserve a successful empty-selection result")
 
