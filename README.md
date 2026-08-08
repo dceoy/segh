@@ -63,16 +63,21 @@ The control repository must provide `SEGH_ORG_SCAN_APP_ID` and `SEGH_ORG_SCAN_AP
 
 Each target scan retains `repository-scan-<repository-id>` with immutable target metadata, scanner versions, preflight output, native scanner outputs/logs, and `summary.json`.
 
-A small `repository-summary-<repository-id>` artifact is used by the publisher in the same workflow run. Dashboard issues contain only bounded status/count information and a link to the private workflow run; raw source excerpts and scanner logs stay in artifacts.
+A small `repository-summary-<repository-id>` artifact is used by the publisher in the same workflow run. The summary contains only repository identity needed to bind it to the current plan, the overall status, bounded scanner status/count rows, and the raw-evidence artifact name. Dashboard issues add current plan metadata and the private workflow-run link; raw source excerpts and scanner logs stay in artifacts.
 
-Dashboard issues use these primary labels:
+Before enabling dashboard publication, bootstrap these managed labels in the private control repository. The publisher deliberately does not create or modify label definitions at runtime:
 
 - `scan:pass`
 - `scan:findings`
 - `scan:incomplete`
 - `scan:error`
+- `finding:actions`
+- `finding:shell`
+- `finding:vulnerability`
+- `finding:secret`
+- `finding:misconfiguration`
 
-Finding labels identify GitHub Actions, shell, vulnerability, secret, and misconfiguration categories. Scorecard remains visible in the scanner-results table as informational `pass`/`error` evidence but does not produce `finding:*` labels.
+Scorecard remains visible in the scanner-results table as informational `pass`/`error` evidence but does not produce `finding:*` labels.
 
 ## Validation
 

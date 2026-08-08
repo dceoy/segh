@@ -6,18 +6,17 @@ const path = require("node:path");
 const MANAGED = /<!-- segh-dashboard: v1 -->/;
 const REPOSITORY_ID = /<!-- segh-repository-id: ([0-9]+) -->/;
 const OWNED_LABEL = /^(?:scan|finding):/;
-const LABELS = Object.freeze({
-  "scan:pass": ["1f883d", "Latest security scan passed"],
-  "scan:findings": ["d1242f", "Latest security scan has actionable findings"],
-  "scan:incomplete": ["bf8700", "Latest security scan has incomplete coverage"],
-  "scan:error": ["b60205", "Latest security scan encountered an error"],
-  "finding:actions": ["0969da", "GitHub Actions finding category"],
-  "finding:shell": ["0550ae", "Shell finding category"],
-  "finding:vulnerability": ["cf222e", "Dependency vulnerability finding category"],
-  "finding:secret": ["a40e26", "Secret exposure finding category"],
-  "finding:misconfiguration": ["9a6700", "Configuration finding category"],
-});
+const SCANNER_CATEGORIES = new Map([
+  ["scorecard", null],
+  ["zizmor", "actions"],
+  ["actionlint", "actions"],
+  ["shellcheck", "shell"],
+  ["trivy-vulnerability", "vulnerability"],
+  ["trivy-secret", "secret"],
+  ["trivy-misconfiguration", "misconfiguration"],
+]);
 const VALID_STATUS = new Set(["pass", "findings", "incomplete", "error"]);
+const VALID_SCANNER_STATUS = new Set(["pass", "findings", "skipped", "error"]);
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -26,10 +25,12 @@ function readJson(file) {
 function readPlan(file) {
   const plan = readJson(file);
   if (!Array.isArray(plan?.include) || plan.include.length > 100) throw new Error("invalid scan plan");
+  const ids = new Set();
   for (const target of plan.include) {
-    if (!Number.isSafeInteger(target?.id) || target.id <= 0 || typeof target.full_name !== "string") {
+    if (!Number.isSafeInteger(target?.id) || target.id <= 0 || typeof target.full_name !== "string" || ids.has(target.id)) {
       throw new Error("invalid scan target");
     }
+    ids.add(target.id);
   }
   return plan.include;
 }
@@ -46,9 +47,15 @@ function summaryFiles(root) {
 function loadSummaries(root) {
   const summaries = new Map();
   for (const file of summaryFiles(root)) {
-    const summary = readJson(file);
+    let summary;
+    try {
+      summary = readJson(file);
+    } catch {
+      continue;
+    }
     const id = summary?.repository?.id;
-    if (!Number.isSafeInteger(id) || id <= 0 || summaries.has(id)) throw new Error("invalid or duplicate dashboard summary");
+    if (!Number.isSafeInteger(id) || id <= 0) continue;
+    if (summaries.has(id)) throw new Error(`duplicate dashboard summary for repository id ${id}`);
     summaries.set(id, summary);
   }
   return summaries;
@@ -69,7 +76,7 @@ function desiredLabels(summary) {
   for (const scanner of summary.scanners || []) {
     if (scanner.status === "findings" && scanner.category) names.push(`finding:${scanner.category}`);
   }
-  return [...new Set(names)].filter((name) => Object.hasOwn(LABELS, name)).sort();
+  return [...new Set(names)].sort();
 }
 
 function mergedLabels(existing, desired) {
@@ -79,8 +86,24 @@ function mergedLabels(existing, desired) {
 
 function validateSummary(target, summary) {
   if (!summary || !VALID_STATUS.has(summary.overall_status) || !Array.isArray(summary.scanners)) return false;
-  return summary.repository?.id === target.id && summary.repository?.full_name === target.full_name &&
-    summary.repository?.commit_sha === target.commit_sha;
+  if (summary.repository?.id !== target.id || summary.repository?.full_name !== target.full_name ||
+      summary.repository?.commit_sha !== target.commit_sha) return false;
+  if (summary.evidence_artifact !== `repository-scan-${target.id}`) return false;
+  if (!summary.scanners.every((scanner) => {
+    if (!scanner || typeof scanner.name !== "string" || !SCANNER_CATEGORIES.has(scanner.name) ||
+        !VALID_SCANNER_STATUS.has(scanner.status) || !Number.isSafeInteger(scanner.findings) || scanner.findings < 0) return false;
+    const category = SCANNER_CATEGORIES.get(scanner.name);
+    if (scanner.status === "findings") return Boolean(category) && scanner.findings > 0 && scanner.category === category;
+    return scanner.findings === 0 && scanner.category === undefined;
+  })) return false;
+  if (summary.scanners.length !== SCANNER_CATEGORIES.size ||
+      new Set(summary.scanners.map((scanner) => scanner.name)).size !== SCANNER_CATEGORIES.size) return false;
+
+  const statuses = summary.scanners.map((scanner) => scanner.status);
+  if (summary.overall_status === "pass") return statuses.includes("pass") && statuses.every((status) => status === "pass" || status === "skipped");
+  if (summary.overall_status === "findings") return statuses.includes("findings") && !statuses.includes("error");
+  if (summary.overall_status === "incomplete") return statuses.every((status) => status === "skipped");
+  return true;
 }
 
 function render(target, summary, context) {
@@ -114,20 +137,10 @@ function render(target, summary, context) {
     for (const scanner of summary.scanners) {
       lines.push(`| ${scanner.name} | ${scanner.status} | ${scanner.findings} |`);
     }
-    lines.push("", `Raw evidence remains in the private workflow artifact \`${summary.scan?.evidence_artifact || `repository-scan-${target.id}`}\`.`, "");
+    lines.push("", `Raw evidence remains in the private workflow artifact \`${summary.evidence_artifact}\`.`, "");
   }
 
   return {title, state, labels, body: `${lines.join("\n")}\n`, status};
-}
-
-async function ensureLabels(github, owner, repo) {
-  for (const [name, [color, description]] of Object.entries(LABELS)) {
-    try {
-      await github.rest.issues.createLabel({owner, repo, name, color, description});
-    } catch (error) {
-      if ((error?.status || error?.response?.status) !== 422) throw error;
-    }
-  }
 }
 
 async function managedIssues(github, owner, repo) {
@@ -200,17 +213,19 @@ async function publish(options) {
   const targets = readPlan(options.planPath);
   const summaries = loadSummaries(options.summariesPath);
   const {owner, repo} = options.context.repo;
-  await ensureLabels(options.github, owner, repo);
-  const existing = await managedIssues(options.github, owner, repo);
   const byId = new Map();
-  for (const issue of existing.sort((a, b) => a.number - b.number)) {
+  const duplicateIds = new Set();
+  for (const issue of (await managedIssues(options.github, owner, repo)).sort((a, b) => a.number - b.number)) {
     const id = repositoryId(issue);
-    if (id && !byId.has(id)) byId.set(id, issue);
+    if (!id) continue;
+    if (byId.has(id)) duplicateIds.add(id);
+    else byId.set(id, issue);
   }
 
   const results = [];
   for (const target of targets) {
     try {
+      if (duplicateIds.has(target.id)) throw new Error(`repository id ${target.id} has duplicate managed dashboard issues`);
       const desired = render(target, summaries.get(target.id), options.context);
       const action = await apply(options.github, owner, repo, byId.get(target.id), desired);
       results.push({repository_id: target.id, status: desired.status, action});
