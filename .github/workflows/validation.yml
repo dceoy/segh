@@ -26,6 +26,8 @@ jobs:
           aqua_version: v2.62.1
       - name: Validate workflow credential boundary
         run: ruby scripts/validate-workflow-boundary.rb .
+      - name: Test target preflight boundary
+        run: bash scripts/test-preflight.sh
       - name: Test dashboard normalization and publication
         run: node --test scripts/test-dashboard.js
       - name: Run actionlint
@@ -63,4 +65,4 @@ jobs:
     with:
       validation_mode: true
       repository_limit: "50"
-      max_parallel: "5"
+      max_parallel: "4"
