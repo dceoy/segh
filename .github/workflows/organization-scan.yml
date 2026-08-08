@@ -284,8 +284,6 @@ jobs:
       checks: read
       issues: read
       pull-requests: read
-    env:
-      AQUA_CONFIG: ${{ github.workspace }}/_trusted/aqua.yaml
     steps:
       - name: Record immutable target metadata
         id: target
@@ -489,10 +487,12 @@ jobs:
         if: steps.checkout.outcome == 'success'
         id: tools
         continue-on-error: ${{ inputs.validation_mode }}
-        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
         with:
-          aqua_version: v2.62.1
+          version: 2026.8.3
+          sha256: 66585ac496c10bf6fbf13272e3e550c1813aed0e1cb780b9bb73c1751de49289
           working_directory: _trusted
+          install_args: --locked
       - name: Record scanner versions
         if: steps.tools.outcome == 'success'
         id: versions
