@@ -29,6 +29,7 @@ jobs:
     uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@main # zizmor: ignore[unpinned-uses]
     with:
       search-path: .
+      use-prettier: false
   shell-lint:
     permissions:
       contents: read
