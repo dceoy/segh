@@ -1,0 +1,103 @@
+---
+name: CI/CD
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  github-actions-lint-and-scan:
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: dceoy/gha-for-devops/.github/workflows/github-actions-lint-and-scan.yml@main # zizmor: ignore[unpinned-uses]
+    with:
+      search-path: .github/workflows
+      yamllint-search-path: .
+      zizmor-search-path: .
+      zizmor-online-audits: false
+      zizmor-min-severity: high
+      zizmor-min-confidence: high
+      zizmor-advanced-security: false
+  markdown-lint:
+    uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@main # zizmor: ignore[unpinned-uses]
+    with:
+      search-path: .
+      use-prettier: false
+  shell-lint:
+    permissions:
+      contents: read
+    uses: dceoy/gha-for-devops/.github/workflows/shell-lint.yml@main # zizmor: ignore[unpinned-uses]
+    with:
+      search-path: .
+  test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out candidate revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: false
+          submodules: false
+      - name: Install checksum-verified tools
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.8.3
+          sha256: 66585ac496c10bf6fbf13272e3e550c1813aed0e1cb780b9bb73c1751de49289
+          install_args: --locked
+      - name: Validate workflow credential boundary
+        run: bash scripts/validate-workflow-boundary.sh .
+      - name: Test target preflight boundary
+        run: bash tests/test-preflight.sh
+      - name: Test dashboard normalization and publication
+        run: node --test tests/test-dashboard.js
+  production-workflow:
+    if: github.event_name == 'pull_request'
+    needs: test
+    permissions:
+      actions: read
+      contents: read
+      checks: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/organization-scan.yml
+    with:
+      validation_mode: true
+      repository_limit: "50"
+      max_parallel: "4"
+  github-codeql-analysis:
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    uses: dceoy/gha-for-devops/.github/workflows/github-codeql-analysis.yml@main # zizmor: ignore[unpinned-uses]
+    with:
+      language: >
+        ["actions", "javascript-typescript"]
+  dependabot-auto-merge:
+    if: >
+      github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+    needs:
+      - github-actions-lint-and-scan
+      - markdown-lint
+      - shell-lint
+      - test
+      - production-workflow
+      - github-codeql-analysis
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      checks: read
+      statuses: read
+    uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@main # zizmor: ignore[unpinned-uses]
+    with:
+      unconditional: true

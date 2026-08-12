@@ -1,0 +1,7 @@
+---
+paths:
+  .github/workflows/*.yml:
+    ignore:
+      - 'property "workflow_(repository|sha)" is not defined in object type'
+      - 'shellcheck reported issue.*SC2129'
+      - 'shellcheck reported issue.*SC2016'
