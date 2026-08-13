@@ -1,0 +1,4 @@
+---
+soft-fail: true
+skip-check:
+  - '*'
