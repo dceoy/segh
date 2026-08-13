@@ -95,6 +95,33 @@ function parseShellcheck(resultsDir, outcome) {
   }
 }
 
+function parseCheckov(resultsDir, outcome) {
+  if (outcome === "skipped") return result("checkov", "skipped");
+  const file = path.join(resultsDir, "checkov.json");
+  const statusFile = path.join(resultsDir, "checkov-status.txt");
+  if (!exists(file) || !exists(statusFile)) return result("checkov", "error");
+  try {
+    const data = readJson(file);
+    const reports = Array.isArray(data) ? data : [data];
+    const status = Number.parseInt(fs.readFileSync(statusFile, "utf8").trim(), 10);
+    if (!Number.isInteger(status) || !reports.every((report) => {
+      const summary = report?.summary;
+      return report && typeof report === "object" && !Array.isArray(report) &&
+        summary && typeof summary === "object" &&
+        Number.isSafeInteger(summary.failed) && summary.failed >= 0 &&
+        Number.isSafeInteger(summary.parsing_errors) && summary.parsing_errors >= 0;
+    })) return result("checkov", "error");
+    const findings = reports.reduce((count, report) => count + report.summary.failed, 0);
+    const parsingErrors = reports.reduce((count, report) => count + report.summary.parsing_errors, 0);
+    if (parsingErrors > 0) return result("checkov", "error");
+    if (status === 1 && findings > 0) return result("checkov", "findings", findings, "misconfiguration");
+    if (status === 0 && outcome === "success" && findings === 0) return result("checkov", "pass");
+    return result("checkov", "error");
+  } catch {
+    return result("checkov", "error");
+  }
+}
+
 function parseTrivy(resultsDir, outcome, kind, property, category) {
   const name = `trivy-${kind}`;
   if (outcome === "skipped") return result(name, "skipped");
@@ -137,9 +164,9 @@ function buildSummary({resultsDir, env = process.env}) {
     zizmor: normalizeOutcome(env.ZIZMOR_OUTCOME),
     actionlint: normalizeOutcome(env.ACTIONLINT_OUTCOME),
     shellcheck: normalizeOutcome(env.SHELLCHECK_OUTCOME),
+    checkov: normalizeOutcome(env.CHECKOV_OUTCOME),
     trivyVulnerability: normalizeOutcome(env.TRIVY_VULNERABILITY_OUTCOME),
     trivySecret: normalizeOutcome(env.TRIVY_SECRET_OUTCOME),
-    trivyMisconfiguration: normalizeOutcome(env.TRIVY_MISCONFIGURATION_OUTCOME),
   };
 
   const scanners = [
@@ -147,9 +174,9 @@ function buildSummary({resultsDir, env = process.env}) {
     parseJsonArrayScanner(resultsDir, outcomes.zizmor, "zizmor", "zizmor.json", "actions"),
     parseActionlint(resultsDir, outcomes.actionlint),
     parseShellcheck(resultsDir, outcomes.shellcheck),
+    parseCheckov(resultsDir, outcomes.checkov),
     parseTrivy(resultsDir, outcomes.trivyVulnerability, "vulnerability", "Vulnerabilities", "vulnerability"),
     parseTrivy(resultsDir, outcomes.trivySecret, "secret", "Secrets", "secret"),
-    parseTrivy(resultsDir, outcomes.trivyMisconfiguration, "misconfiguration", "Misconfigurations", "misconfiguration"),
   ];
 
   let overallStatus = "pass";
