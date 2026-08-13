@@ -58,7 +58,7 @@ jobs:
       - name: Test target preflight boundary
         run: bash tests/test-preflight.sh
       - name: Test dashboard normalization and publication
-        run: node --test tests/test-dashboard.js
+        run: node --test tests/test-dashboard.js tests/test-checkov-summary.js
       - name: Compare Checkov and Trivy IaC coverage
         env:
           CKV_PARSE_ERROR_FAIL: "true"
