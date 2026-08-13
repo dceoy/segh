@@ -6,6 +6,14 @@ backend = "aqua:rhysd/actionlint"
 checksum = "sha256:8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
 url = "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz"
 
+[[tools.checkov]]
+version = "3.3.9"
+backend = "aqua:bridgecrewio/checkov"
+
+[tools.checkov.platforms.linux-x64]
+checksum = "sha256:af7ccf93184fa09b5633dfd68fba78058717e6f80b31a44a3f2ef2eebd716f34"
+url = "https://github.com/bridgecrewio/checkov/releases/download/3.3.9/checkov_linux_X86_64.zip"
+
 [[tools.scorecard]]
 version = "5.5.0"
 backend = "aqua:ossf/scorecard"
