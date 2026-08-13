@@ -12,7 +12,8 @@ The production workflow installs checksum-verified tools with Aqua and runs:
 - zizmor
 - actionlint
 - ShellCheck
-- Trivy vulnerability, secret, and misconfiguration scanners
+- Checkov for infrastructure-as-code misconfiguration scanning
+- Trivy vulnerability and secret scanners
 
 OpenSSF Scorecard is informational evidence. A successful execution with parseable native Scorecard JSON is reported as `pass` regardless of aggregate or individual check scores; only execution or evidence-integrity failures become scanner errors. `segh` does not translate Scorecard scores into findings, thresholds, or finding labels.
 
@@ -25,7 +26,8 @@ Scanner-native collection is used only when it preserves the preflighted target 
 - **zizmor:** keep explicit Git-index selection for workflow and action YAML. Native workflow/action collection honors target-owned `.gitignore`; disabling that behavior with `--collect=all` broadens the collected input kinds. Explicit selection also preserves a successful empty result when no matching files exist.
 - **actionlint:** keep explicit Git-index selection. Repository-native discovery recursively walks `.github/workflows` from the filesystem and treats an empty workflow set as a fatal error, so it is not coverage- or no-match-equivalent.
 - **ShellCheck:** keep explicit Git-index selection because ShellCheck has no repository-native collector matching segh's extension-plus-supported-shebang policy.
-- **Trivy:** keep native `filesystem` collection. It runs only after preflight has excluded untracked content and unsafe Git object types; target-owned Trivy configuration and ignore files are disabled with `/dev/null`, and `.git` is excluded.
+- **Checkov:** keep native directory collection after preflight, but run only the centrally selected IaC frameworks. The workflow pins trusted Checkov configuration, disables Prisma Cloud downloads and result uploads, and does not load target-owned `.checkov.yml`, external checks, remote policies, secret scanning, dependency scanning, or GitHub Actions scanning.
+- **Trivy:** keep native `filesystem` collection for vulnerability and secret scanning only. It runs only after preflight has excluded untracked content and unsafe Git object types; target-owned Trivy configuration and ignore files are disabled with `/dev/null`, and `.git` is excluded.
 
 ## Architecture
 
@@ -70,7 +72,7 @@ The control repository must provide `SEGH_ORG_SCAN_APP_ID` and `SEGH_ORG_SCAN_AP
 
 ## Outputs
 
-Each target scan retains `repository-scan-<repository-id>` with immutable target metadata, scanner versions, preflight output, native scanner outputs/logs, and `summary.json`.
+Each target scan retains `repository-scan-<repository-id>` with immutable target metadata, scanner versions, preflight output, native scanner outputs/logs, and `summary.json`. Checkov contributes native `checkov.json`, stderr, and execution status evidence; Trivy no longer emits misconfiguration evidence.
 
 A small `repository-summary-<repository-id>` artifact is used by the publisher in the same workflow run. The summary contains only repository identity needed to bind it to the current plan, the overall status, bounded scanner status/count rows, and the raw-evidence artifact name. Dashboard issues add current plan metadata and the private workflow-run link; raw source excerpts and scanner logs stay in artifacts.
 
@@ -96,7 +98,8 @@ Pull-request CI runs:
 
 - a small Shell/yq credential-boundary validator for segh-specific invariants;
 - shell tests for the target preflight boundary;
-- Node tests for summary normalization and issue publication;
+- Node tests for summary normalization and issue publication, including Checkov findings versus scanner/parsing failures;
+- a representative Checkov-versus-Trivy IaC coverage comparison before retiring Trivy misconfiguration scanning;
 - actionlint, zizmor, and ShellCheck;
 - YAML/JSON parsing and Aqua checksum verification; and
 - the real organization scanner in deterministic `validation_mode`.
