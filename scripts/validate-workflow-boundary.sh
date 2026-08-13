@@ -96,6 +96,29 @@ assert_value '[.jobs.scan.steps[] | select(.id == "scorecard")][0].env.SEGH_TARG
 assert_value '.jobs.scan.env.SEGH_TARGET_SCORECARD_TOKEN // ""' '' \
   'target token must not be promoted to job environment'
 
+assert_value '[.jobs.scan.steps[] | select(.id == "checkov")] | length' '1' 'Checkov step is required'
+checkov=$(yq -o=json '.jobs.scan.steps[] | select(.id == "checkov")' "$scan")
+assert_absent "$checkov" '"uses"' 'Checkov must run directly instead of through a wrapper action'
+assert_present "$checkov" '--config-file _trusted/.github/checkov.yml' 'Checkov must use only trusted configuration'
+assert_present "$checkov" '--skip-download' 'Checkov must disable remote policy/config downloads'
+assert_present "$checkov" '--skip-results-upload' 'Checkov must not upload results'
+assert_present "$checkov" 'results/checkov.json' 'Checkov native JSON evidence must be retained'
+assert_present "$checkov" 'results/checkov-status.txt' 'Checkov execution status must be retained'
+assert_absent "$checkov" '_target/.checkov' 'target-owned Checkov configuration must not be loaded'
+assert_absent "$checkov" 'external-checks' 'external Checkov checks must not be loaded'
+assert_value '[.jobs.scan.steps[] | select(.id == "checkov")][0].env.BC_API_KEY' '' \
+  'Checkov must not receive a Prisma Cloud API key'
+assert_value '[.jobs.scan.steps[] | select(.id == "checkov")][0].env.PRISMA_API_URL' '' \
+  'Checkov must not receive a Prisma Cloud endpoint'
+assert_value '[.jobs.scan.steps[] | select(.id == "checkov")][0].env.CHECKOV_HELM_ALLOWED_REMOTE_REPOS' 'none' \
+  'Checkov Helm scanning must block remote dependency repositories'
+assert_value '[.jobs.scan.steps[] | select(.id == "checkov")][0].env.CHECKOV_KUSTOMIZE_ALLOWED_REMOTE_PREFIXES' 'none' \
+  'Checkov Kustomize scanning must block remote resources'
+assert_value '[.jobs.scan.steps[] | select(.id == "trivy-misconfiguration")] | length' '0' \
+  'Trivy misconfiguration scanning must not remain in the production scanner'
+trivy_steps=$(yq -o=json '[.jobs.scan.steps[] | select(.id == "trivy-vulnerability" or .id == "trivy-secret")]' "$scan")
+assert_absent "$trivy_steps" '--scanners misconfig' 'Trivy must remain limited to vulnerability and secret scanning'
+
 references=$(
   yq -r '.. | select(tag == "!!str") | select(contains("steps.target-token.outputs.token")) | path | join("/")' "$scan" |
     LC_ALL=C sort
