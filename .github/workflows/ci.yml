@@ -36,6 +36,11 @@ jobs:
     uses: dceoy/gha-for-devops/.github/workflows/shell-lint.yml@main # zizmor: ignore[unpinned-uses]
     with:
       search-path: .
+      file-names: |
+        *.sh
+        *.bash
+        *.bats
+        :(exclude)scripts/validate-workflow-boundary.sh
   test:
     runs-on: ubuntu-24.04
     permissions:
@@ -54,7 +59,9 @@ jobs:
           sha256: 66585ac496c10bf6fbf13272e3e550c1813aed0e1cb780b9bb73c1751de49289
           install_args: --locked
       - name: Validate workflow credential boundary
-        run: bash scripts/validate-workflow-boundary.sh .
+        run: |
+          shellcheck --exclude=SC2016 scripts/validate-workflow-boundary.sh
+          bash scripts/validate-workflow-boundary.sh .
       - name: Test target preflight boundary
         run: bash tests/test-preflight.sh
       - name: Test dashboard normalization and publication
