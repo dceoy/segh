@@ -1,19 +1,4 @@
 ---
-framework:
-  - ansible
-  - argo_workflows
-  - arm
-  - bicep
-  - cloudformation
-  - dockerfile
-  - helm
-  - kubernetes
-  - kustomize
-  - openapi
-  - serverless
-  - terraform
-  - terraform_json
-  - terraform_plan
 skip-check: []
 compact: true
 download-external-modules: false
