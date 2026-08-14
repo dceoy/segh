@@ -47,6 +47,15 @@ assert_blocked_before_checkov tests/fixtures/iac-absolute-kustomize absolute-kus
 assert_blocked_before_checkov tests/fixtures/iac-scp-kustomize-crds scp-kustomize-crds
 assert_blocked_before_checkov tests/fixtures/iac-absolute-kustomize-crds absolute-kustomize-crds
 
+# A local Helm chart that Checkov's own `helm template --dependency-update`
+# cannot render cleanly, and a local Kustomization that `kubectl kustomize`
+# cannot build, must both be caught before Checkov runs: Checkov itself
+# treats these as "no report" (Helm) or ignores the renderer's exit status
+# and stderr entirely (Kustomize), silently losing evidence rather than
+# reporting a scanner error.
+assert_blocked_before_checkov tests/fixtures/iac-invalid-helm invalid-helm
+assert_blocked_before_checkov tests/fixtures/iac-invalid-kustomize invalid-kustomize
+
 results="$root/valid-fixtures"
 "$runner" tests/fixtures/iac "$results" > "$root/valid-fixtures.log" 2>&1 || true
 [[ "$(cat "$results/checkov-status.txt")" == 1 ]]
