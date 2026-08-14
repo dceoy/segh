@@ -80,6 +80,14 @@ assert_blocked_before_checkov tests/fixtures/iac-terraform-hcl-escape-module ter
 # with no error at all.
 assert_blocked_before_checkov tests/fixtures/iac-serverless-node-modules serverless-node-modules
 
+# The CKV_IGNORED_DIRECTORIES sentinel run-checkov.sh sets is public (it
+# lives in this repository), so a target path deliberately named after it
+# would otherwise silently prune evidence: an exact directory-name match
+# prunes every framework, and a substring match prunes the secrets
+# framework specifically. Both must be rejected before Checkov ever runs.
+assert_blocked_before_checkov tests/fixtures/iac-ignored-directories-sentinel-exact ignored-directories-sentinel-exact
+assert_blocked_before_checkov tests/fixtures/iac-ignored-directories-sentinel-substring ignored-directories-sentinel-substring
+
 results="$root/valid-fixtures"
 "$runner" tests/fixtures/iac "$results" > "$root/valid-fixtures.log" 2>&1 || true
 [[ "$(cat "$results/checkov-status.txt")" == 1 ]]
@@ -91,10 +99,12 @@ jq -e '[if type == "array" then .[] else . end
   | select(.check_type == "secrets") | .summary.failed] | add // 0 | . > 0' \
   "$results/checkov-native.json" > /dev/null
 
-# A tracked GitHub Actions workflow, which lives under the hidden ".github"
-# directory, must be scanned too.
+# A tracked GitHub Actions workflow must be scanned too (Checkov's
+# github_actions runner is unaffected by CKV_IGNORE_HIDDEN_DIRECTORIES; this
+# only confirms the framework itself ran and produced check results).
 jq -e '[if type == "array" then .[] else . end
-  | select(.check_type == "github_actions")] | length > 0' \
+  | select(.check_type == "github_actions")
+  | (.summary.failed // 0) + (.summary.passed // 0)] | add // 0 | . > 0' \
   "$results/checkov-native.json" > /dev/null
 
 # A tracked resource under a dot-prefixed directory must still be scanned:
@@ -132,6 +142,17 @@ jq -e '[if type == "array" then .[] else . end
   | select(.check_type == "terraform")
   | .results.failed_checks[]?
   | select(.resource == "module.nested.aws_security_group.example")] | length > 0' \
+  "$results/checkov-native.json" > /dev/null
+
+# A module block in a contained local ".hcl" file (not just ".tf") must also
+# still be scanned normally, not merely rejected when hostile.
+results="$root/terraform-hcl-local-module"
+"$runner" tests/fixtures/iac-terraform-hcl-local-module "$results" > "$root/terraform-hcl-local-module.log" 2>&1 || true
+[[ "$(cat "$results/checkov-status.txt")" == 1 ]]
+jq -e '[if type == "array" then .[] else . end
+  | select(.check_type == "terraform")
+  | .results.failed_checks[]?
+  | select(.resource == "module.nested.aws_security_group.hcl_module_example")] | length > 0' \
   "$results/checkov-native.json" > /dev/null
 
 # Checkov's Serverless parser resolves `${file(...)}` by default with no

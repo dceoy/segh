@@ -16,6 +16,22 @@ is_contained() {
   [[ "$candidate" == "$canonical_root" || "$candidate" == "$canonical_root"/* ]]
 }
 
+# run-checkov.sh sets CKV_IGNORED_DIRECTORIES to this exact sentinel (rather
+# than leaving it empty) so Checkov's default node_modules/.terraform/
+# .serverless exclusion isn't reintroduced. That sentinel value must never
+# match a real target path: Checkov's directory-ignore check does an exact
+# path-component match (silently pruning a whole subtree from every
+# framework), and the secrets framework additionally does a substring match
+# on the full path (silently dropping just that file from secrets). Since
+# this value is public (it lives in this repository), a target could
+# otherwise name a path after it on purpose to suppress evidence. Reject any
+# such collision before Checkov ever runs. This value must stay identical to
+# the one in run-checkov.sh.
+readonly ckv_ignored_directories_sentinel=__segh_no_ignored_directory__
+while IFS= read -r -d '' hit; do
+  reject "target path collides with the trusted ignored-directories sentinel: $hit"
+done < <(find "$scan_root" -path "*${ckv_ignored_directories_sentinel}*" -print0)
+
 # Every Helm/Kustomize reference to local content is required to resolve, via
 # realpath, to a location inside the copied scan root. This is a positive
 # allowlist: it accepts only references that demonstrably stay inside the

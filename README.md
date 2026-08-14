@@ -12,7 +12,7 @@ The production workflow installs checksum-verified tools with Aqua and runs:
 - zizmor
 - actionlint
 - ShellCheck
-- Checkov for infrastructure-as-code misconfiguration scanning
+- Checkov, the sole owner of IaC misconfiguration scanning (running its full default framework set, so it also incidentally overlaps Trivy secret scanning and zizmor Actions scanning; every Checkov finding is still reported under the `finding:misconfiguration` label regardless of which framework produced it)
 - Trivy vulnerability and secret scanners
 
 OpenSSF Scorecard is informational evidence. A successful execution with parseable native Scorecard JSON is reported as `pass` regardless of aggregate or individual check scores; only execution or evidence-integrity failures become scanner errors. `segh` does not translate Scorecard scores into findings, thresholds, or finding labels.

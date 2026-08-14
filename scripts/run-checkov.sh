@@ -70,6 +70,12 @@ else
       # an empty value splits to [""], and the secrets framework's exclusion
       # filter does "p in full_path", which an empty string always matches --
       # that would silently drop every file from the secrets framework.
+      # validate-iac-references.sh (already run above) rejects any target
+      # path colliding with this exact sentinel, since it is otherwise a
+      # target-controlled evidence-suppression path of its own (an exact
+      # directory-name match prunes every framework; a substring match
+      # prunes the secrets framework). Keep this value identical to the one
+      # there.
       env -i \
         PATH="$shimmed_path" \
         HOME="$scan_home" \
@@ -89,7 +95,11 @@ else
     # Checkov silently skips rendering a blocked remote Helm/Kustomize
     # reference, or a Helm chart/dependency it fails to process (exit 0, no
     # per-report evidence in every case); treat all of these as a scanner
-    # error rather than a clean scan.
+    # error rather than a clean scan. The last two patterns are defense in
+    # depth: validate-iac-renderers.sh already fails closed on any stderr
+    # from `helm template --dependency-update` for every contained chart,
+    # which is strictly stronger than what triggers them, so no fixture
+    # reaches this path today.
     if grep -qF -- 'Skipping helm template for' "$results/checkov.log" \
       || grep -qF -- 'Skipping kustomize build for' "$results/checkov.log" \
       || grep -qF -- 'Failed processing helm chart' "$results/checkov.log" \
