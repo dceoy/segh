@@ -56,6 +56,13 @@ assert_blocked_before_checkov tests/fixtures/iac-absolute-kustomize-crds absolut
 assert_blocked_before_checkov tests/fixtures/iac-invalid-helm invalid-helm
 assert_blocked_before_checkov tests/fixtures/iac-invalid-kustomize invalid-kustomize
 
+# Checkov's Terraform LocalPathLoader accepts any module source starting
+# with "./", "../", or "/" and is never skipped by download-external-modules:
+# false (that only gates loaders marked external). Both an absolute and an
+# escaping relative local module source must be rejected before Checkov runs.
+assert_blocked_before_checkov tests/fixtures/iac-terraform-escape-module terraform-escape-module
+assert_blocked_before_checkov tests/fixtures/iac-terraform-absolute-module terraform-absolute-module
+
 results="$root/valid-fixtures"
 "$runner" tests/fixtures/iac "$results" > "$root/valid-fixtures.log" 2>&1 || true
 [[ "$(cat "$results/checkov-status.txt")" == 1 ]]
@@ -71,6 +78,47 @@ jq -e '[if type == "array" then .[] else . end
   | .results.failed_checks[]?
   | select(.resource == "aws_security_group.hidden")] | length > 0' \
   "$results/checkov-native.json" > /dev/null
+
+# A contained local Terraform module (source resolves inside the scan root)
+# must still be scanned normally.
+results="$root/terraform-local-module"
+"$runner" tests/fixtures/iac-terraform-local-module "$results" > "$root/terraform-local-module.log" 2>&1 || true
+[[ "$(cat "$results/checkov-status.txt")" == 1 ]]
+jq -e '[if type == "array" then .[] else . end
+  | select(.check_type == "terraform")
+  | .results.failed_checks[]?
+  | select(.resource == "module.nested.aws_security_group.example")] | length > 0' \
+  "$results/checkov-native.json" > /dev/null
+
+# Checkov's Serverless parser resolves `${file(...)}` by default with no
+# containment check on the path. Point it at a FIFO outside the scan root:
+# if Checkov actually opens it, the read blocks forever and the run times
+# out; with CHECKOV_SERVERLESS_DISABLE_VARS=true the resolution is skipped
+# and the run completes normally.
+serverless_leak_dir="$root/serverless-leak"
+mkdir -p "$serverless_leak_dir"
+fifo="$root/serverless-leak.yaml"
+mkfifo "$fifo"
+cat > "$serverless_leak_dir/serverless.yml" <<EOF
+service: leak-test
+provider:
+  name: aws
+custom:
+  leaked: \${file($fifo)}
+functions:
+  hello:
+    handler: handler.hello
+EOF
+results="$root/serverless-leak-results"
+if ! timeout 20 "$runner" "$serverless_leak_dir" "$results" > "$root/serverless-leak.log" 2>&1; then
+  runner_status=$?
+  if ((runner_status == 124)); then
+    echo 'run-checkov.sh let Checkov block reading a serverless file() reference outside the scan root' >&2
+    cat "$root/serverless-leak.log" >&2
+    exit 1
+  fi
+fi
+[[ "$(cat "$results/checkov-status.txt")" == 0 ]]
 
 stub_bin="$root/stub-bin"
 mkdir -p "$stub_bin"
