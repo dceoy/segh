@@ -86,6 +86,20 @@ jq -e '[if type == "array" then .[] else . end
   | select(.resource == "aws_security_group.hidden")] | length > 0' \
   "$results/checkov-native.json" > /dev/null
 
+# A tracked resource under node_modules must still be scanned: Checkov 3.3.9
+# unconditionally ignores directory basenames listed in CKV_IGNORED_DIRECTORIES
+# (default node_modules,.terraform,.serverless), independent of
+# CKV_IGNORE_HIDDEN_DIRECTORIES, and run-checkov.sh must override that
+# default too rather than silently dropping the evidence.
+results="$root/ignored-directories-fixture"
+"$runner" tests/fixtures/iac-ignored-directories "$results" > "$root/ignored-directories-fixture.log" 2>&1 || true
+[[ "$(cat "$results/checkov-status.txt")" == 1 ]]
+jq -e '[if type == "array" then .[] else . end
+  | select(.check_type == "terraform")
+  | .results.failed_checks[]?
+  | select(.resource == "aws_security_group.ignored_dir")] | length > 0' \
+  "$results/checkov-native.json" > /dev/null
+
 # A contained local Terraform module (source resolves inside the scan root)
 # must still be scanned normally.
 results="$root/terraform-local-module"
