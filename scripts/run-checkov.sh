@@ -27,17 +27,34 @@ set +e
     CHECKOV_ALLOW_KUSTOMIZE_FILE_EDITS=false \
     checkov --directory "$scan_root" --config-file .github/checkov.yml \
       --skip-download --skip-results-upload --output json
-) > "$results/checkov.json" 2> "$results/checkov.log"
+) > "$results/checkov-native.json" 2> "$results/checkov.log"
 status=$?
 set -e
 
-if ((status == 0)) && [[ ! -s "$results/checkov.json" ]]; then
-  printf '[]\n' > "$results/checkov.json"
+# Checkov silently skips rendering a blocked remote Helm/Kustomize reference
+# (exit 0, no per-report evidence); treat that as a scanner error rather than
+# a clean scan.
+if grep -qF -- 'Skipping helm template for' "$results/checkov.log" \
+  || grep -qF -- 'Skipping kustomize build for' "$results/checkov.log"; then
+  status=2
 fi
-cp -- "$results/checkov.json" "$results/checkov-native.json"
+
+# A real Checkov run always emits either the bare no-IaC summary object or a
+# non-empty report list/object; empty or literal-[] stdout indicates lost
+# evidence, not a clean empty scan.
+if ((status == 0)) && ! jq -e '(type == "object") or (type == "array" and length > 0)' \
+  "$results/checkov-native.json" > /dev/null 2>&1; then
+  status=2
+fi
+
 if jq -e 'type == "object" and (.failed | type == "number") and (.parsing_errors | type == "number")' \
   "$results/checkov-native.json" > /dev/null 2>&1; then
   jq '{summary: .}' "$results/checkov-native.json" > "$results/checkov.json"
+elif jq -e '.' "$results/checkov-native.json" > /dev/null 2>&1; then
+  cp -- "$results/checkov-native.json" "$results/checkov.json"
+else
+  printf 'null\n' > "$results/checkov.json"
 fi
+
 printf '%s\n' "$status" > "$results/checkov-status.txt"
 exit "$status"

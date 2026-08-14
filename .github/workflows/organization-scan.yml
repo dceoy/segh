@@ -504,6 +504,8 @@ jobs:
             printf 'actionlint: '; actionlint -version
             printf 'shellcheck: '; shellcheck --version | head -n 2 | tail -n 1
             printf 'checkov: '; checkov --version
+            printf 'helm: '; helm version --short
+            printf 'kubectl: '; kubectl version --client
             printf 'trivy: '; trivy --version | head -n 1
           } > results/scanner-versions.txt 2> results/scanner-versions.log
       - name: Validate target content

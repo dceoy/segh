@@ -104,7 +104,7 @@ function parseCheckov(resultsDir, outcome) {
     const data = readJson(file);
     const reports = Array.isArray(data) ? data : [data];
     const status = Number.parseInt(fs.readFileSync(statusFile, "utf8").trim(), 10);
-    if (!Number.isInteger(status) || !reports.every((report) => {
+    if (!Number.isInteger(status) || reports.length === 0 || !reports.every((report) => {
       const summary = report?.summary;
       return report && typeof report === "object" && !Array.isArray(report) &&
         summary && typeof summary === "object" &&

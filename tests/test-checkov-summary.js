@@ -62,16 +62,44 @@ function report({failed = 0, parsingErrors = 0} = {}) {
   };
 }
 
-test("Checkov empty IaC evidence is a successful no-findings result", () => {
+test("Checkov's bare no-IaC summary is a successful no-findings result", () => {
   const dir = fixture();
   try {
-    writeJson(path.join(dir, "checkov.json"), []);
+    writeJson(path.join(dir, "checkov.json"), {
+      summary: {passed: 0, failed: 0, skipped: 0, parsing_errors: 0, resource_count: 0, checkov_version: "3.3.9"},
+    });
     fs.writeFileSync(path.join(dir, "checkov-status.txt"), "0\n");
     const summary = buildSummary({resultsDir: dir, env: env()});
     assert.equal(summary.overall_status, "pass");
     assert.deepEqual(summary.scanners.find((scanner) => scanner.name === "checkov"), {
       name: "checkov", status: "pass", findings: 0,
     });
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test("Checkov literal empty report list is a scanner error, not a clean scan", () => {
+  const dir = fixture();
+  try {
+    writeJson(path.join(dir, "checkov.json"), []);
+    fs.writeFileSync(path.join(dir, "checkov-status.txt"), "0\n");
+    const summary = buildSummary({resultsDir: dir, env: env()});
+    assert.equal(summary.overall_status, "error");
+    assert.equal(summary.scanners.find((scanner) => scanner.name === "checkov").status, "error");
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test("Checkov missing/malformed native evidence is a scanner error", () => {
+  const dir = fixture();
+  try {
+    writeJson(path.join(dir, "checkov.json"), null);
+    fs.writeFileSync(path.join(dir, "checkov-status.txt"), "2\n");
+    const summary = buildSummary({resultsDir: dir, env: env({CHECKOV_OUTCOME: "failure"})});
+    assert.equal(summary.overall_status, "error");
+    assert.equal(summary.scanners.find((scanner) => scanner.name === "checkov").status, "error");
   } finally {
     fs.rmSync(dir, {recursive: true, force: true});
   }

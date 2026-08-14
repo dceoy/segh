@@ -64,6 +64,8 @@ jobs:
           bash scripts/validate-workflow-boundary.sh .
       - name: Test target preflight boundary
         run: bash tests/test-preflight.sh
+      - name: Test Checkov runner fail-closed behavior
+        run: bash tests/test-run-checkov.sh
       - name: Test dashboard normalization and publication
         run: node --test tests/test-dashboard.js tests/test-checkov-summary.js
       - name: Compare Checkov and Trivy IaC coverage
@@ -83,6 +85,14 @@ jobs:
           [[ "$checkov_status" -le 1 ]]
           [[ "$trivy_status" -le 1 ]]
           [[ "$checkov_findings" -gt 0 ]]
+          [[ "$checkov_parse_errors" -eq 0 ]]
+          for framework in cloudformation dockerfile helm kubernetes kustomize terraform; do
+            jq -e --arg framework "$framework" \
+              '[if type == "array" then .[] else . end
+                | select(.check_type == $framework and ((.summary.resource_count // 0) > 0))] | length > 0' \
+              checkov-coverage/checkov.json > /dev/null \
+              || { echo "::error::Checkov produced no scanned resources for framework: $framework"; exit 1; }
+          done
           [[ "$checkov_parse_errors" -eq 0 ]]
   production-workflow:
     if: github.event_name == 'pull_request'
