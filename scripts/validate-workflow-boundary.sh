@@ -5,6 +5,7 @@ set -euo pipefail
 readonly root=${1:-.}
 readonly workflow=.github/workflows/organization-scan.yml
 readonly source_scan="$root/$workflow"
+readonly checkov_runner="$root/scripts/run-checkov.sh"
 
 fail() {
   printf '::error file=%s::%s\n' "$workflow" "$1" >&2
@@ -99,21 +100,25 @@ assert_value '.jobs.scan.env.SEGH_TARGET_SCORECARD_TOKEN // ""' '' \
 assert_value '[.jobs.scan.steps[] | select(.id == "checkov")] | length' '1' 'Checkov step is required'
 checkov=$(yq -o=json '.jobs.scan.steps[] | select(.id == "checkov")' "$scan")
 assert_absent "$checkov" '"uses"' 'Checkov must run directly instead of through a wrapper action'
-assert_present "$checkov" '--config-file _trusted/.github/checkov.yml' 'Checkov must use only trusted configuration'
-assert_present "$checkov" '--skip-download' 'Checkov must disable remote policy/config downloads'
-assert_present "$checkov" '--skip-results-upload' 'Checkov must not upload results'
-assert_present "$checkov" 'results/checkov.json' 'Checkov native JSON evidence must be retained'
-assert_present "$checkov" 'results/checkov-status.txt' 'Checkov execution status must be retained'
-assert_absent "$checkov" '_target/.checkov' 'target-owned Checkov configuration must not be loaded'
-assert_absent "$checkov" 'external-checks' 'external Checkov checks must not be loaded'
-assert_value '[.jobs.scan.steps[] | select(.id == "checkov")][0].env.BC_API_KEY' '' \
-  'Checkov must not receive a Prisma Cloud API key'
-assert_value '[.jobs.scan.steps[] | select(.id == "checkov")][0].env.PRISMA_API_URL' '' \
-  'Checkov must not receive a Prisma Cloud endpoint'
-assert_value '[.jobs.scan.steps[] | select(.id == "checkov")][0].env.CHECKOV_HELM_ALLOWED_REMOTE_REPOS' 'none' \
+assert_value '[.jobs.scan.steps[] | select(.id == "checkov")][0].run' \
+  '_trusted/scripts/run-checkov.sh _target results' 'Checkov must use the trusted scanner runner'
+[[ -f "$checkov_runner" ]] || fail 'trusted Checkov runner is missing'
+checkov_runner_text=$(cat "$checkov_runner")
+assert_present "$checkov_runner_text" 'env -i' 'Checkov must discard inherited configuration environment variables'
+assert_present "$checkov_runner_text" 'rm -f -- "$scan_root/.checkov.yml" "$scan_root/.checkov.yaml"' \
+  'Checkov must remove target-owned default config files from its static scan view'
+assert_present "$checkov_runner_text" 'HOME="$scan_home"' 'Checkov must use an isolated HOME'
+assert_present "$checkov_runner_text" '--config-file .github/checkov.yml' 'Checkov must use only trusted configuration'
+assert_present "$checkov_runner_text" '--skip-download' 'Checkov must disable remote policy/config downloads'
+assert_present "$checkov_runner_text" '--skip-results-upload' 'Checkov must not upload results'
+assert_present "$checkov_runner_text" 'CKV_PARSE_ERROR_FAIL=true' 'Checkov parsing errors must fail closed'
+assert_present "$checkov_runner_text" 'CHECKOV_HELM_ALLOWED_REMOTE_REPOS=none' \
   'Checkov Helm scanning must block remote dependency repositories'
-assert_value '[.jobs.scan.steps[] | select(.id == "checkov")][0].env.CHECKOV_KUSTOMIZE_ALLOWED_REMOTE_PREFIXES' 'none' \
+assert_present "$checkov_runner_text" 'CHECKOV_KUSTOMIZE_ALLOWED_REMOTE_PREFIXES=none' \
   'Checkov Kustomize scanning must block remote resources'
+assert_present "$checkov_runner_text" 'checkov.json' 'Checkov native JSON evidence must be retained'
+assert_present "$checkov_runner_text" 'checkov-status.txt' 'Checkov execution status must be retained'
+assert_absent "$checkov_runner_text" 'external-checks' 'external Checkov checks must not be loaded'
 assert_value '[.jobs.scan.steps[] | select(.id == "trivy-misconfiguration")] | length' '0' \
   'Trivy misconfiguration scanning must not remain in the production scanner'
 trivy_steps=$(yq -o=json '[.jobs.scan.steps[] | select(.id == "trivy-vulnerability" or .id == "trivy-secret")]' "$scan")
