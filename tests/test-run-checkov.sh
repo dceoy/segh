@@ -10,24 +10,44 @@ trap 'rm -rf "$root"' EXIT
 command -v checkov > /dev/null
 command -v helm > /dev/null
 command -v kubectl > /dev/null
+command -v yq > /dev/null
 
-results="$root/remote-helm"
-if "$runner" tests/fixtures/iac-remote-helm "$results" > "$root/remote-helm.log" 2>&1; then
-  echo 'run-checkov.sh accepted a blocked remote Helm dependency' >&2
-  cat "$root/remote-helm.log" >&2
-  exit 1
-fi
-[[ "$(cat "$results/checkov-status.txt")" == 2 ]]
-grep -F 'Skipping helm template for' "$results/checkov.log" > /dev/null
+sentinel_bin="$root/sentinel-bin"
+mkdir -p "$sentinel_bin"
+cat > "$sentinel_bin/checkov" <<STUB
+#!/usr/bin/env bash
+touch "$root/checkov-invoked.marker"
+exit 0
+STUB
+chmod +x "$sentinel_bin/checkov"
 
-results="$root/remote-kustomize"
-if "$runner" tests/fixtures/iac-remote-kustomize "$results" > "$root/remote-kustomize.log" 2>&1; then
-  echo 'run-checkov.sh accepted a blocked remote Kustomize reference' >&2
-  cat "$root/remote-kustomize.log" >&2
-  exit 1
-fi
-[[ "$(cat "$results/checkov-status.txt")" == 2 ]]
-grep -F 'Skipping kustomize build for' "$results/checkov.log" > /dev/null
+# Every hostile fixture below must be rejected before Checkov (or any
+# Helm/Kustomize renderer it would invoke) ever runs, regardless of which
+# reference form Checkov's own blocked-remote-repo detection would or would
+# not classify as remote.
+assert_blocked_before_checkov() {
+  local fixture=$1 name=$2
+  rm -f -- "$root/checkov-invoked.marker"
+  local results="$root/$name"
+  if PATH="$sentinel_bin:$PATH" "$runner" "$fixture" "$results" > "$root/$name.log" 2>&1; then
+    echo "run-checkov.sh accepted a hostile fixture: $fixture" >&2
+    cat "$root/$name.log" >&2
+    exit 1
+  fi
+  [[ "$(cat "$results/checkov-status.txt")" == 2 ]]
+  [[ ! -e "$root/checkov-invoked.marker" ]]
+}
+
+assert_blocked_before_checkov tests/fixtures/iac-remote-helm remote-helm
+assert_blocked_before_checkov tests/fixtures/iac-remote-kustomize remote-kustomize
+assert_blocked_before_checkov tests/fixtures/iac-oci-helm oci-helm
+assert_blocked_before_checkov tests/fixtures/iac-escape-helm escape-helm
+assert_blocked_before_checkov tests/fixtures/iac-scp-kustomize scp-kustomize
+assert_blocked_before_checkov tests/fixtures/iac-absolute-kustomize absolute-kustomize
+
+results="$root/valid-fixtures"
+"$runner" tests/fixtures/iac "$results" > "$root/valid-fixtures.log" 2>&1 || true
+[[ "$(cat "$results/checkov-status.txt")" == 1 ]]
 
 stub_bin="$root/stub-bin"
 mkdir -p "$stub_bin"
