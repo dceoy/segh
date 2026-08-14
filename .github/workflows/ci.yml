@@ -60,20 +60,16 @@ jobs:
       - name: Test dashboard normalization and publication
         run: node --test tests/test-dashboard.js tests/test-checkov-summary.js
       - name: Compare Checkov and Trivy IaC coverage
-        env:
-          CKV_PARSE_ERROR_FAIL: "true"
-          CHECKOV_HELM_ALLOWED_REMOTE_REPOS: "none"
-          CHECKOV_KUSTOMIZE_ALLOWED_REMOTE_PREFIXES: "none"
-          CHECKOV_ALLOW_KUSTOMIZE_FILE_EDITS: "false"
         run: |
+          [[ -f tests/fixtures/iac/.checkov.yml ]]
           set +e
-          checkov --directory tests/fixtures/iac --config-file .github/checkov.yml --skip-download --skip-results-upload --output json > checkov-coverage.json 2> checkov-coverage.log
+          scripts/run-checkov.sh tests/fixtures/iac checkov-coverage
           checkov_status=$?
           trivy filesystem --config /dev/null --ignorefile /dev/null --scanners misconfig --exit-code 1 --format json --output trivy-misconfiguration-coverage.json --skip-version-check tests/fixtures/iac 2> trivy-misconfiguration-coverage.log
           trivy_status=$?
           set -e
-          checkov_findings=$(jq '[if type == "array" then .[] else . end | .summary.failed // 0] | add // 0' checkov-coverage.json)
-          checkov_parse_errors=$(jq '[if type == "array" then .[] else . end | .summary.parsing_errors // 0] | add // 0' checkov-coverage.json)
+          checkov_findings=$(jq '[if type == "array" then .[] else . end | .summary.failed // 0] | add // 0' checkov-coverage/checkov.json)
+          checkov_parse_errors=$(jq '[if type == "array" then .[] else . end | .summary.parsing_errors // 0] | add // 0' checkov-coverage/checkov.json)
           trivy_findings=$(jq '[.Results[]? | (.Misconfigurations // []) | length] | add // 0' trivy-misconfiguration-coverage.json)
           printf 'Checkov status: %s, findings: %s, parse errors: %s\nTrivy status: %s, misconfiguration findings: %s\n' \
             "$checkov_status" "$checkov_findings" "$checkov_parse_errors" "$trivy_status" "$trivy_findings" | tee -a "$GITHUB_STEP_SUMMARY"
