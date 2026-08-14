@@ -4,9 +4,10 @@ set -euo pipefail
 
 readonly target=${1:?target directory is required}
 readonly results=${2:?results directory is required}
-readonly trusted=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-readonly scan_root=$(mktemp -d)
-readonly scan_home=$(mktemp -d)
+trusted=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+scan_root=$(mktemp -d)
+scan_home=$(mktemp -d)
+readonly trusted scan_root scan_home
 trap 'rm -rf -- "$scan_root" "$scan_home"' EXIT
 
 cp -a -- "$target/." "$scan_root/"
