@@ -90,4 +90,18 @@ while IFS= read -r -d '' tf_file; do
     | jq -r '.module // {} | to_entries[] | .value[]? | .source? // empty')
 done < <(find "$scan_root" -type f -name '*.tf' -print0)
 
+# Checkov's Serverless collector (get_scannable_file_paths in
+# checkov/serverless/utils.py) hard-codes an unconditional node_modules
+# exclusion via os.walk(), independent of CKV_IGNORED_DIRECTORIES. A tracked
+# serverless.yml/yaml under node_modules would be silently invisible to
+# Checkov with no error at all; fail closed rather than let that evidence
+# gap pass unnoticed.
+while IFS= read -r -d '' sls_file; do
+  case "$sls_file" in
+    */node_modules/*)
+      reject "serverless config under node_modules is invisible to Checkov: $sls_file"
+      ;;
+  esac
+done < <(find "$scan_root" -type f \( -name 'serverless.yml' -o -name 'serverless.yaml' \) -print0)
+
 exit 0

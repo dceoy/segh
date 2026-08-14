@@ -70,6 +70,12 @@ assert_blocked_before_checkov tests/fixtures/iac-terraform-absolute-module terra
 assert_blocked_before_checkov tests/fixtures/iac-terraform-comment-bypass-module terraform-comment-bypass-module
 assert_blocked_before_checkov tests/fixtures/iac-terraform-heredoc-bypass-module terraform-heredoc-bypass-module
 
+# Checkov's Serverless collector hard-codes an unconditional node_modules
+# exclusion independent of CKV_IGNORED_DIRECTORIES, so a tracked
+# serverless.yml under node_modules would otherwise be silently invisible
+# with no error at all.
+assert_blocked_before_checkov tests/fixtures/iac-serverless-node-modules serverless-node-modules
+
 results="$root/valid-fixtures"
 "$runner" tests/fixtures/iac "$results" > "$root/valid-fixtures.log" 2>&1 || true
 [[ "$(cat "$results/checkov-status.txt")" == 1 ]]
