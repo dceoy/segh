@@ -7,13 +7,36 @@ readonly results=${2:?results directory is required}
 trusted=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 scan_root=$(mktemp -d)
 scan_home=$(mktemp -d)
-readonly trusted scan_root scan_home
-trap 'rm -rf -- "$scan_root" "$scan_home"' EXIT
+helm_shim_dir=$(mktemp -d)
+readonly trusted scan_root scan_home helm_shim_dir
+trap 'rm -rf -- "$scan_root" "$scan_home" "$helm_shim_dir"' EXIT
 
 cp -a -- "$target/." "$scan_root/"
 rm -rf -- "$scan_root/.git"
 rm -f -- "$scan_root/.checkov.yml" "$scan_root/.checkov.yaml"
 mkdir -p -- "$results"
+
+# Helm 4.2.3 validates values.schema.json by default, and its JSON-schema
+# compiler resolves file:/http:/https: $ref loaders with no containment
+# check, so a chart-controlled schema can force target-controlled network
+# access or read arbitrary files. Checkov invokes `helm template` itself, so
+# disabling schema validation on our own pre-render check is not enough;
+# shim `helm` in front of both invocations to force --skip-schema-validation
+# on every `template` call while passing every other subcommand through
+# unchanged.
+real_helm=$(command -v helm)
+readonly real_helm
+cat > "$helm_shim_dir/helm" <<SHIM
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "template" ]]; then
+  shift
+  exec "$real_helm" template --skip-schema-validation "\$@"
+fi
+exec "$real_helm" "\$@"
+SHIM
+chmod +x -- "$helm_shim_dir/helm"
+readonly shimmed_path="$helm_shim_dir:$PATH"
 
 # Checkov's own blocked-remote-repo detection only classifies references it
 # recognizes as remote (notably http(s):// for Helm); it misses other forms
@@ -31,7 +54,8 @@ if ((validation_status != 0)); then
   : > "$results/checkov-native.json"
 else
   set +e
-  "$trusted/scripts/validate-iac-renderers.sh" "$scan_root" "$scan_home" >> "$results/checkov.log" 2>&1
+  PATH="$shimmed_path" "$trusted/scripts/validate-iac-renderers.sh" "$scan_root" "$scan_home" \
+    >> "$results/checkov.log" 2>&1
   renderer_status=$?
   set -e
 
@@ -43,7 +67,7 @@ else
     (
       cd -- "$trusted"
       env -i \
-        PATH="$PATH" \
+        PATH="$shimmed_path" \
         HOME="$scan_home" \
         CKV_PARSE_ERROR_FAIL=true \
         CKV_IGNORE_HIDDEN_DIRECTORIES=false \

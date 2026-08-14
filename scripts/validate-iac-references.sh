@@ -72,30 +72,22 @@ done < <(find "$scan_root" -type f \
 # module source starting with "./", "../", or "/" and is never skipped by
 # download-external-modules: false, which only gates loaders marked
 # external (git/registry/etc.). Apply the same local-reference containment
-# check to every such module source before Checkov ever loads it.
+# check to every such module source before Checkov ever loads it. Module
+# scope is determined by parsing real HCL with hcl2json rather than a raw
+# brace counter, which comments, strings, and heredocs could fool.
 while IFS= read -r -d '' tf_file; do
   tf_dir=$(dirname -- "$tf_file")
-  depth=0
-  module_depth=-1
-  while IFS= read -r line; do
-    if ((module_depth < 0)) \
-      && [[ "$line" =~ ^[[:space:]]*module[[:space:]]+\"[^\"]+\"[[:space:]]*\{ ]]; then
-      module_depth=$((depth + 1))
-    fi
-    if ((module_depth >= 0 && depth == module_depth)) \
-      && [[ "$line" =~ ^[[:space:]]*source[[:space:]]*=[[:space:]]*\"([^\"]*)\" ]]; then
-      source_value=${BASH_REMATCH[1]}
-      case "$source_value" in
-        ./* | ../* | /*)
-          validate_local_reference "$source_value" "$tf_dir" "Terraform module source in $tf_file"
-          ;;
-      esac
-    fi
-    opens=${line//[^{]/}
-    closes=${line//[^\}]/}
-    depth=$((depth + ${#opens} - ${#closes}))
-    ((module_depth >= 0 && depth < module_depth)) && module_depth=-1
-  done < "$tf_file"
+  parsed=$(hcl2json "$tf_file" 2>&1) \
+    || reject "failed to parse Terraform file: $tf_file"
+  while IFS= read -r source_value; do
+    [[ -z "$source_value" ]] && continue
+    case "$source_value" in
+      ./* | ../* | /*)
+        validate_local_reference "$source_value" "$tf_dir" "Terraform module source in $tf_file"
+        ;;
+    esac
+  done < <(printf '%s' "$parsed" \
+    | jq -r '.module // {} | to_entries[] | .value[]? | .source? // empty')
 done < <(find "$scan_root" -type f -name '*.tf' -print0)
 
 exit 0

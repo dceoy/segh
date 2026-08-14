@@ -16,6 +16,14 @@ backend = "aqua:bridgecrewio/checkov"
 checksum = "sha256:af7ccf93184fa09b5633dfd68fba78058717e6f80b31a44a3f2ef2eebd716f34"
 url = "https://github.com/bridgecrewio/checkov/releases/download/3.3.9/checkov_linux_X86_64.zip"
 
+[[tools.hcl2json]]
+version = "0.6.9"
+backend = "aqua:tmccombs/hcl2json"
+
+[tools.hcl2json."platforms.linux-x64"]
+checksum = "sha256:1e64a66c4e193502f9008a6e40abcff3f56a68d45df19490beb1d23a67455aa5"
+url = "https://github.com/tmccombs/hcl2json/releases/download/v0.6.9/hcl2json_linux_amd64.tar.gz"
+
 [[tools.helm]]
 version = "4.2.3"
 backend = "aqua:helm/helm"

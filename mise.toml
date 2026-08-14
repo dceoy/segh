@@ -4,6 +4,7 @@ lockfile = true
 [tools]
 actionlint = "1.7.12"
 checkov = "3.3.9"
+hcl2json = "0.6.9"
 helm = "4.2.3"
 kubectl = "1.36.3"
 scorecard = "5.5.0"

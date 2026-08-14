@@ -11,6 +11,7 @@ command -v checkov > /dev/null
 command -v helm > /dev/null
 command -v kubectl > /dev/null
 command -v yq > /dev/null
+command -v hcl2json > /dev/null
 
 sentinel_bin="$root/sentinel-bin"
 mkdir -p "$sentinel_bin"
@@ -62,6 +63,12 @@ assert_blocked_before_checkov tests/fixtures/iac-invalid-kustomize invalid-kusto
 # escaping relative local module source must be rejected before Checkov runs.
 assert_blocked_before_checkov tests/fixtures/iac-terraform-escape-module terraform-escape-module
 assert_blocked_before_checkov tests/fixtures/iac-terraform-absolute-module terraform-absolute-module
+
+# A line-based brace counter would be fooled by braces inside an HCL comment
+# or heredoc, letting a hostile module source escape module-scope detection.
+# Parsing real HCL (hcl2json) must not be fooled by either.
+assert_blocked_before_checkov tests/fixtures/iac-terraform-comment-bypass-module terraform-comment-bypass-module
+assert_blocked_before_checkov tests/fixtures/iac-terraform-heredoc-bypass-module terraform-heredoc-bypass-module
 
 results="$root/valid-fixtures"
 "$runner" tests/fixtures/iac "$results" > "$root/valid-fixtures.log" 2>&1 || true
@@ -119,6 +126,43 @@ if ! timeout 20 "$runner" "$serverless_leak_dir" "$results" > "$root/serverless-
   fi
 fi
 [[ "$(cat "$results/checkov-status.txt")" == 0 ]]
+
+# Helm 4.2.3 validates values.schema.json by default and its JSON-schema
+# compiler resolves file:/http:/https: $ref loaders with no containment
+# check; Checkov invokes `helm template` itself, so this must be fixed for
+# both the pre-render check and Checkov's own invocation. Point a chart's
+# schema $ref at a FIFO outside the scan root: if either Helm invocation
+# actually resolves it, the read blocks forever and the run times out; with
+# --skip-schema-validation forced, schema resolution never happens and the
+# run completes normally.
+helm_schema_leak_dir="$root/helm-schema-leak"
+mkdir -p "$helm_schema_leak_dir/templates"
+schema_fifo="$root/helm-schema-leak.json"
+mkfifo "$schema_fifo"
+cat > "$helm_schema_leak_dir/Chart.yaml" <<EOF
+apiVersion: v2
+name: schema-leak
+version: 0.1.0
+EOF
+cat > "$helm_schema_leak_dir/values.schema.json" <<EOF
+{"\$ref": "file://$schema_fifo"}
+EOF
+cat > "$helm_schema_leak_dir/templates/pod.yaml" <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test
+EOF
+results="$root/helm-schema-leak-results"
+if ! timeout 20 "$runner" "$helm_schema_leak_dir" "$results" > "$root/helm-schema-leak.log" 2>&1; then
+  runner_status=$?
+  if ((runner_status == 124)); then
+    echo 'run-checkov.sh let Helm block resolving a values.schema.json ref outside the scan root' >&2
+    cat "$root/helm-schema-leak.log" >&2
+    exit 1
+  fi
+fi
+[[ "$(cat "$results/checkov-status.txt")" == 1 ]]
 
 stub_bin="$root/stub-bin"
 mkdir -p "$stub_bin"
