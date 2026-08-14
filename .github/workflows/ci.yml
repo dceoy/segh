@@ -86,10 +86,15 @@ jobs:
           [[ "$trivy_status" -le 1 ]]
           [[ "$checkov_findings" -gt 0 ]]
           [[ "$checkov_parse_errors" -eq 0 ]]
-          for framework in cloudformation dockerfile helm kubernetes kustomize terraform; do
+          for framework in cloudformation dockerfile helm kubernetes kustomize terraform secrets github_actions; do
+            # secrets/github_actions reports can carry findings with
+            # resource_count still at 0, unlike the IaC frameworks above, so
+            # accept either scanned resources or executed checks as coverage.
             jq -e --arg framework "$framework" \
               '[if type == "array" then .[] else . end
-                | select(.check_type == $framework and ((.summary.resource_count // 0) > 0))] | length > 0' \
+                | select(.check_type == $framework and
+                    (((.summary.resource_count // 0) > 0) or
+                     (((.summary.failed // 0) + (.summary.passed // 0)) > 0)))] | length > 0' \
               checkov-coverage/checkov.json > /dev/null \
               || { echo "::error::Checkov produced no scanned resources for framework: $framework"; exit 1; }
           done

@@ -66,12 +66,16 @@ else
     set +e
     (
       cd -- "$trusted"
+      # CKV_IGNORED_DIRECTORIES is set to a sentinel rather than left empty:
+      # an empty value splits to [""], and the secrets framework's exclusion
+      # filter does "p in full_path", which an empty string always matches --
+      # that would silently drop every file from the secrets framework.
       env -i \
         PATH="$shimmed_path" \
         HOME="$scan_home" \
         CKV_PARSE_ERROR_FAIL=true \
         CKV_IGNORE_HIDDEN_DIRECTORIES=false \
-        CKV_IGNORED_DIRECTORIES= \
+        CKV_IGNORED_DIRECTORIES=__segh_no_ignored_directory__ \
         CHECKOV_SERVERLESS_DISABLE_VARS=true \
         CHECKOV_HELM_ALLOWED_REMOTE_REPOS=none \
         CHECKOV_KUSTOMIZE_ALLOWED_REMOTE_PREFIXES=none \
@@ -83,10 +87,13 @@ else
     set -e
 
     # Checkov silently skips rendering a blocked remote Helm/Kustomize
-    # reference (exit 0, no per-report evidence); treat that as a scanner
+    # reference, or a Helm chart/dependency it fails to process (exit 0, no
+    # per-report evidence in every case); treat all of these as a scanner
     # error rather than a clean scan.
     if grep -qF -- 'Skipping helm template for' "$results/checkov.log" \
-      || grep -qF -- 'Skipping kustomize build for' "$results/checkov.log"; then
+      || grep -qF -- 'Skipping kustomize build for' "$results/checkov.log" \
+      || grep -qF -- 'Failed processing helm chart' "$results/checkov.log" \
+      || grep -qF -- 'Error processing helm dependencies for' "$results/checkov.log"; then
       status=2
     fi
 

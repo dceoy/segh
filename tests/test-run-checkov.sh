@@ -70,6 +70,10 @@ assert_blocked_before_checkov tests/fixtures/iac-terraform-absolute-module terra
 assert_blocked_before_checkov tests/fixtures/iac-terraform-comment-bypass-module terraform-comment-bypass-module
 assert_blocked_before_checkov tests/fixtures/iac-terraform-heredoc-bypass-module terraform-heredoc-bypass-module
 
+# Checkov's Terraform parser loads module blocks from ".hcl" files, not only
+# ".tf" files, so the same containment check must cover both extensions.
+assert_blocked_before_checkov tests/fixtures/iac-terraform-hcl-escape-module terraform-hcl-escape-module
+
 # Checkov's Serverless collector hard-codes an unconditional node_modules
 # exclusion independent of CKV_IGNORED_DIRECTORIES, so a tracked
 # serverless.yml under node_modules would otherwise be silently invisible
@@ -79,6 +83,19 @@ assert_blocked_before_checkov tests/fixtures/iac-serverless-node-modules serverl
 results="$root/valid-fixtures"
 "$runner" tests/fixtures/iac "$results" > "$root/valid-fixtures.log" 2>&1 || true
 [[ "$(cat "$results/checkov-status.txt")" == 1 ]]
+
+# CKV_IGNORED_DIRECTORIES left empty splits to [""], which the secrets
+# framework's exclusion filter treats as matching every path -- that would
+# silently scan zero files. Confirm the dummy key fixture is still detected.
+jq -e '[if type == "array" then .[] else . end
+  | select(.check_type == "secrets") | .summary.failed] | add // 0 | . > 0' \
+  "$results/checkov-native.json" > /dev/null
+
+# A tracked GitHub Actions workflow, which lives under the hidden ".github"
+# directory, must be scanned too.
+jq -e '[if type == "array" then .[] else . end
+  | select(.check_type == "github_actions")] | length > 0' \
+  "$results/checkov-native.json" > /dev/null
 
 # A tracked resource under a dot-prefixed directory must still be scanned:
 # Checkov 3.3.9 ignores hidden directories by default, and run-checkov.sh

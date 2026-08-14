@@ -62,6 +62,12 @@ function report({failed = 0, parsingErrors = 0, skipped = 0} = {}) {
   };
 }
 
+// This exact shape (resource_count: 0, no failed/skipped/parsing_errors) is
+// also what Checkov's Serverless parser produces when a target's
+// serverless.yml is deliberately malformed: its parser swallows the parse
+// failure without incrementing parsing_errors. That gap is a known,
+// accepted residual risk (see README.md), not something this test should
+// try to distinguish from a genuine no-IaC repository.
 test("Checkov's bare no-IaC summary is a successful no-findings result", () => {
   const dir = fixture();
   try {

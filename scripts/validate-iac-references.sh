@@ -75,6 +75,8 @@ done < <(find "$scan_root" -type f \
 # check to every such module source before Checkov ever loads it. Module
 # scope is determined by parsing real HCL with hcl2json rather than a raw
 # brace counter, which comments, strings, and heredocs could fool.
+# Checkov's tf_parser loads both ".tf" and ".hcl" files into its module
+# graph, so ".hcl" module blocks must be covered by the same check.
 while IFS= read -r -d '' tf_file; do
   tf_dir=$(dirname -- "$tf_file")
   parsed=$(hcl2json "$tf_file" 2>&1) \
@@ -88,7 +90,7 @@ while IFS= read -r -d '' tf_file; do
     esac
   done < <(printf '%s' "$parsed" \
     | jq -r '.module // {} | to_entries[] | .value[]? | .source? // empty')
-done < <(find "$scan_root" -type f -name '*.tf' -print0)
+done < <(find "$scan_root" -type f \( -name '*.tf' -o -name '*.hcl' \) -print0)
 
 # Checkov's Serverless collector (get_scannable_file_paths in
 # checkov/serverless/utils.py) hard-codes an unconditional node_modules

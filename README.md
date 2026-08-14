@@ -26,7 +26,7 @@ Scanner-native collection is used only when it preserves the preflighted target 
 - **zizmor:** keep explicit Git-index selection for workflow and action YAML. Native workflow/action collection honors target-owned `.gitignore`; disabling that behavior with `--collect=all` broadens the collected input kinds. Explicit selection also preserves a successful empty result when no matching files exist.
 - **actionlint:** keep explicit Git-index selection. Repository-native discovery recursively walks `.github/workflows` from the filesystem and treats an empty workflow set as a fatal error, so it is not coverage- or no-match-equivalent.
 - **ShellCheck:** keep explicit Git-index selection because ShellCheck has no repository-native collector matching segh's extension-plus-supported-shebang policy.
-- **Checkov:** keep native directory collection after preflight, but run only the centrally selected IaC frameworks. The workflow pins trusted Checkov configuration, disables Prisma Cloud downloads and result uploads, and does not load target-owned `.checkov.yml`, external checks, remote policies, secret scanning, dependency scanning, or GitHub Actions scanning.
+- **Checkov:** keep native directory collection after preflight, running Checkov's full default framework set (no `framework:` allowlist). This intentionally overlaps Trivy's secret scanning and zizmor's GitHub Actions scanning rather than trying to keep Checkov confined to IaC misconfiguration alone; Checkov remains the sole owner of IaC misconfiguration scanning. The workflow pins trusted Checkov configuration, disables Prisma Cloud downloads and result uploads, and does not load target-owned `.checkov.yml`, external checks, or remote policies. Checkov's Serverless framework has a known accepted gap: its collector silently drops files it cannot parse without incrementing `parsing_errors`, so a target can hide from that framework specifically with a deliberately malformed `serverless.yml`; this is accepted as a residual risk rather than fixed, since Checkov's serverless parser internals aren't a stable dependency to pin a pre-check against.
 - **Trivy:** keep native `filesystem` collection for vulnerability and secret scanning only. It runs only after preflight has excluded untracked content and unsafe Git object types; target-owned Trivy configuration and ignore files are disabled with `/dev/null`, and `.git` is excluded.
 
 ## Architecture
@@ -99,7 +99,7 @@ Pull-request CI runs:
 - a small Shell/yq credential-boundary validator for segh-specific invariants;
 - shell tests for the target preflight boundary;
 - Node tests for summary normalization and issue publication, including Checkov findings versus scanner/parsing failures;
-- a representative Checkov-versus-Trivy IaC coverage comparison before retiring Trivy misconfiguration scanning;
+- a per-framework Checkov IaC coverage regression gate (originally run as a Checkov-versus-Trivy comparison to justify retiring Trivy misconfiguration scanning; now a permanent check that each representative framework still produces scanned resources);
 - actionlint, zizmor, and ShellCheck;
 - YAML/JSON parsing and Aqua checksum verification; and
 - the real organization scanner in deterministic `validation_mode`.
