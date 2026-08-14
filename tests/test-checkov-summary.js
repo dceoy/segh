@@ -47,16 +47,16 @@ function env(overrides = {}) {
   };
 }
 
-function report({failed = 0, parsingErrors = 0} = {}) {
+function report({failed = 0, parsingErrors = 0, skipped = 0} = {}) {
   return {
     check_type: "terraform",
     results: {failed_checks: [], parsing_errors: []},
     summary: {
       passed: 0,
       failed,
-      skipped: 0,
+      skipped,
       parsing_errors: parsingErrors,
-      resource_count: failed > 0 ? 1 : 0,
+      resource_count: failed > 0 || skipped > 0 ? 1 : 0,
       checkov_version: "3.3.9",
     },
   };
@@ -115,6 +115,19 @@ test("Checkov policy violations become findings", () => {
     assert.deepEqual(summary.scanners.find((scanner) => scanner.name === "checkov"), {
       name: "checkov", status: "findings", findings: 3, category: "misconfiguration",
     });
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test("Checkov target-controlled inline skip suppression is a scanner error", () => {
+  const dir = fixture();
+  try {
+    writeJson(path.join(dir, "checkov.json"), [report({failed: 0, skipped: 2})]);
+    fs.writeFileSync(path.join(dir, "checkov-status.txt"), "0\n");
+    const summary = buildSummary({resultsDir: dir, env: env()});
+    assert.equal(summary.overall_status, "error");
+    assert.equal(summary.scanners.find((scanner) => scanner.name === "checkov").status, "error");
   } finally {
     fs.rmSync(dir, {recursive: true, force: true});
   }

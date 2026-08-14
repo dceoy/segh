@@ -109,11 +109,19 @@ function parseCheckov(resultsDir, outcome) {
       return report && typeof report === "object" && !Array.isArray(report) &&
         summary && typeof summary === "object" &&
         Number.isSafeInteger(summary.failed) && summary.failed >= 0 &&
+        Number.isSafeInteger(summary.skipped) && summary.skipped >= 0 &&
         Number.isSafeInteger(summary.parsing_errors) && summary.parsing_errors >= 0;
     })) return result("checkov", "error");
     const findings = reports.reduce((count, report) => count + report.summary.failed, 0);
+    const skipped = reports.reduce((count, report) => count + report.summary.skipped, 0);
     const parsingErrors = reports.reduce((count, report) => count + report.summary.parsing_errors, 0);
     if (parsingErrors > 0) return result("checkov", "error");
+    // A scanned repository can suppress individual checks with inline
+    // `checkov:skip=`/`bridgecrew:skip=`/`cortex:skip=` comments, which
+    // Checkov honors regardless of this scanner's own skip-check: []
+    // config. Treat any such target-controlled suppression as lost
+    // evidence rather than a clean scan, the same way parsing errors are.
+    if (skipped > 0) return result("checkov", "error");
     if (status === 1 && findings > 0) return result("checkov", "findings", findings, "misconfiguration");
     if (status === 0 && outcome === "success" && findings === 0) return result("checkov", "pass");
     return result("checkov", "error");
