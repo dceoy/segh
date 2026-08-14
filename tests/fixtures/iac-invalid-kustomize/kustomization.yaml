@@ -1,2 +1,3 @@
 resources:
-  - base/pod.yaml
+  - base/pod-a.yaml
+  - base/pod-b.yaml
