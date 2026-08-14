@@ -44,10 +44,24 @@ assert_blocked_before_checkov tests/fixtures/iac-oci-helm oci-helm
 assert_blocked_before_checkov tests/fixtures/iac-escape-helm escape-helm
 assert_blocked_before_checkov tests/fixtures/iac-scp-kustomize scp-kustomize
 assert_blocked_before_checkov tests/fixtures/iac-absolute-kustomize absolute-kustomize
+assert_blocked_before_checkov tests/fixtures/iac-scp-kustomize-crds scp-kustomize-crds
+assert_blocked_before_checkov tests/fixtures/iac-absolute-kustomize-crds absolute-kustomize-crds
 
 results="$root/valid-fixtures"
 "$runner" tests/fixtures/iac "$results" > "$root/valid-fixtures.log" 2>&1 || true
 [[ "$(cat "$results/checkov-status.txt")" == 1 ]]
+
+# A tracked resource under a dot-prefixed directory must still be scanned:
+# Checkov 3.3.9 ignores hidden directories by default, and run-checkov.sh
+# must override that default rather than silently dropping the evidence.
+results="$root/hidden-fixture"
+"$runner" tests/fixtures/iac-hidden "$results" > "$root/hidden-fixture.log" 2>&1 || true
+[[ "$(cat "$results/checkov-status.txt")" == 1 ]]
+jq -e '[if type == "array" then .[] else . end
+  | select(.check_type == "terraform")
+  | .results.failed_checks[]?
+  | select(.resource == "aws_security_group.hidden")] | length > 0' \
+  "$results/checkov-native.json" > /dev/null
 
 stub_bin="$root/stub-bin"
 mkdir -p "$stub_bin"

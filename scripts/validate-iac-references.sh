@@ -57,7 +57,7 @@ done < <(find "$scan_root" -type f -name Chart.yaml -print0)
 
 while IFS= read -r -d '' kustomization; do
   kustomization_dir=$(dirname -- "$kustomization")
-  for field in resources bases components; do
+  for field in resources bases components crds; do
     entry_count=$(yq -r ".${field} // [] | length" "$kustomization")
     for ((i = 0; i < entry_count; i++)); do
       entry=$(yq -r ".${field}[${i}] // \"\"" "$kustomization")
