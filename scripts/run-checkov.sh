@@ -34,5 +34,10 @@ set -e
 if ((status == 0)) && [[ ! -s "$results/checkov.json" ]]; then
   printf '[]\n' > "$results/checkov.json"
 fi
+cp -- "$results/checkov.json" "$results/checkov-native.json"
+if jq -e 'type == "object" and (.failed | type == "number") and (.parsing_errors | type == "number")' \
+  "$results/checkov-native.json" > /dev/null 2>&1; then
+  jq '{summary: .}' "$results/checkov-native.json" > "$results/checkov.json"
+fi
 printf '%s\n' "$status" > "$results/checkov-status.txt"
 exit "$status"
