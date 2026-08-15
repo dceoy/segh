@@ -22,9 +22,9 @@ const SCANNER_NAMES = [
   "zizmor",
   "actionlint",
   "shellcheck",
+  "checkov",
   "trivy-vulnerability",
   "trivy-secret",
-  "trivy-misconfiguration",
 ];
 
 function tempDir() {

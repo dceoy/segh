@@ -36,6 +36,11 @@ jobs:
     uses: dceoy/gha-for-devops/.github/workflows/shell-lint.yml@main # zizmor: ignore[unpinned-uses]
     with:
       search-path: .
+      file-names: |
+        *.sh
+        *.bash
+        *.bats
+        :(exclude)scripts/validate-workflow-boundary.sh
   test:
     runs-on: ubuntu-24.04
     permissions:
@@ -54,11 +59,53 @@ jobs:
           sha256: 66585ac496c10bf6fbf13272e3e550c1813aed0e1cb780b9bb73c1751de49289
           install_args: --locked
       - name: Validate workflow credential boundary
-        run: bash scripts/validate-workflow-boundary.sh .
+        run: |
+          shellcheck --exclude=SC2016 scripts/validate-workflow-boundary.sh
+          bash scripts/validate-workflow-boundary.sh .
       - name: Test target preflight boundary
         run: bash tests/test-preflight.sh
+      - name: Test Checkov runner fail-closed behavior
+        run: bash tests/test-run-checkov.sh
       - name: Test dashboard normalization and publication
-        run: node --test tests/test-dashboard.js
+        run: node --test tests/test-dashboard.js tests/test-checkov-summary.js
+      - name: Compare Checkov and Trivy IaC coverage
+        run: |
+          [[ -f tests/fixtures/iac/.checkov.yml ]]
+          set +e
+          scripts/run-checkov.sh tests/fixtures/iac checkov-coverage
+          checkov_status=$?
+          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners misconfig --exit-code 1 --format json --output trivy-misconfiguration-coverage.json --skip-version-check tests/fixtures/iac 2> trivy-misconfiguration-coverage.log
+          trivy_status=$?
+          set -e
+          checkov_findings=$(jq '[if type == "array" then .[] else . end | .summary.failed // 0] | add // 0' checkov-coverage/checkov.json)
+          checkov_parse_errors=$(jq '[if type == "array" then .[] else . end | .summary.parsing_errors // 0] | add // 0' checkov-coverage/checkov.json)
+          trivy_findings=$(jq '[.Results[]? | (.Misconfigurations // []) | length] | add // 0' trivy-misconfiguration-coverage.json)
+          printf 'Checkov status: %s, findings: %s, parse errors: %s\nTrivy status: %s, misconfiguration findings: %s\n' \
+            "$checkov_status" "$checkov_findings" "$checkov_parse_errors" "$trivy_status" "$trivy_findings" | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$checkov_status" -le 1 ]]
+          [[ "$trivy_status" -le 1 ]]
+          [[ "$checkov_findings" -gt 0 ]]
+          [[ "$checkov_parse_errors" -eq 0 ]]
+          for framework in cloudformation dockerfile helm kubernetes kustomize terraform; do
+            jq -e --arg framework "$framework" \
+              '[if type == "array" then .[] else . end
+                | select(.check_type == $framework and ((.summary.resource_count // 0) > 0))] | length > 0' \
+              checkov-coverage/checkov.json > /dev/null \
+              || { echo "::error::Checkov produced no scanned resources for framework: $framework"; exit 1; }
+          done
+          # secrets/github_actions reports can carry findings with
+          # resource_count still at 0 (Checkov reports check results, not
+          # scanned IaC resources, for these), so accept executed checks as
+          # coverage evidence instead.
+          for framework in secrets github_actions; do
+            jq -e --arg framework "$framework" \
+              '[if type == "array" then .[] else . end
+                | select(.check_type == $framework and
+                    (((.summary.failed // 0) + (.summary.passed // 0)) > 0))] | length > 0' \
+              checkov-coverage/checkov.json > /dev/null \
+              || { echo "::error::Checkov produced no executed checks for framework: $framework"; exit 1; }
+          done
+          [[ "$checkov_parse_errors" -eq 0 ]]
   production-workflow:
     if: github.event_name == 'pull_request'
     needs: test

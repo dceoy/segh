@@ -503,6 +503,9 @@ jobs:
             printf 'zizmor: '; zizmor --version
             printf 'actionlint: '; actionlint -version
             printf 'shellcheck: '; shellcheck --version | head -n 2 | tail -n 1
+            printf 'checkov: '; checkov --version
+            printf 'helm: '; helm version --short
+            printf 'kubectl: '; kubectl version --client
             printf 'trivy: '; trivy --version | head -n 1
           } > results/scanner-versions.txt 2> results/scanner-versions.log
       - name: Validate target content
@@ -646,6 +649,11 @@ jobs:
           set -e
           printf '%s\n' "$status" > results/shellcheck-status.txt
           exit "$status"
+      - name: Run Checkov IaC scan
+        if: always() && steps.preflight.outcome == 'success'
+        id: checkov
+        continue-on-error: ${{ inputs.validation_mode }}
+        run: _trusted/scripts/run-checkov.sh _target results
       - name: Run Trivy vulnerability scan
         if: always() && steps.preflight.outcome == 'success'
         id: trivy-vulnerability
@@ -664,15 +672,6 @@ jobs:
             --exit-code 1 --format json --output results/trivy-secret.json \
             --skip-dirs _target/.git --skip-version-check _target \
             2> results/trivy-secret.log
-      - name: Run Trivy misconfiguration scan
-        if: always() && steps.preflight.outcome == 'success'
-        id: trivy-misconfiguration
-        continue-on-error: ${{ inputs.validation_mode }}
-        run: |
-          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners misconfig \
-            --exit-code 1 --format json --output results/trivy-misconfiguration.json \
-            --skip-dirs _target/.git --skip-version-check _target \
-            2> results/trivy-misconfiguration.log
       - name: Build bounded dashboard summary
         if: always() && steps.target.outcome == 'success' && steps.trusted.outcome == 'success'
         id: summary
@@ -685,9 +684,9 @@ jobs:
           ZIZMOR_OUTCOME: ${{ steps.zizmor.outcome }}
           ACTIONLINT_OUTCOME: ${{ steps.actionlint.outcome }}
           SHELLCHECK_OUTCOME: ${{ steps.shellcheck.outcome }}
+          CHECKOV_OUTCOME: ${{ steps.checkov.outcome }}
           TRIVY_VULNERABILITY_OUTCOME: ${{ steps.trivy-vulnerability.outcome }}
           TRIVY_SECRET_OUTCOME: ${{ steps.trivy-secret.outcome }}
-          TRIVY_MISCONFIGURATION_OUTCOME: ${{ steps.trivy-misconfiguration.outcome }}
           DASHBOARD_REPOSITORY: ${{ github.repository }}
         run: node _trusted/scripts/build-dashboard-summary.js results results/summary.json
       - name: Retain bounded dashboard summary
@@ -717,6 +716,7 @@ jobs:
           VERSIONS: ${{ steps.versions.outcome }}
           PREFLIGHT: ${{ steps.preflight.outcome }}
           SHELLCHECK: ${{ steps.shellcheck.outcome }}
+          CHECKOV: ${{ steps.checkov.outcome }}
           SUMMARY: ${{ steps.summary.outcome }}
           SUMMARY_ARTIFACT: ${{ steps.summary-artifact.outcome }}
           ARTIFACT: ${{ steps.artifact.outcome }}
@@ -747,9 +747,11 @@ jobs:
           expect versions "$VERSIONS" success
           expect preflight "$PREFLIGHT" success
           [[ -f results/scanner-versions.txt && -f results/preflight.txt ]]
+          [[ -f results/checkov.json && -f results/checkov.log && -f results/checkov-status.txt ]]
 
           case "$CASE" in
             clean)
+              expect checkov "$CHECKOV" success
               expect dashboard-summary "$overall" pass
               ;;
             scanner-runtime-error)
