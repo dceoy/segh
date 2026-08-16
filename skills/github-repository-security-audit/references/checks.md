@@ -71,13 +71,16 @@ establish that permission separately.
 
 - `vulnerability_alerts` — `GET /repos/{owner}/{repo}/vulnerability-alerts`
 - `dependabot_security_updates` — `GET /repos/{owner}/{repo}/automated-security-fixes`
-- `private_vulnerability_reporting` —
-  `GET /repos/{owner}/{repo}/private-vulnerability-reporting`
 
-Private-vulnerability reporting is only a finding-oriented control for public
-repositories in this skill. For private and internal repositories it is
-recorded as `unknown: unsupported`, because this audit does not impose a
-policy baseline for that product mode.
+Private-vulnerability reporting is a separate finding-oriented control for
+public repositories. `GET /repos/{owner}/{repo}/private-vulnerability-reporting`
+requires metadata read access and must return an object with a boolean
+`enabled` property. `enabled: true` is `pass: enabled`; `enabled: false` is
+`finding: disabled`; and any other successful response shape is
+`error: malformed-response`. Non-success responses use the endpoint's
+permission-aware `unknown`/`error` handling. For private and internal
+repositories it is recorded as `unknown: unsupported`, because this audit does
+not impose a policy baseline for that product mode.
 
 All other non-success responses are errors unless the endpoint-specific
 permission or not-observable handling above applies. In particular, a 404

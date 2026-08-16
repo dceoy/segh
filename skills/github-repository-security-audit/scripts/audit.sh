@@ -354,9 +354,22 @@ feature_control() {
 feature_control vulnerability_alerts "repos/$repo/vulnerability-alerts" vulnerability-alerts administration:read
 feature_control dependabot_security_updates "repos/$repo/automated-security-fixes" automated-security-fixes administration:read
 if [[ "$visibility" == public ]]; then
-  feature_control private_vulnerability_reporting "repos/$repo/private-vulnerability-reporting" private-vulnerability-reporting administration:read
+  private_vulnerability_endpoint="repos/$repo/private-vulnerability-reporting"
+  api_call "$private_vulnerability_endpoint" private-vulnerability-reporting
+  save_control_evidence private_vulnerability_reporting "$private_vulnerability_endpoint"
+  if request_succeeded; then
+    if ! jq -e 'type == "object" and (.enabled | type == "boolean")' "$REQUEST_BODY" > /dev/null; then
+      record_control private_vulnerability_reporting error malformed-response metadata:read "$CONTROL_EVIDENCE" "$private_vulnerability_endpoint"
+    elif [[ "$(jq -r '.enabled' "$REQUEST_BODY")" == true ]]; then
+      record_control private_vulnerability_reporting pass enabled metadata:read "$CONTROL_EVIDENCE" "$private_vulnerability_endpoint"
+    else
+      record_control private_vulnerability_reporting finding disabled metadata:read "$CONTROL_EVIDENCE" "$private_vulnerability_endpoint"
+    fi
+  else
+    control_failure private_vulnerability_reporting metadata:read "$private_vulnerability_endpoint"
+  fi
 else
-  record_control private_vulnerability_reporting unknown unsupported administration:read repository-metadata.json "$gh_endpoint"
+  record_control private_vulnerability_reporting unknown unsupported metadata:read repository-metadata.json "$gh_endpoint"
 fi
 
 jq -s --arg repository "$repo" --arg commit_sha "$commit_sha" \

@@ -165,7 +165,9 @@ case "$endpoint" in
     emit 404 '{}'
     ;;
   repos/fixture-owner/fixture-repo/private-vulnerability-reporting)
-    emit 404 '{}'
+    if [[ ${FAKE_GH_PRIVATE_VULN:-} == disabled ]]; then emit 200 '{"enabled":false}'; exit 0; fi
+    if [[ ${FAKE_GH_PRIVATE_VULN:-} == malformed ]]; then emit 200 '{}'; exit 0; fi
+    emit 200 '{"enabled":true}'
     ;;
   *) emit 404 '{}' ;;
 esac
@@ -268,6 +270,7 @@ run_audit() {
     FAKE_GH_RULES="${FAKE_GH_RULES:-}" \
     FAKE_GH_CODE_SECURITY="${FAKE_GH_CODE_SECURITY:-}" \
     FAKE_GH_FEATURES="${FAKE_GH_FEATURES:-}" \
+    FAKE_GH_PRIVATE_VULN="${FAKE_GH_PRIVATE_VULN:-}" \
     TRIVY_SKIP_FILES="${TRIVY_SKIP_FILES:-}" \
     SHELLCHECK_OPTS="${SHELLCHECK_OPTS:-}" \
     FAKE_GH_MIXED_CASE="${FAKE_GH_MIXED_CASE:-}" \
@@ -300,7 +303,8 @@ jq -e '
 [[ "$(jq -r '.controls[] | select(.id == "actions_permissions") | .state' "$root/first/github-controls.json")" == finding ]]
 [[ "$(jq -r '.controls[] | select(.id == "vulnerability_alerts") | .state' "$root/first/github-controls.json")" == pass ]]
 [[ "$(jq -r '.controls[] | select(.id == "dependabot_security_updates") | .state' "$root/first/github-controls.json")" == unknown ]]
-[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/first/github-controls.json")" == unknown ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/first/github-controls.json")" == pass ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .required_permission' "$root/first/github-controls.json")" == metadata:read ]]
 [[ "$(cat "$root/first.scorecard-token")" == gh-login-token ]]
 if grep -R -F -- 'gh-login-token' "$root/first"; then exit 1; fi
 if grep -v -- '--method GET' "$root/gh.log"; then exit 1; fi
@@ -311,9 +315,22 @@ FAKE_GH_FEATURES=404
 run_audit feature-404
 [[ "$(jq -r '.controls[] | select(.id == "vulnerability_alerts") | .state' "$root/feature-404/github-controls.json")" == unknown ]]
 [[ "$(jq -r '.controls[] | select(.id == "dependabot_security_updates") | .state' "$root/feature-404/github-controls.json")" == unknown ]]
-[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/feature-404/github-controls.json")" == unknown ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/feature-404/github-controls.json")" == pass ]]
 [[ "$(jq '[.controls[] | select(.id == "vulnerability_alerts" or .id == "dependabot_security_updates" or .id == "private_vulnerability_reporting") | select(.state == "finding")] | length' "$root/feature-404/github-controls.json")" == 0 ]]
 FAKE_GH_FEATURES=''
+
+FAKE_GH_PRIVATE_VULN=disabled
+run_audit private-vulnerability-disabled
+[[ "$(cat "$root/private-vulnerability-disabled.status")" == 1 ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/private-vulnerability-disabled/github-controls.json")" == finding ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .reason' "$root/private-vulnerability-disabled/github-controls.json")" == disabled ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .required_permission' "$root/private-vulnerability-disabled/github-controls.json")" == metadata:read ]]
+FAKE_GH_PRIVATE_VULN=malformed
+run_audit private-vulnerability-malformed
+[[ "$(cat "$root/private-vulnerability-malformed.status")" == 1 ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/private-vulnerability-malformed/github-controls.json")" == error ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .reason' "$root/private-vulnerability-malformed/github-controls.json")" == malformed-response ]]
+FAKE_GH_PRIVATE_VULN=''
 
 run_audit lfs
 [[ "$(cat "$root/lfs.status")" == 1 ]]
