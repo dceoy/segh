@@ -203,7 +203,14 @@ case "$tool" in
     fi
     ;;
   zizmor)
-    if [[ ${1:-} == --version ]]; then printf '%s\n' 'zizmor 1.28.0'; else printf '%s\n' '[]'; fi
+    if [[ ${1:-} == --version ]]; then
+      printf '%s\n' 'zizmor 1.28.0'
+    elif [[ ${FAKE_ZIZMOR_FINDING:-} == 1 ]]; then
+      [[ "$*" == *'--no-exit-codes'* ]] || exit 13
+      printf '%s\n' '[{"code":"fixture","severity":"medium"}]'
+    else
+      printf '%s\n' '[]'
+    fi
     ;;
   actionlint)
     if [[ ${1:-} == -version ]]; then
@@ -312,6 +319,7 @@ run_audit() {
     FAKE_GH_PRIVATE_VULN="${FAKE_GH_PRIVATE_VULN:-}" \
     FAKE_ACTIONLINT_DIRECTIVE="${FAKE_ACTIONLINT_DIRECTIVE:-}" \
     FAKE_SHELLCHECK_EXTERNAL="${FAKE_SHELLCHECK_EXTERNAL:-}" \
+    FAKE_ZIZMOR_FINDING="${FAKE_ZIZMOR_FINDING:-}" \
     TRIVY_SKIP_FILES="${TRIVY_SKIP_FILES:-}" \
     SHELLCHECK_OPTS="${SHELLCHECK_OPTS:-}" \
     FAKE_GH_MIXED_CASE="${FAKE_GH_MIXED_CASE:-}" \
@@ -389,6 +397,14 @@ run_audit shellcheck-external-source
 [[ "$(cat "$root/shellcheck-external-source/actionlint-status.txt")" == 0 ]]
 [[ "$(cat "$root/shellcheck-external-source/shellcheck-status.txt")" == 0 ]]
 FAKE_SHELLCHECK_EXTERNAL=''
+
+FAKE_ZIZMOR_FINDING=1
+run_audit zizmor-finding
+[[ "$(cat "$root/zizmor-finding.status")" == 1 ]]
+[[ "$(jq -r '.scanners[] | select(.name == "zizmor") | .status' "$root/zizmor-finding/summary.json")" == findings ]]
+[[ "$(jq -r '.scanners[] | select(.name == "zizmor") | .findings' "$root/zizmor-finding/summary.json")" == 1 ]]
+[[ "$(jq -r '.overall_status' "$root/zizmor-finding/summary.json")" != error ]]
+FAKE_ZIZMOR_FINDING=''
 
 run_audit lfs
 [[ "$(cat "$root/lfs.status")" == 1 ]]

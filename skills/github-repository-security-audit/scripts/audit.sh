@@ -636,7 +636,7 @@ if ((${#zizmor_files[@]} == 0)); then
   printf '%s\n' 0 > "$output/zizmor-status.txt"
 else
   set +e
-  mise -C "$skill_root" exec --locked -- zizmor --offline --no-config --no-ignores --strict-collection \
+  mise -C "$skill_root" exec --locked -- zizmor --offline --no-config --no-ignores --no-exit-codes --strict-collection \
     --persona regular --min-severity medium --min-confidence high --format json "${zizmor_files[@]}" \
     > "$output/zizmor.json" 2> "$output/zizmor.log"
   zizmor_status=$?
