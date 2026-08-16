@@ -55,6 +55,14 @@ done
 mkdir -p -- "$output" || fail "cannot create output directory: $output"
 output=$(cd -- "$output" && pwd)
 readonly output
+shopt -s nullglob dotglob
+output_entries=("$output"/*)
+shopt -u nullglob dotglob
+if ((${#output_entries[@]} > 0)); then
+  printf 'github-repository-security-audit: output directory must be empty: %s\n' "$output" >&2
+  exit 1
+fi
+unset output_entries
 mkdir -p -- "$output/github-controls"
 
 tmp=$(mktemp -d)
@@ -532,9 +540,9 @@ versions_status=0
   printf 'zizmor: '
   mise -C "$skill_root" exec --locked -- zizmor --version || versions_status=1
   printf 'actionlint: '
-  mise -C "$skill_root" exec --locked -- actionlint -version || versions_status=1
+  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- actionlint -version || versions_status=1
   printf 'shellcheck: '
-  mise -C "$skill_root" exec --locked -- shellcheck --version | head -n 2 | tail -n 1 || versions_status=1
+  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- shellcheck --version | head -n 2 | tail -n 1 || versions_status=1
   printf 'checkov: '
   mise -C "$skill_root" exec --locked -- checkov --version || versions_status=1
   printf 'helm: '
@@ -631,7 +639,7 @@ if ((${#actionlint_files[@]} == 0)); then
   printf '%s\n' 0 > "$output/actionlint-status.txt"
 else
   set +e
-  mise -C "$skill_root" exec --locked -- actionlint --no-color --config-file /dev/null \
+  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- actionlint --no-color --config-file /dev/null \
     --shellcheck shellcheck --format '{{json .}}' "${actionlint_files[@]}" \
     > "$output/actionlint.jsonl" 2> "$output/actionlint.log"
   actionlint_status=$?
@@ -691,7 +699,7 @@ if ((${#shell_files[@]} == 0)); then
   printf '%s\n' 0 > "$output/shellcheck-status.txt"
 else
   set +e
-  mise -C "$skill_root" exec --locked -- shellcheck --color=never --format=json1 --rcfile /dev/null \
+  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- shellcheck --color=never --format=json1 --rcfile /dev/null \
     --severity=style -- "${shell_files[@]}" > "$output/shellcheck.json" 2> "$output/shellcheck.log"
   shellcheck_status=$?
   set -e

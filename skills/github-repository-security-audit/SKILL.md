@@ -23,7 +23,9 @@ From the repository containing this skill, run:
 Omit `--repo` only when the current working directory is itself the target
 repository. `gh` must be authenticated with enough read access to inspect the
 repository and its security controls. The script uses `gh api --method GET`
-for GitHub control requests and never writes to GitHub.
+for GitHub control requests and never writes to GitHub. The `--output`
+directory must be new or empty; an existing evidence directory is rejected so
+that results from separate audits cannot be mixed.
 
 The script resolves the default branch to a lowercase 40-character commit
 SHA, checks out only that detached revision with credentials and submodules

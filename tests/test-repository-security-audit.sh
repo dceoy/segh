@@ -189,11 +189,21 @@ case "$tool" in
     if [[ ${1:-} == --version ]]; then printf '%s\n' 'zizmor 1.28.0'; else printf '%s\n' '[]'; fi
     ;;
   actionlint)
-    if [[ ${1:-} == -version ]]; then printf '%s\n' '1.7.12'; fi
+    if [[ ${1:-} == -version ]]; then
+      printf '%s\n' '1.7.12'
+    elif [[ -n ${SHELLCHECK_OPTS:-} ]]; then
+      exit 44
+    fi
     ;;
   shellcheck)
     if [[ ${FAKE_VERSION_FAIL:-} == shellcheck && ${1:-} == --version ]]; then exit 42; fi
-    if [[ ${1:-} == --version ]]; then printf '%s\n' 'ShellCheck - shell script analysis tool' 'version: 0.11.0'; else printf '%s\n' '[]'; fi
+    if [[ ${1:-} == --version ]]; then
+      printf '%s\n' 'ShellCheck - shell script analysis tool' 'version: 0.11.0'
+    elif [[ -n ${SHELLCHECK_OPTS:-} ]]; then
+      exit 44
+    else
+      printf '%s\n' '[]'
+    fi
     ;;
   checkov)
     if [[ ${1:-} == --version ]]; then printf '%s\n' '3.3.9'; else printf '%s\n' '[{"check_type":"terraform","summary":{"failed":0,"skipped":0,"parsing_errors":0}}]'; fi
@@ -259,6 +269,7 @@ run_audit() {
     FAKE_GH_CODE_SECURITY="${FAKE_GH_CODE_SECURITY:-}" \
     FAKE_GH_FEATURES="${FAKE_GH_FEATURES:-}" \
     TRIVY_SKIP_FILES="${TRIVY_SKIP_FILES:-}" \
+    SHELLCHECK_OPTS="${SHELLCHECK_OPTS:-}" \
     FAKE_GH_MIXED_CASE="${FAKE_GH_MIXED_CASE:-}" \
     FAKE_BAD_PREFLIGHT="${FAKE_BAD_PREFLIGHT:-}" \
     FAKE_VERSION_FAIL="${FAKE_VERSION_FAIL:-}" \
@@ -359,6 +370,25 @@ run_audit code-security-204
 [[ "$(jq -r '.http_status' "$root/code-security-204/github-controls/code_security_configuration.json")" == 204 ]]
 [[ "$(jq -r '.overall_status' "$root/code-security-204/summary.json")" != error ]]
 FAKE_GH_CODE_SECURITY=''
+
+stale_output="$root/reused-output"
+mkdir -p "$stale_output"
+printf '%s\n' 'old evidence' > "$stale_output/stale.txt"
+gh_log_before=$(wc -l < "$root/gh.log" 2> /dev/null || printf '0')
+scanner_log_before=$(wc -l < "$root/scanner.log" 2> /dev/null || printf '0')
+run_audit reused-output
+[[ "$(cat "$root/reused-output.status")" == 1 ]]
+[[ "$(cat "$stale_output/stale.txt")" == 'old evidence' ]]
+[[ ! -e "$stale_output/audit-error.txt" ]]
+[[ ! -e "$stale_output/target.json" ]]
+[[ "$(wc -l < "$root/gh.log")" == "$gh_log_before" ]]
+[[ "$(wc -l < "$root/scanner.log")" == "$scanner_log_before" ]]
+
+SHELLCHECK_OPTS='--exclude=SC2086'
+run_audit shellcheck-env
+[[ "$(jq -r '.scanners[] | select(.name == "actionlint") | .status' "$root/shellcheck-env/summary.json")" == pass ]]
+[[ "$(jq -r '.scanners[] | select(.name == "shellcheck") | .status' "$root/shellcheck-env/summary.json")" == pass ]]
+SHELLCHECK_OPTS=''
 
 TRIVY_SKIP_FILES='**/*'
 run_audit trivy-env

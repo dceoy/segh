@@ -39,7 +39,10 @@ misconfiguration finding.
 Use `coverage-gaps.json`, preflight logs, scanner status files, and native
 logs. Call out missing GitHub permissions, unsupported endpoints, untracked
 or rejected target content, renderer failures, parser errors, and any scanner
-that did not run. Never describe an incomplete audit as clean.
+that did not run. Always disclose the accepted Checkov parse-evidence gaps for
+Serverless and OpenAPI content, even when `coverage-gaps.json` has no runtime
+entry for them; these limitations are not clean/no-finding evidence. Never
+describe an incomplete audit as clean.
 
 ## Recommended remediations
 
