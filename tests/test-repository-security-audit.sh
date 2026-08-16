@@ -40,9 +40,20 @@ git -C "$source_repo" commit -qm fixture
 target_sha=$(git -C "$source_repo" rev-parse HEAD)
 readonly target_sha
 
+lfs_source="$root/lfs-source"
+git clone -q "$source_repo" "$lfs_source"
+git -C "$lfs_source" config user.name segh-validation
+git -C "$lfs_source" config user.email segh-validation@example.invalid
+printf '%s\n' 'version https://git-lfs.github.com/spec/v1' > "$lfs_source/fixture-lfs.bin"
+git -C "$lfs_source" add fixture-lfs.bin
+git -C "$lfs_source" commit -qm 'add LFS pointer fixture'
+lfs_target_sha=$(git -C "$lfs_source" rev-parse HEAD)
+readonly lfs_target_sha
+
 cat > "$fake_bin/mise" <<'EOF_MISE'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >> "${MISE_LOG:-/dev/null}"
 while [[ ${1:-} == -y || ${1:-} == --yes ]]; do shift; done
 while [[ ${1:-} == -C ]]; do shift 2; done
 case "${1:-}" in
@@ -56,6 +67,35 @@ case "${1:-}" in
   *) exit 2 ;;
 esac
 EOF_MISE
+
+cat > "$fake_bin/git" <<'EOF_GIT'
+#!/usr/bin/env bash
+set -euo pipefail
+for argument in "$@"; do
+  if [[ "$argument" == checkout ]]; then
+    printf '%s\n' "${GIT_LFS_SKIP_SMUDGE:-unset}" > "${GIT_CHECKOUT_ENV_LOG:-/dev/null}"
+    break
+  fi
+done
+exec /usr/bin/git "$@"
+EOF_GIT
+
+cat > "$fake_bin/uname" <<'EOF_UNAME'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  -s) printf '%s\n' "${FAKE_PLATFORM:-$(/usr/bin/uname -s)}" ;;
+  -m) printf '%s\n' "${FAKE_MACHINE:-$(/usr/bin/uname -m)}" ;;
+  *) exec /usr/bin/uname "$@" ;;
+esac
+EOF_UNAME
+
+cat > "$fake_bin/arch" <<'EOF_ARCH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${FAKE_ROSETTA:-} == unavailable ]]; then exit 1; fi
+exit 0
+EOF_ARCH
 
 cat > "$fake_bin/gh" <<'EOF_GH'
 #!/usr/bin/env bash
@@ -117,6 +157,7 @@ case "$endpoint" in
     emit 200 '{"id":12,"name":"default"}'
     ;;
   repos/fixture-owner/fixture-repo/vulnerability-alerts)
+    if [[ ${FAKE_GH_FEATURES:-} == 404 ]]; then emit 404 '{}'; fi
     emit 204 ''
     ;;
   repos/fixture-owner/fixture-repo/automated-security-fixes)
@@ -176,7 +217,7 @@ case "$tool" in
     ;;
 esac
 EOF_SCANNER
-chmod +x "$fake_bin/mise" "$fake_bin/gh" "$fake_bin/fake-scanner"
+chmod +x "$fake_bin/mise" "$fake_bin/git" "$fake_bin/gh" "$fake_bin/uname" "$fake_bin/arch" "$fake_bin/fake-scanner"
 for tool in scorecard zizmor actionlint shellcheck checkov helm kubectl trivy; do
   ln -s fake-scanner "$fake_bin/$tool"
 done
@@ -185,30 +226,42 @@ run_audit() {
   local label=$1
   local destination="$root/$label"
   local requested_repo=fixture-owner/fixture-repo
+  local source_for_audit=$source_repo
+  local target_for_audit=$target_sha
   local scorecard_env=()
   if [[ "$label" == mixed-case ]]; then
     requested_repo=fixture-owner/FIXTURE-REPO
+  fi
+  if [[ "$label" == lfs ]]; then
+    source_for_audit=$lfs_source
+    target_for_audit=$lfs_target_sha
   fi
   if [[ "$label" == env-token ]]; then
     scorecard_env=(GITHUB_TOKEN=environment-token)
   fi
   mkdir -p "$destination"
   set +e
-  env -u GITHUB_AUTH_TOKEN -u GITHUB_TOKEN -u GH_AUTH_TOKEN -u GH_TOKEN \
+  env -u GITHUB_AUTH_TOKEN -u GITHUB_TOKEN -u GH_AUTH_TOKEN -u GH_TOKEN -u GIT_LFS_SKIP_SMUDGE \
     "${scorecard_env[@]}" \
     PATH="$fake_bin:$PATH" \
-    SOURCE_REPO="$source_repo" \
-    TARGET_SHA="$target_sha" \
+    SOURCE_REPO="$source_for_audit" \
+    TARGET_SHA="$target_for_audit" \
     SOURCE_MARKER="$root/executed.marker" \
     GH_LOG="$root/gh.log" \
     GH_AUTH_LOG="$root/$label.auth.log" \
     SCANNER_LOG="$root/scanner.log" \
     SCORECARD_TOKEN_LOG="$root/$label.scorecard-token" \
+    GIT_CHECKOUT_ENV_LOG="$root/$label.checkout-env" \
+    MISE_LOG="$root/$label.mise.log" \
     FAKE_GH_RULES="${FAKE_GH_RULES:-}" \
     FAKE_GH_CODE_SECURITY="${FAKE_GH_CODE_SECURITY:-}" \
+    FAKE_GH_FEATURES="${FAKE_GH_FEATURES:-}" \
     FAKE_GH_MIXED_CASE="${FAKE_GH_MIXED_CASE:-}" \
     FAKE_BAD_PREFLIGHT="${FAKE_BAD_PREFLIGHT:-}" \
     FAKE_VERSION_FAIL="${FAKE_VERSION_FAIL:-}" \
+    FAKE_PLATFORM="${FAKE_PLATFORM:-}" \
+    FAKE_MACHINE="${FAKE_MACHINE:-}" \
+    FAKE_ROSETTA="${FAKE_ROSETTA:-}" \
     "$audit" --repo "$requested_repo" --output "$destination" \
     > "$root/$label.log" 2>&1
   status=$?
@@ -231,13 +284,27 @@ jq -e '
 [[ "$(jq -r '.overall_status' "$root/first/summary.json")" == findings ]]
 [[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 7 ]]
 [[ "$(jq -r '.controls[] | select(.id == "actions_permissions") | .state' "$root/first/github-controls.json")" == finding ]]
-[[ "$(jq -r '.controls[] | select(.id == "dependabot_security_updates") | .state' "$root/first/github-controls.json")" == finding ]]
-[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/first/github-controls.json")" == finding ]]
+[[ "$(jq -r '.controls[] | select(.id == "vulnerability_alerts") | .state' "$root/first/github-controls.json")" == pass ]]
+[[ "$(jq -r '.controls[] | select(.id == "dependabot_security_updates") | .state' "$root/first/github-controls.json")" == unknown ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/first/github-controls.json")" == unknown ]]
 [[ "$(cat "$root/first.scorecard-token")" == gh-login-token ]]
 if grep -R -F -- 'gh-login-token' "$root/first"; then exit 1; fi
 if grep -v -- '--method GET' "$root/gh.log"; then exit 1; fi
 if grep -F -- 'misconfig' "$root/scanner.log"; then exit 1; fi
 [[ ! -e "$root/first/trivy-misconfiguration.json" ]]
+
+FAKE_GH_FEATURES=404
+run_audit feature-404
+[[ "$(jq -r '.controls[] | select(.id == "vulnerability_alerts") | .state' "$root/feature-404/github-controls.json")" == unknown ]]
+[[ "$(jq -r '.controls[] | select(.id == "dependabot_security_updates") | .state' "$root/feature-404/github-controls.json")" == unknown ]]
+[[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/feature-404/github-controls.json")" == unknown ]]
+[[ "$(jq '[.controls[] | select(.id == "vulnerability_alerts" or .id == "dependabot_security_updates" or .id == "private_vulnerability_reporting") | select(.state == "finding")] | length' "$root/feature-404/github-controls.json")" == 0 ]]
+FAKE_GH_FEATURES=''
+
+run_audit lfs
+[[ "$(cat "$root/lfs.status")" == 1 ]]
+[[ "$(cat "$root/lfs.checkout-env")" == 1 ]]
+grep -F 'Rejected unmaterialized Git LFS pointer: fixture-lfs.bin' "$root/lfs/preflight.txt" > /dev/null
 
 FAKE_GH_RULES=forbidden
 run_audit forbidden
@@ -280,5 +347,17 @@ run_audit mixed-case
 [[ "$(jq -r '.owner' "$root/mixed-case/target.json")" == Fixture-Owner ]]
 [[ "$(jq -r '.name' "$root/mixed-case/target.json")" == Fixture-Repo ]]
 [[ "$(jq -r '.repository.full_name' "$root/mixed-case/summary.json")" == Fixture-Owner/Fixture-Repo ]]
+
+FAKE_PLATFORM=Darwin
+FAKE_MACHINE=arm64
+FAKE_ROSETTA=unavailable
+run_audit rosetta-missing
+[[ "$(cat "$root/rosetta-missing.status")" == 1 ]]
+[[ "$(cat "$root/rosetta-missing/toolchain-status.txt")" == 1 ]]
+[[ ! -e "$root/rosetta-missing.mise.log" ]]
+grep -F 'Rosetta 2' "$root/rosetta-missing/toolchain.log" > /dev/null
+FAKE_PLATFORM=''
+FAKE_MACHINE=''
+FAKE_ROSETTA=''
 
 printf 'repository security audit boundary tests passed\n'

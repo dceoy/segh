@@ -36,6 +36,11 @@ The first run may install the exact versions in `mise.toml`; use `--locked` as
 the script does. The lockfile is skill-local so this audit does not depend on
 the repository's root runtime configuration.
 
+The pinned Checkov release provides a Darwin x86_64 binary but no Darwin
+arm64 binary. On Apple Silicon macOS, the audit therefore requires Rosetta 2
+for the locked Checkov tool; it fails before toolchain installation with a
+clear prerequisite error when x86_64 execution is unavailable.
+
 ## Interpret the evidence
 
 Read `summary.json`, `github-controls.json`, `coverage-gaps.json`, and the

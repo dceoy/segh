@@ -58,10 +58,13 @@ is present and well-formed. An omitted object is recorded as
 - `enabled` is a pass; an absent or unrecognized status is unknown/error as
   described by the evidence state rules.
 
-The following feature endpoints have documented enabled/disabled response
-semantics. A successful 2xx response is recorded as enabled. A 404 is
-recorded as a disabled finding, while a 403 is an insufficient-permission
-unknown:
+The following feature endpoints require administration read access. A
+successful 2xx response is recorded as enabled. A 403 is an
+insufficient-permission unknown. A 404 is recorded as
+`unknown: not-observable`: although some endpoint documentation uses 404 for
+a disabled feature, the same response can be returned when the credential
+cannot observe an administration-gated resource, and this audit does not
+establish that permission separately.
 
 - `vulnerability_alerts` — `GET /repos/{owner}/{repo}/vulnerability-alerts`
 - `dependabot_security_updates` — `GET /repos/{owner}/{repo}/automated-security-fixes`

@@ -138,11 +138,9 @@ record_control() {
 }
 
 control_failure() {
-  local id=$1 permission=$2 endpoint=$3 documented_404=${4:-unknown}
+  local id=$1 permission=$2 endpoint=$3
   if [[ "$REQUEST_HTTP_STATUS" == 403 ]]; then
     record_control "$id" unknown insufficient-permission "$permission" "$CONTROL_EVIDENCE" "$endpoint"
-  elif [[ "$REQUEST_HTTP_STATUS" == 404 && "$documented_404" == finding ]]; then
-    record_control "$id" finding disabled "$permission" "$CONTROL_EVIDENCE" "$endpoint"
   elif [[ "$REQUEST_HTTP_STATUS" == 404 ]]; then
     record_control "$id" unknown not-observable "$permission" "$CONTROL_EVIDENCE" "$endpoint"
   else
@@ -337,7 +335,7 @@ feature_control() {
   if request_succeeded; then
     record_control "$id" pass enabled "$permission" "$CONTROL_EVIDENCE" "$endpoint"
   else
-    control_failure "$id" "$permission" "$endpoint" finding
+    control_failure "$id" "$permission" "$endpoint"
   fi
 }
 
@@ -441,14 +439,24 @@ build_summary() {
 }
 
 toolchain_status=0
-if ! command -v mise > /dev/null 2>&1; then
-  toolchain_status=127
-  printf '%s\n' 'mise is required to install and run the locked audit toolchain' > "$output/toolchain.log"
-else
-  set +e
-  mise -y -C "$skill_root" install --locked > "$output/toolchain.log" 2>&1
-  toolchain_status=$?
-  set -e
+host_os=$(uname -s)
+host_arch=$(uname -m)
+if [[ "$host_os" == Darwin && "$host_arch" == arm64 ]]; then
+  if ! arch -x86_64 /usr/bin/true > "$output/toolchain.log" 2>&1; then
+    toolchain_status=1
+    printf '%s\n' 'Apple Silicon macOS requires Rosetta 2 for the locked Darwin x86_64 Checkov binary' >> "$output/toolchain.log"
+  fi
+fi
+if ((toolchain_status == 0)); then
+  if ! command -v mise > /dev/null 2>&1; then
+    toolchain_status=127
+    printf '%s\n' 'mise is required to install and run the locked audit toolchain' > "$output/toolchain.log"
+  else
+    set +e
+    mise -y -C "$skill_root" install --locked > "$output/toolchain.log" 2>&1
+    toolchain_status=$?
+    set -e
+  fi
 fi
 printf '%s\n' "$toolchain_status" > "$output/toolchain-status.txt"
 
@@ -475,7 +483,7 @@ if ((checkout_status == 0)); then
   git -C "$checkout" config --local core.hooksPath /dev/null
   git -C "$checkout" config --local submodule.recurse false
   git -C "$checkout" config --local protocol.file.allow never
-  if ! git -C "$checkout" checkout --detach --force "$commit_sha"; then
+  if ! GIT_LFS_SKIP_SMUDGE=1 git -C "$checkout" checkout --detach --force "$commit_sha"; then
     checkout_status=1
   fi
   while IFS= read -r remote; do
