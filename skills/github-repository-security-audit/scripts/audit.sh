@@ -73,9 +73,8 @@ if [[ -z "$repo" ]]; then
 fi
 
 [[ "$repo" =~ $repo_pattern ]] || fail "invalid repository: $repo"
-owner=${repo%%/*}
-name=${repo#*/}
-readonly owner name repo
+requested_repo=$repo
+readonly requested_repo
 
 api_call() {
   local endpoint=$1
@@ -151,16 +150,17 @@ control_failure() {
   fi
 }
 
-gh_endpoint="repos/$repo"
-api_call "$gh_endpoint" repository-metadata
-save_control_evidence repository-metadata "$gh_endpoint"
+metadata_endpoint="repos/$requested_repo"
+api_call "$metadata_endpoint" repository-metadata
+save_control_evidence repository-metadata "$metadata_endpoint"
 cp -- "$REQUEST_BODY" "$output/repository-metadata.json"
 request_succeeded || fail 'repository metadata request failed'
 
-if ! jq -e --arg repo "$repo" '
+if ! jq -e --arg repo "$requested_repo" '
   type == "object" and
   (.id | type == "number" and . > 0 and . == floor) and
-  .full_name == $repo and
+  (.full_name | type == "string" and length > 0) and
+  (.full_name | ascii_downcase) == ($repo | ascii_downcase) and
   (.owner | type == "object" and (.login | type == "string" and length > 0)) and
   (.name | type == "string" and length > 0) and
   (.visibility | IN("public", "private", "internal")) and
@@ -171,6 +171,11 @@ if ! jq -e --arg repo "$repo" '
   fail 'repository metadata response was malformed'
 fi
 
+repo=$(jq -er '.full_name' "$REQUEST_BODY")
+owner=$(jq -er '.owner.login' "$REQUEST_BODY")
+name=$(jq -er '.name' "$REQUEST_BODY")
+readonly repo owner name
+gh_endpoint="repos/$repo"
 repository_id=$(jq -er '.id | tostring' "$REQUEST_BODY")
 visibility=$(jq -er '.visibility' "$REQUEST_BODY")
 default_branch=$(jq -er '.default_branch' "$REQUEST_BODY")
@@ -370,10 +375,12 @@ record_all_scanners_error() {
 }
 
 write_empty_scanner_evidence() {
-  printf '%s\n' 'not run' > "$output/scanner-versions.txt"
-  printf '%s\n' 'scanner stage was not reached' > "$output/scanner-versions.log"
-  printf '%s\n' 'not run' > "$output/preflight.txt"
-  printf '%s\n' 2 > "$output/preflight-status.txt"
+  if [[ ! -e "$output/scanner-versions.txt" ]]; then
+    printf '%s\n' 'not run' > "$output/scanner-versions.txt"
+  fi
+  if [[ ! -e "$output/scanner-versions.log" ]]; then
+    printf '%s\n' 'scanner stage was not reached' > "$output/scanner-versions.log"
+  fi
   printf '%s\n' '{"checks":[]}' > "$output/scorecard.json"
   printf '%s\n' 2 > "$output/scorecard-status.txt"
   printf '%s\n' '[]' > "$output/zizmor.json"
@@ -534,12 +541,41 @@ if ((versions_status != 0)); then
   exit 1
 fi
 
-set +e
-GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN:-${GH_TOKEN:-}}" \
-  mise -C "$skill_root" exec --locked -- scorecard --repo="$repo" --commit="$commit_sha" \
-    --show-details --format=json > "$output/scorecard.json" 2> "$output/scorecard.log"
-scorecard_status=$?
-set -e
+scorecard_token=''
+scorecard_auth_status=0
+for token_variable in GITHUB_AUTH_TOKEN GITHUB_TOKEN GH_AUTH_TOKEN GH_TOKEN; do
+  if [[ -n "${!token_variable:-}" ]]; then
+    scorecard_token=${!token_variable}
+    break
+  fi
+done
+
+if [[ -z "$scorecard_token" ]]; then
+  scorecard_auth_stderr="$tmp/scorecard-auth.stderr"
+  set +e
+  scorecard_token=$(gh auth token 2> "$scorecard_auth_stderr")
+  scorecard_auth_status=$?
+  set -e
+  if ((scorecard_auth_status == 0)) && [[ -z "$scorecard_token" ]]; then
+    scorecard_auth_status=1
+  fi
+fi
+
+if ((scorecard_auth_status == 0)); then
+  : > "$output/scorecard-auth.log"
+  set +e
+  GITHUB_AUTH_TOKEN="$scorecard_token" \
+    mise -C "$skill_root" exec --locked -- scorecard --repo="$repo" --commit="$commit_sha" \
+      --show-details --format=json > "$output/scorecard.json" 2> "$output/scorecard.log"
+  scorecard_status=$?
+  set -e
+else
+  printf '%s\n' 'gh auth token did not provide a usable credential' > "$output/scorecard-auth.log"
+  printf '%s\n' '{"checks":[]}' > "$output/scorecard.json"
+  printf '%s\n' 'scorecard was not run because GitHub authentication was unavailable' > "$output/scorecard.log"
+  scorecard_status=2
+fi
+unset scorecard_token
 printf '%s\n' "$scorecard_status" > "$output/scorecard-status.txt"
 
 run_index_selection() {

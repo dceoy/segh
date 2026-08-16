@@ -67,6 +67,14 @@ fi
 if [[ ${1:-} == repo && ${2:-} == clone ]]; then
   destination=${4:?clone destination missing}
   git clone -q --no-checkout --no-tags --no-recurse-submodules "$SOURCE_REPO" "$destination"
+  if [[ ${FAKE_BAD_PREFLIGHT:-} == 1 ]]; then
+    printf '%s\n' generated > "$destination/untracked.txt"
+  fi
+  exit 0
+fi
+if [[ ${1:-} == auth && ${2:-} == token ]]; then
+  printf '%s\n' auth-token >> "${GH_AUTH_LOG:-/dev/null}"
+  printf '%s\n' "${FAKE_GH_TOKEN:-gh-login-token}"
   exit 0
 fi
 if [[ ${1:-} != api ]]; then
@@ -75,6 +83,7 @@ fi
 printf '%s\n' "$*" >> "$GH_LOG"
 [[ "$*" == *'--method GET'* ]] || exit 91
 endpoint=${!#}
+endpoint=${endpoint,,}
 
 emit() {
   local status=$1 body=$2
@@ -84,7 +93,11 @@ emit() {
 
 case "$endpoint" in
   repos/fixture-owner/fixture-repo)
-    emit 200 '{"id":7,"full_name":"fixture-owner/fixture-repo","name":"fixture-repo","owner":{"login":"fixture-owner"},"visibility":"public","fork":false,"archived":false,"default_branch":"main","security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}'
+    if [[ ${FAKE_GH_MIXED_CASE:-} == 1 ]]; then
+      emit 200 '{"id":7,"full_name":"Fixture-Owner/Fixture-Repo","name":"Fixture-Repo","owner":{"login":"Fixture-Owner"},"visibility":"public","fork":false,"archived":false,"default_branch":"main","security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}'
+    else
+      emit 200 '{"id":7,"full_name":"fixture-owner/fixture-repo","name":"fixture-repo","owner":{"login":"fixture-owner"},"visibility":"public","fork":false,"archived":false,"default_branch":"main","security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}'
+    fi
     ;;
   repos/fixture-owner/fixture-repo/commits/main)
     emit 200 "{\"sha\":\"$TARGET_SHA\"}"
@@ -123,7 +136,12 @@ tool=$(basename "$0")
 printf '%s %s\n' "$tool" "$*" >> "${SCANNER_LOG:-/dev/null}"
 case "$tool" in
   scorecard)
-    if [[ ${1:-} == version ]]; then printf '%s\n' 'scorecard 5.5.0'; else printf '%s\n' '{"checks":[{"name":"Fixture","score":1}]}' ; fi
+    if [[ ${1:-} == version ]]; then
+      printf '%s\n' 'scorecard 5.5.0'
+    else
+      printf '%s\n' "${GITHUB_AUTH_TOKEN:-}" > "${SCORECARD_TOKEN_LOG:-/dev/null}"
+      printf '%s\n' '{"checks":[{"name":"Fixture","score":1}]}'
+    fi
     ;;
   zizmor)
     if [[ ${1:-} == --version ]]; then printf '%s\n' 'zizmor 1.28.0'; else printf '%s\n' '[]'; fi
@@ -132,6 +150,7 @@ case "$tool" in
     if [[ ${1:-} == -version ]]; then printf '%s\n' '1.7.12'; fi
     ;;
   shellcheck)
+    if [[ ${FAKE_VERSION_FAIL:-} == shellcheck && ${1:-} == --version ]]; then exit 42; fi
     if [[ ${1:-} == --version ]]; then printf '%s\n' 'ShellCheck - shell script analysis tool' 'version: 0.11.0'; else printf '%s\n' '[]'; fi
     ;;
   checkov)
@@ -165,17 +184,32 @@ done
 run_audit() {
   local label=$1
   local destination="$root/$label"
+  local requested_repo=fixture-owner/fixture-repo
+  local scorecard_env=()
+  if [[ "$label" == mixed-case ]]; then
+    requested_repo=fixture-owner/FIXTURE-REPO
+  fi
+  if [[ "$label" == env-token ]]; then
+    scorecard_env=(GITHUB_TOKEN=environment-token)
+  fi
   mkdir -p "$destination"
   set +e
-  PATH="$fake_bin:$PATH" \
+  env -u GITHUB_AUTH_TOKEN -u GITHUB_TOKEN -u GH_AUTH_TOKEN -u GH_TOKEN \
+    "${scorecard_env[@]}" \
+    PATH="$fake_bin:$PATH" \
     SOURCE_REPO="$source_repo" \
     TARGET_SHA="$target_sha" \
     SOURCE_MARKER="$root/executed.marker" \
     GH_LOG="$root/gh.log" \
+    GH_AUTH_LOG="$root/$label.auth.log" \
     SCANNER_LOG="$root/scanner.log" \
+    SCORECARD_TOKEN_LOG="$root/$label.scorecard-token" \
     FAKE_GH_RULES="${FAKE_GH_RULES:-}" \
     FAKE_GH_CODE_SECURITY="${FAKE_GH_CODE_SECURITY:-}" \
-    "$audit" --repo fixture-owner/fixture-repo --output "$destination" \
+    FAKE_GH_MIXED_CASE="${FAKE_GH_MIXED_CASE:-}" \
+    FAKE_BAD_PREFLIGHT="${FAKE_BAD_PREFLIGHT:-}" \
+    FAKE_VERSION_FAIL="${FAKE_VERSION_FAIL:-}" \
+    "$audit" --repo "$requested_repo" --output "$destination" \
     > "$root/$label.log" 2>&1
   status=$?
   set -e
@@ -199,6 +233,8 @@ jq -e '
 [[ "$(jq -r '.controls[] | select(.id == "actions_permissions") | .state' "$root/first/github-controls.json")" == finding ]]
 [[ "$(jq -r '.controls[] | select(.id == "dependabot_security_updates") | .state' "$root/first/github-controls.json")" == finding ]]
 [[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/first/github-controls.json")" == finding ]]
+[[ "$(cat "$root/first.scorecard-token")" == gh-login-token ]]
+if grep -R -F -- 'gh-login-token' "$root/first"; then exit 1; fi
 if grep -v -- '--method GET' "$root/gh.log"; then exit 1; fi
 if grep -F -- 'misconfig' "$root/scanner.log"; then exit 1; fi
 [[ ! -e "$root/first/trivy-misconfiguration.json" ]]
@@ -215,5 +251,34 @@ run_audit malformed
 [[ "$(cat "$root/malformed.status")" == 1 ]]
 [[ "$(jq -r '.controls[] | select(.id == "code_security_configuration") | .state' "$root/malformed/github-controls.json")" == error ]]
 [[ "$(jq -r '.overall_status' "$root/malformed/summary.json")" == error ]]
+FAKE_GH_CODE_SECURITY=''
+
+FAKE_BAD_PREFLIGHT=1
+run_audit preflight-failure
+[[ "$(cat "$root/preflight-failure.status")" == 1 ]]
+[[ "$(cat "$root/preflight-failure/preflight-status.txt")" == 1 ]]
+grep -F 'Rejected untracked path: untracked.txt' "$root/preflight-failure/preflight.txt" > /dev/null
+[[ "$(jq -r '.stage_status.preflight' "$root/preflight-failure/summary.json")" == 1 ]]
+FAKE_BAD_PREFLIGHT=''
+
+FAKE_VERSION_FAIL=shellcheck
+run_audit version-failure
+[[ "$(cat "$root/version-failure.status")" == 1 ]]
+[[ "$(cat "$root/version-failure/preflight-status.txt")" == 0 ]]
+grep -F 'Removed tracked symlink: link.txt' "$root/version-failure/preflight.txt" > /dev/null
+[[ "$(cat "$root/version-failure/versions-status.txt")" == 1 ]]
+FAKE_VERSION_FAIL=''
+
+run_audit env-token
+[[ "$(cat "$root/env-token.scorecard-token")" == environment-token ]]
+[[ ! -e "$root/env-token.auth.log" ]]
+
+FAKE_GH_MIXED_CASE=1
+run_audit mixed-case
+[[ "$(cat "$root/mixed-case.status")" == 1 ]]
+[[ "$(jq -r '.repository' "$root/mixed-case/target.json")" == Fixture-Owner/Fixture-Repo ]]
+[[ "$(jq -r '.owner' "$root/mixed-case/target.json")" == Fixture-Owner ]]
+[[ "$(jq -r '.name' "$root/mixed-case/target.json")" == Fixture-Repo ]]
+[[ "$(jq -r '.repository.full_name' "$root/mixed-case/summary.json")" == Fixture-Owner/Fixture-Repo ]]
 
 printf 'repository security audit boundary tests passed\n'
