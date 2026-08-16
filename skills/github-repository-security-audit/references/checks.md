@@ -29,7 +29,10 @@ does not invent an organization-wide branch-protection baseline.
 
 `code_security_configuration` records the associated code-security
 configuration when GitHub exposes one. Association is evidence, not a claim
-that every setting in that configuration has been enabled.
+that every setting in that configuration has been enabled. A documented 200
+response with an attached configuration is `pass: association-observed`; a
+204 response is `pass: no-association`. Other successful response shapes are
+malformed evidence.
 
 ## GitHub Actions controls
 

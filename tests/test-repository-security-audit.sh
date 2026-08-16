@@ -153,8 +153,9 @@ case "$endpoint" in
     emit 200 '{"default_workflow_permissions":"write","can_approve_pull_request_reviews":true}'
     ;;
   repos/fixture-owner/fixture-repo/code-security-configuration)
+    if [[ ${FAKE_GH_CODE_SECURITY:-} == no-content ]]; then emit 204 ''; exit 0; fi
     if [[ ${FAKE_GH_CODE_SECURITY:-} == malformed ]]; then emit 200 '{'; exit 0; fi
-    emit 200 '{"id":12,"name":"default"}'
+    emit 200 '{"status":"attached","configuration":{"id":12,"name":"default"}}'
     ;;
   repos/fixture-owner/fixture-repo/vulnerability-alerts)
     if [[ ${FAKE_GH_FEATURES:-} == 404 ]]; then emit 404 '{}'; fi
@@ -207,6 +208,7 @@ case "$tool" in
     if [[ ${1:-} == --version ]]; then
       printf '%s\n' 'Version: 0.72.0'
     else
+      if [[ -n ${TRIVY_SKIP_FILES:-} ]]; then exit 43; fi
       for ((i = 1; i <= $#; i++)); do
         if [[ ${!i:-} == --output ]]; then
           next=$((i + 1))
@@ -256,6 +258,7 @@ run_audit() {
     FAKE_GH_RULES="${FAKE_GH_RULES:-}" \
     FAKE_GH_CODE_SECURITY="${FAKE_GH_CODE_SECURITY:-}" \
     FAKE_GH_FEATURES="${FAKE_GH_FEATURES:-}" \
+    TRIVY_SKIP_FILES="${TRIVY_SKIP_FILES:-}" \
     FAKE_GH_MIXED_CASE="${FAKE_GH_MIXED_CASE:-}" \
     FAKE_BAD_PREFLIGHT="${FAKE_BAD_PREFLIGHT:-}" \
     FAKE_VERSION_FAIL="${FAKE_VERSION_FAIL:-}" \
@@ -347,6 +350,21 @@ run_audit mixed-case
 [[ "$(jq -r '.owner' "$root/mixed-case/target.json")" == Fixture-Owner ]]
 [[ "$(jq -r '.name' "$root/mixed-case/target.json")" == Fixture-Repo ]]
 [[ "$(jq -r '.repository.full_name' "$root/mixed-case/summary.json")" == Fixture-Owner/Fixture-Repo ]]
+FAKE_GH_MIXED_CASE=''
+
+FAKE_GH_CODE_SECURITY=no-content
+run_audit code-security-204
+[[ "$(jq -r '.controls[] | select(.id == "code_security_configuration") | .state' "$root/code-security-204/github-controls.json")" == pass ]]
+[[ "$(jq -r '.controls[] | select(.id == "code_security_configuration") | .reason' "$root/code-security-204/github-controls.json")" == no-association ]]
+[[ "$(jq -r '.http_status' "$root/code-security-204/github-controls/code_security_configuration.json")" == 204 ]]
+[[ "$(jq -r '.overall_status' "$root/code-security-204/summary.json")" != error ]]
+FAKE_GH_CODE_SECURITY=''
+
+TRIVY_SKIP_FILES='**/*'
+run_audit trivy-env
+[[ "$(jq -r '.scanners[] | select(.name == "trivy-vulnerability") | .status' "$root/trivy-env/summary.json")" == pass ]]
+[[ "$(jq -r '.scanners[] | select(.name == "trivy-secret") | .status' "$root/trivy-env/summary.json")" == pass ]]
+TRIVY_SKIP_FILES=''
 
 FAKE_PLATFORM=Darwin
 FAKE_MACHINE=arm64

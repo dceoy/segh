@@ -283,7 +283,11 @@ security_config_endpoint="repos/$repo/code-security-configuration"
 api_call "$security_config_endpoint" code-security-configuration
 save_control_evidence code_security_configuration "$security_config_endpoint"
 if request_succeeded; then
-  if jq -e 'type == "object"' "$REQUEST_BODY" > /dev/null; then
+  if [[ "$REQUEST_HTTP_STATUS" == 204 ]]; then
+    record_control code_security_configuration pass no-association administration:read "$CONTROL_EVIDENCE" "$security_config_endpoint"
+  elif [[ "$REQUEST_HTTP_STATUS" == 200 ]] && jq -e '
+    type == "object" and .status == "attached" and (.configuration | type == "object")
+  ' "$REQUEST_BODY" > /dev/null; then
     record_control code_security_configuration pass association-observed administration:read "$CONTROL_EVIDENCE" "$security_config_endpoint"
   else
     record_control code_security_configuration error malformed-response administration:read "$CONTROL_EVIDENCE" "$security_config_endpoint"
@@ -704,8 +708,13 @@ printf '%s\n' "$checkov_invocation_status" > "$output/checkov-invocation-status.
 run_trivy() {
   local file_kind=$1 scanner_kind=$2
   local output_file="$output/trivy-$file_kind.json"
+  local -a trivy_env=()
+  local variable
+  for variable in "${!TRIVY_@}"; do
+    trivy_env+=(-u "$variable")
+  done
   set +e
-  mise -C "$skill_root" exec --locked -- trivy filesystem --config /dev/null --ignorefile /dev/null \
+  env "${trivy_env[@]}" mise -C "$skill_root" exec --locked -- trivy filesystem --config /dev/null --ignorefile /dev/null \
     --scanners "$scanner_kind" --exit-code 1 --format json --output "$output_file" \
     --skip-dirs "$checkout/.git" --skip-version-check "$checkout" \
     > "$output/trivy-$file_kind.log" 2>&1
