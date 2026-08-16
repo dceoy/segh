@@ -1,0 +1,7 @@
+---
+skip-check: []
+compact: true
+download-external-modules: false
+evaluate-variables: false
+skip-download: true
+skip-results-upload: true
