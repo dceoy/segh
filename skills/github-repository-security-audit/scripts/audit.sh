@@ -485,9 +485,8 @@ if ((toolchain_status == 0)); then
 fi
 printf '%s\n' "$toolchain_status" > "$output/toolchain-status.txt"
 
-checkout=$(mktemp -d)
+checkout="$tmp/checkout"
 readonly checkout
-rm -rf -- "$checkout"
 checkout_status=0
 if ((toolchain_status == 0)); then
   set +e
@@ -504,6 +503,10 @@ fi
 printf '%s\n' "$checkout_status" > "$output/checkout-status.txt"
 
 if ((checkout_status == 0)); then
+  export GIT_CONFIG_NOSYSTEM=1
+  export GIT_CONFIG_GLOBAL=/dev/null
+  export GIT_CONFIG_COUNT=0
+  unset GIT_CONFIG_PARAMETERS
   set +e
   git -C "$checkout" config --local core.hooksPath /dev/null
   git -C "$checkout" config --local submodule.recurse false

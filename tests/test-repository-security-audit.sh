@@ -55,6 +55,37 @@ git -C "$directive_source" commit -qm 'add shellcheck directive fixture'
 directive_target_sha=$(git -C "$directive_source" rev-parse HEAD)
 readonly directive_source directive_target_sha
 
+filter_source="$root/filter-source"
+git clone -q "$source_repo" "$filter_source"
+git -C "$filter_source" config user.name segh-validation
+git -C "$filter_source" config user.email segh-validation@example.invalid
+printf '%s\n' 'fixture-filter.txt filter=fixture-smudge' > "$filter_source/.gitattributes"
+printf '%s\n' 'unfiltered' > "$filter_source/fixture-filter.txt"
+git -C "$filter_source" add .gitattributes fixture-filter.txt
+git -C "$filter_source" commit -qm 'add smudge filter fixture'
+filter_target_sha=$(git -C "$filter_source" rev-parse HEAD)
+readonly filter_source filter_target_sha
+filter_config="$root/filter.gitconfig"
+filter_smudge="$root/filter-smudge.sh"
+cat > "$filter_smudge" <<EOF_FILTER_SMUDGE
+#!/usr/bin/env bash
+printf filtered > $root/filter-marker
+cat
+EOF_FILTER_SMUDGE
+chmod +x "$filter_smudge"
+cat > "$filter_config" <<EOF_FILTER_CONFIG
+[filter "fixture-smudge"]
+  smudge = $filter_smudge
+  clean = cat
+EOF_FILTER_CONFIG
+readonly filter_config
+filter_control="$root/filter-control"
+git clone -q --no-checkout "$filter_source" "$filter_control"
+env -u GIT_CONFIG_PARAMETERS GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$filter_config" \
+  git -C "$filter_control" checkout --detach --force "$filter_target_sha" > /dev/null
+[[ -e "$root/filter-marker" ]]
+unlink "$root/filter-marker"
+
 lfs_source="$root/lfs-source"
 git clone -q "$source_repo" "$lfs_source"
 git -C "$lfs_source" config user.name segh-validation
@@ -89,6 +120,9 @@ set -euo pipefail
 for argument in "$@"; do
   if [[ "$argument" == checkout ]]; then
     printf '%s\n' "${GIT_LFS_SKIP_SMUDGE:-unset}" > "${GIT_CHECKOUT_ENV_LOG:-/dev/null}"
+    printf '%s|%s|%s|%s\n' \
+      "${GIT_CONFIG_NOSYSTEM:-unset}" "${GIT_CONFIG_GLOBAL:-unset}" \
+      "${GIT_CONFIG_COUNT:-unset}" "${GIT_CONFIG_PARAMETERS:-}" > "${GIT_CHECKOUT_CONFIG_LOG:-/dev/null}"
     break
   fi
 done
@@ -121,6 +155,7 @@ if [[ ${1:-} == repo && ${2:-} == view ]]; then
 fi
 if [[ ${1:-} == repo && ${2:-} == clone ]]; then
   destination=${4:?clone destination missing}
+  printf '%s\n' "$destination" > "${GIT_CLONE_DEST_LOG:-/dev/null}"
   git clone -q --no-checkout --no-tags --no-recurse-submodules "$SOURCE_REPO" "$destination"
   if [[ ${FAKE_BAD_PREFLIGHT:-} == 1 ]]; then
     printf '%s\n' generated > "$destination/untracked.txt"
@@ -285,6 +320,7 @@ run_audit() {
   local source_for_audit=$source_repo
   local target_for_audit=$target_sha
   local scorecard_env=()
+  local git_filter_env=()
   if [[ "$label" == mixed-case ]]; then
     requested_repo=fixture-owner/FIXTURE-REPO
   fi
@@ -296,6 +332,11 @@ run_audit() {
     source_for_audit=$directive_source
     target_for_audit=$directive_target_sha
   fi
+  if [[ "$label" == git-filter ]]; then
+    source_for_audit=$filter_source
+    target_for_audit=$filter_target_sha
+    git_filter_env=(GIT_CONFIG_GLOBAL="$filter_config")
+  fi
   if [[ "$label" == env-token ]]; then
     scorecard_env=(GITHUB_TOKEN=environment-token)
   fi
@@ -303,6 +344,7 @@ run_audit() {
   set +e
   env -u GITHUB_AUTH_TOKEN -u GITHUB_TOKEN -u GH_AUTH_TOKEN -u GH_TOKEN -u GIT_LFS_SKIP_SMUDGE \
     "${scorecard_env[@]}" \
+    "${git_filter_env[@]}" \
     PATH="$fake_bin:$PATH" \
     SOURCE_REPO="$source_for_audit" \
     TARGET_SHA="$target_for_audit" \
@@ -312,6 +354,8 @@ run_audit() {
     SCANNER_LOG="$root/scanner.log" \
     SCORECARD_TOKEN_LOG="$root/$label.scorecard-token" \
     GIT_CHECKOUT_ENV_LOG="$root/$label.checkout-env" \
+    GIT_CHECKOUT_CONFIG_LOG="$root/$label.checkout-config" \
+    GIT_CLONE_DEST_LOG="$root/$label.clone-dest" \
     MISE_LOG="$root/$label.mise.log" \
     FAKE_GH_RULES="${FAKE_GH_RULES:-}" \
     FAKE_GH_CODE_SECURITY="${FAKE_GH_CODE_SECURITY:-}" \
@@ -355,6 +399,8 @@ jq -e '
 [[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/first/github-controls.json")" == pass ]]
 [[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .required_permission' "$root/first/github-controls.json")" == metadata:read ]]
 [[ "$(cat "$root/first.scorecard-token")" == gh-login-token ]]
+[[ ! -e "$(cat "$root/first.clone-dest")" ]]
+[[ "$(cat "$root/first.checkout-config")" == '1|/dev/null|0|' ]]
 if grep -R -F -- 'gh-login-token' "$root/first"; then exit 1; fi
 if grep -v -- '--method GET' "$root/gh.log"; then exit 1; fi
 if grep -F -- 'misconfig' "$root/scanner.log"; then exit 1; fi
@@ -429,9 +475,16 @@ FAKE_BAD_PREFLIGHT=1
 run_audit preflight-failure
 [[ "$(cat "$root/preflight-failure.status")" == 1 ]]
 [[ "$(cat "$root/preflight-failure/preflight-status.txt")" == 1 ]]
+[[ ! -e "$(cat "$root/preflight-failure.clone-dest")" ]]
 grep -F 'Rejected untracked path: untracked.txt' "$root/preflight-failure/preflight.txt" > /dev/null
 [[ "$(jq -r '.stage_status.preflight' "$root/preflight-failure/summary.json")" == 1 ]]
 FAKE_BAD_PREFLIGHT=''
+
+run_audit git-filter
+[[ "$(cat "$root/git-filter.status")" == 1 ]]
+[[ ! -e "$root/filter-marker" ]]
+[[ ! -e "$(cat "$root/git-filter.clone-dest")" ]]
+[[ "$(cat "$root/git-filter.checkout-config")" == '1|/dev/null|0|' ]]
 
 FAKE_VERSION_FAIL=shellcheck
 run_audit version-failure
