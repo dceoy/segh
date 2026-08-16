@@ -40,6 +40,21 @@ git -C "$source_repo" commit -qm fixture
 target_sha=$(git -C "$source_repo" rev-parse HEAD)
 readonly target_sha
 
+directive_source="$root/directive-source"
+git clone -q "$source_repo" "$directive_source"
+git -C "$directive_source" config user.name segh-validation
+git -C "$directive_source" config user.email segh-validation@example.invalid
+directive_script="$directive_source/install.sh.with-directive"
+{
+  printf '%s\n' '# shellcheck disable=all'
+  cat "$directive_source/install.sh"
+} > "$directive_script"
+mv -- "$directive_script" "$directive_source/install.sh"
+git -C "$directive_source" add install.sh
+git -C "$directive_source" commit -qm 'add shellcheck directive fixture'
+directive_target_sha=$(git -C "$directive_source" rev-parse HEAD)
+readonly directive_source directive_target_sha
+
 lfs_source="$root/lfs-source"
 git clone -q "$source_repo" "$lfs_source"
 git -C "$lfs_source" config user.name segh-validation
@@ -195,6 +210,21 @@ case "$tool" in
       printf '%s\n' '1.7.12'
     elif [[ -n ${SHELLCHECK_OPTS:-} ]]; then
       exit 44
+    else
+      shellcheck_command=''
+      for ((i = 1; i <= $#; i++)); do
+        if [[ ${!i:-} == --shellcheck ]]; then
+          next=$((i + 1))
+          shellcheck_command=${!next}
+        fi
+      done
+      if [[ -n "$shellcheck_command" ]]; then
+        if [[ ${FAKE_ACTIONLINT_DIRECTIVE:-} == 1 ]]; then
+          printf '%s\n' '# shellcheck disable=all' 'true' | "$shellcheck_command" -x -
+        else
+          printf '%s\n' '#!/usr/bin/env bash' 'true' | "$shellcheck_command" -x -
+        fi
+      fi
     fi
     ;;
   shellcheck)
@@ -204,6 +234,11 @@ case "$tool" in
     elif [[ -n ${SHELLCHECK_OPTS:-} ]]; then
       exit 44
     else
+      if [[ ${FAKE_SHELLCHECK_EXTERNAL:-} == 1 ]]; then
+        for argument in "$@"; do
+          [[ "$argument" == -x || "$argument" == --external-sources ]] && exit 45
+        done
+      fi
       printf '%s\n' '[]'
     fi
     ;;
@@ -250,6 +285,10 @@ run_audit() {
     source_for_audit=$lfs_source
     target_for_audit=$lfs_target_sha
   fi
+  if [[ "$label" == shellcheck-directive ]]; then
+    source_for_audit=$directive_source
+    target_for_audit=$directive_target_sha
+  fi
   if [[ "$label" == env-token ]]; then
     scorecard_env=(GITHUB_TOKEN=environment-token)
   fi
@@ -271,6 +310,8 @@ run_audit() {
     FAKE_GH_CODE_SECURITY="${FAKE_GH_CODE_SECURITY:-}" \
     FAKE_GH_FEATURES="${FAKE_GH_FEATURES:-}" \
     FAKE_GH_PRIVATE_VULN="${FAKE_GH_PRIVATE_VULN:-}" \
+    FAKE_ACTIONLINT_DIRECTIVE="${FAKE_ACTIONLINT_DIRECTIVE:-}" \
+    FAKE_SHELLCHECK_EXTERNAL="${FAKE_SHELLCHECK_EXTERNAL:-}" \
     TRIVY_SKIP_FILES="${TRIVY_SKIP_FILES:-}" \
     SHELLCHECK_OPTS="${SHELLCHECK_OPTS:-}" \
     FAKE_GH_MIXED_CASE="${FAKE_GH_MIXED_CASE:-}" \
@@ -331,6 +372,23 @@ run_audit private-vulnerability-malformed
 [[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .state' "$root/private-vulnerability-malformed/github-controls.json")" == error ]]
 [[ "$(jq -r '.controls[] | select(.id == "private_vulnerability_reporting") | .reason' "$root/private-vulnerability-malformed/github-controls.json")" == malformed-response ]]
 FAKE_GH_PRIVATE_VULN=''
+
+FAKE_ACTIONLINT_DIRECTIVE=1
+run_audit actionlint-directive
+[[ "$(cat "$root/actionlint-directive.status")" == 1 ]]
+[[ "$(cat "$root/actionlint-directive/actionlint-status.txt")" != 0 ]]
+FAKE_ACTIONLINT_DIRECTIVE=''
+
+run_audit shellcheck-directive
+[[ "$(cat "$root/shellcheck-directive.status")" == 1 ]]
+[[ "$(cat "$root/shellcheck-directive/shellcheck-status.txt")" != 0 ]]
+
+FAKE_SHELLCHECK_EXTERNAL=1
+run_audit shellcheck-external-source
+[[ "$(cat "$root/shellcheck-external-source.status")" == 1 ]]
+[[ "$(cat "$root/shellcheck-external-source/actionlint-status.txt")" == 0 ]]
+[[ "$(cat "$root/shellcheck-external-source/shellcheck-status.txt")" == 0 ]]
+FAKE_SHELLCHECK_EXTERNAL=''
 
 run_audit lfs
 [[ "$(cat "$root/lfs.status")" == 1 ]]

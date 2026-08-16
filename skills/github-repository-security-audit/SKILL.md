@@ -43,6 +43,10 @@ arm64 binary. On Apple Silicon macOS, the audit therefore requires Rosetta 2
 for the locked Checkov tool; it fails before toolchain installation with a
 clear prerequisite error when x86_64 execution is unavailable.
 
+ShellCheck runs through the skill-local trusted wrapper. It removes external
+source loading and rejects target-owned ShellCheck directives so target files
+cannot change the scanner's analysis policy.
+
 ## Interpret the evidence
 
 Read `summary.json`, `github-controls.json`, `coverage-gaps.json`, and the

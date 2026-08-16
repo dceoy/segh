@@ -653,7 +653,7 @@ if ((${#actionlint_files[@]} == 0)); then
 else
   set +e
   env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- actionlint --no-color --config-file /dev/null \
-    --shellcheck shellcheck --format '{{json .}}' "${actionlint_files[@]}" \
+    --shellcheck "$skill_root/scripts/run-shellcheck.sh" --format '{{json .}}' "${actionlint_files[@]}" \
     > "$output/actionlint.jsonl" 2> "$output/actionlint.log"
   actionlint_status=$?
   set -e
@@ -712,7 +712,8 @@ if ((${#shell_files[@]} == 0)); then
   printf '%s\n' 0 > "$output/shellcheck-status.txt"
 else
   set +e
-  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- shellcheck --color=never --format=json1 --rcfile /dev/null \
+  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- "$skill_root/scripts/run-shellcheck.sh" \
+    --color=never --format=json1 --rcfile /dev/null \
     --severity=style -- "${shell_files[@]}" > "$output/shellcheck.json" 2> "$output/shellcheck.log"
   shellcheck_status=$?
   set -e
