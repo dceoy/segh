@@ -262,7 +262,7 @@ jobs:
             core.setOutput('max_parallel', String(maxParallel));
       - name: Retain bounded publication plan
         if: steps.targets.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: organization-scan-plan
           path: matrix.json
@@ -692,7 +692,7 @@ jobs:
       - name: Retain bounded dashboard summary
         if: always() && hashFiles('results/summary.json') != ''
         id: summary-artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: repository-summary-${{ matrix.id }}
           path: results/summary.json
@@ -701,7 +701,7 @@ jobs:
       - name: Retain private raw scanner artifacts
         if: always() && hashFiles('results/target.json') != ''
         id: artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.validation_case && format('validation-{0}', matrix.validation_case) || format('repository-scan-{0}', matrix.id) }}
           path: results
