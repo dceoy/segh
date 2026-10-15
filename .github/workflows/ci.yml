@@ -16,7 +16,7 @@ jobs:
       contents: read
       actions: read
       security-events: write
-    uses: dceoy/gha-for-devops/.github/workflows/github-actions-lint-and-scan.yml@main # zizmor: ignore[unpinned-uses]
+    uses: dceoy/gha-for-devops/.github/workflows/github-actions-lint-and-scan.yml@99086334b0ccd52ad2b614e96a40c1472cd2aceb
     with:
       search-path: .github/workflows
       yamllint-search-path: .
@@ -26,14 +26,14 @@ jobs:
       zizmor-min-confidence: high
       zizmor-advanced-security: false
   markdown-lint:
-    uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@main # zizmor: ignore[unpinned-uses]
+    uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@99086334b0ccd52ad2b614e96a40c1472cd2aceb
     with:
       search-path: .
       use-prettier: false
   shell-lint:
     permissions:
       contents: read
-    uses: dceoy/gha-for-devops/.github/workflows/shell-lint.yml@main # zizmor: ignore[unpinned-uses]
+    uses: dceoy/gha-for-devops/.github/workflows/shell-lint.yml@99086334b0ccd52ad2b614e96a40c1472cd2aceb
     with:
       search-path: .
       file-names: |
@@ -135,7 +135,7 @@ jobs:
       contents: read
       security-events: write
       actions: read
-    uses: dceoy/gha-for-devops/.github/workflows/github-codeql-analysis.yml@main # zizmor: ignore[unpinned-uses]
+    uses: dceoy/gha-for-devops/.github/workflows/github-codeql-analysis.yml@99086334b0ccd52ad2b614e96a40c1472cd2aceb
     with:
       language: >
         ["actions", "javascript-typescript"]
@@ -155,6 +155,6 @@ jobs:
       actions: read
       checks: read
       statuses: read
-    uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@main # zizmor: ignore[unpinned-uses]
+    uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@99086334b0ccd52ad2b614e96a40c1472cd2aceb
     with:
       unconditional: true
