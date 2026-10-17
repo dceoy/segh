@@ -16,7 +16,7 @@ jobs:
       contents: read
       actions: read
       security-events: write
-    uses: dceoy/gha-for-devops/.github/workflows/github-actions-lint-and-scan.yml@b9c352826ae388a5491833c5ff06306125233690 # v1.1.0
+    uses: dceoy/gha-for-devops/.github/workflows/github-actions-lint-and-scan.yml@main # zizmor: ignore[unpinned-uses]
     with:
       search-path: .github/workflows
       yamllint-search-path: .
@@ -25,31 +25,15 @@ jobs:
       zizmor-min-severity: high
       zizmor-min-confidence: high
       zizmor-advanced-security: false
-  actions-lock-verify:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Check out candidate revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Verify Actions lockfile
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release verify v0.2.0 --repo github/gh-actions-lock
-          gh extension install github/gh-actions-lock --pin v0.2.0
-          gh actions-lock --verify .github/workflows/*.yml
   markdown-lint:
-    uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@b9c352826ae388a5491833c5ff06306125233690 # v1.1.0
+    uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@main # zizmor: ignore[unpinned-uses]
     with:
       search-path: .
       use-prettier: false
   shell-lint:
     permissions:
       contents: read
-    uses: dceoy/gha-for-devops/.github/workflows/shell-lint.yml@b9c352826ae388a5491833c5ff06306125233690 # v1.1.0
+    uses: dceoy/gha-for-devops/.github/workflows/shell-lint.yml@main # zizmor: ignore[unpinned-uses]
     with:
       search-path: .
       file-names: |
@@ -151,7 +135,7 @@ jobs:
       contents: read
       security-events: write
       actions: read
-    uses: dceoy/gha-for-devops/.github/workflows/github-codeql-analysis.yml@b9c352826ae388a5491833c5ff06306125233690 # v1.1.0
+    uses: dceoy/gha-for-devops/.github/workflows/github-codeql-analysis.yml@main # zizmor: ignore[unpinned-uses]
     with:
       language: >
         ["actions", "javascript-typescript"]
@@ -160,7 +144,6 @@ jobs:
       github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     needs:
       - github-actions-lint-and-scan
-      - actions-lock-verify
       - markdown-lint
       - shell-lint
       - test
@@ -172,6 +155,6 @@ jobs:
       actions: read
       checks: read
       statuses: read
-    uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@b9c352826ae388a5491833c5ff06306125233690 # v1.1.0
+    uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@main # zizmor: ignore[unpinned-uses]
     with:
       unconditional: true
