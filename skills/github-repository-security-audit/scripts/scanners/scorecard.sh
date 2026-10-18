@@ -21,7 +21,7 @@ done
 if [[ -z "$scorecard_token" ]]; then
   scorecard_auth_stderr="$tmp/scorecard-auth.stderr"
   set +e
-  scorecard_token=$(GH_TELEMETRY=false gh auth token 2> "$scorecard_auth_stderr")
+  scorecard_token=$(gh auth token 2> "$scorecard_auth_stderr")
   scorecard_auth_status=$?
   set -e
   if ((scorecard_auth_status == 0)) && [[ -z "$scorecard_token" ]]; then
