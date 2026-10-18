@@ -438,6 +438,8 @@ jq -e '
 ' "$root/first/github-controls.json" > /dev/null
 [[ "$(jq -r '.overall_status' "$root/first/summary.json")" == findings ]]
 [[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 10 ]]
+[[ "$(cat "$root/first/scanners-run-status.txt")" == 0 ]]
+[[ -f "$root/first/scanners-run.log" ]]
 grep -F 'osv-scanner scan source' "$root/first.mise.log" > /dev/null
 grep -F 'trufflehog git file://' "$root/first.mise.log" > /dev/null
 grep -F 'uvx --from semgrep==1.180.0' "$root/first.mise.log" > /dev/null

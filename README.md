@@ -37,6 +37,10 @@ detached checkout. It retains dependency and SAST findings, plus only
 redacted Git-history secret metadata. These Docker-free tools are added to the **skill**
 rather than to this repository's CI or organization-scanning workflow.
 
+All source scanner invocations use the skill-local `run-scanners.sh`, with
+`audit.sh` retaining evidence evaluation. Checkov and ShellCheck keep their
+specialized trusted wrappers.
+
 ## Architecture
 
 ```text
