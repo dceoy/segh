@@ -116,6 +116,30 @@ url = "https://dl.k8s.io/v1.36.3/bin/darwin/arm64/kubectl"
 checksum = "sha256:158b3b46cf74e8b6bd9b1d7cd30f665e3efb2bc1ec3c843ec925bcfdd2930de0"
 url = "https://dl.k8s.io/v1.36.3/bin/darwin/amd64/kubectl"
 
+[[tools.osv-scanner]]
+version = "2.7.0"
+backend = "aqua:google/osv-scanner"
+
+[tools.osv-scanner."platforms.linux-arm64"]
+checksum = "sha256:4061ef4c021ed3c47f203b818f337e351336cc5cd67c0274fc36bd1dfc728dd7"
+url = "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_arm64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/632251568"
+
+[tools.osv-scanner."platforms.linux-x64"]
+checksum = "sha256:160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b"
+url = "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/632251666"
+
+[tools.osv-scanner."platforms.macos-arm64"]
+checksum = "sha256:d4926ef8da134332543be276dff157e4c170f99ad91fc48e89448a8816bdf70b"
+url = "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_darwin_arm64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/632251557"
+
+[tools.osv-scanner."platforms.macos-x64"]
+checksum = "sha256:e82c5df7ab0a42dff29a1cd0660711447b56b4c0483ff66ad8634df10fd81a45"
+url = "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_darwin_amd64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/632251567"
+
 [[tools.scorecard]]
 version = "5.5.0"
 backend = "aqua:ossf/scorecard"
@@ -203,6 +227,54 @@ checksum = "sha256:ee5e60df8a98e5b89fd74a6d86f9e5c7e9a266a35002cb1e43291698b3bfe
 url = "https://github.com/aquasecurity/trivy/releases/download/v0.72.0/trivy_0.72.0_macOS-64bit.tar.gz"
 url_api = "https://api.github.com/repos/aquasecurity/trivy/releases/assets/462015094"
 provenance = "cosign"
+
+[[tools.trufflehog]]
+version = "3.99.2"
+backend = "aqua:trufflesecurity/trufflehog"
+
+[tools.trufflehog."platforms.linux-arm64"]
+checksum = "sha256:929b81efffca752eafd58bf6f17bf725d354f338636a7bbbee65c086d2f9ddf3"
+url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.2/trufflehog_3.99.2_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/622011675"
+
+[tools.trufflehog."platforms.linux-x64"]
+checksum = "sha256:3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202ded37b48deca4"
+url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.2/trufflehog_3.99.2_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/622011676"
+
+[tools.trufflehog."platforms.macos-arm64"]
+checksum = "sha256:b612143d840b4c75d41fe40436c5932efead001951283f18c87013c4145e1675"
+url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.2/trufflehog_3.99.2_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/622011684"
+
+[tools.trufflehog."platforms.macos-x64"]
+checksum = "sha256:c23a1b10522b8b84cfd04dc88a3a8819d3dc23b20f15e23540ba442b4b2fbeed"
+url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.2/trufflehog_3.99.2_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/622011764"
+
+[[tools.uv]]
+version = "0.10.0"
+backend = "aqua:astral-sh/uv"
+
+[tools.uv."platforms.linux-arm64"]
+checksum = "sha256:c300afd5f2d31df039fe6a26a2d68a76b62832098c272a43e1e74ab9efd4fbd7"
+url = "https://github.com/astral-sh/uv/releases/download/0.10.0/uv-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/351309535"
+
+[tools.uv."platforms.linux-x64"]
+checksum = "sha256:230e328948c92dd1ebad83949c4d56e83813dfe9c6362a4c519e6a227973f1ae"
+url = "https://github.com/astral-sh/uv/releases/download/0.10.0/uv-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/351309584"
+
+[tools.uv."platforms.macos-arm64"]
+checksum = "sha256:82d4b99dc6ea686695b5ee142ceba03dd3e3eda2b414e94215ab7bce94972fbb"
+url = "https://github.com/astral-sh/uv/releases/download/0.10.0/uv-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/351309523"
+
+[tools.uv."platforms.macos-x64"]
+checksum = "sha256:664aed584c276f8d79cdc3b7685cd48f5d64657bd6840b06b4b2b0db731b9c99"
+url = "https://github.com/astral-sh/uv/releases/download/0.10.0/uv-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/351309575"
 
 [[tools.yq]]
 version = "4.53.3"
