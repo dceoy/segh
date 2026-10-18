@@ -44,10 +44,10 @@ the script does. The lockfile is skill-local so this audit does not depend on
 the repository's root runtime configuration.
 
 The entry point `audit.sh` handles GitHub controls, the checkout/preflight
-boundary, evidence interpretation, and summary generation. **All native source
-scanner commands** are invoked by `scripts/run-scanners.sh`. The specialized
-`run-checkov.sh` and `run-shellcheck.sh` remain trusted safety wrappers for
-their respective tools. Scanner findings and execution failures are recorded
+boundary, evidence interpretation, and summary generation. **All native source scanner commands** are dispatched by
+`scripts/run-scanners.sh` to one tool-specific entry point in `scripts/scanners/`.
+The Checkov and ShellCheck entries retain their trusted policy enforcement;
+shared Git index selection lives in `scripts/scanners/common.sh`. Scanner findings and execution failures are recorded
 separately so that incomplete coverage cannot appear clean.
 
 The skill additionally runs **OSV-Scanner** for dependency vulnerabilities,

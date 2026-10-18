@@ -4,7 +4,7 @@ set -euo pipefail
 
 readonly target=${1:?target directory is required}
 readonly results=${2:?results directory is required}
-trusted=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+trusted=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 scan_root=$(mktemp -d)
 scan_home=$(mktemp -d)
 helm_shim_dir=$(mktemp -d)

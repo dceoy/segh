@@ -75,7 +75,7 @@ jobs:
           mise -C skills/github-repository-security-audit exec --locked -- bash -c \
             'cd ../.. && bash tests/test-preflight.sh skills/github-repository-security-audit/scripts/preflight.sh'
           mise -C skills/github-repository-security-audit exec --locked -- bash -c \
-            'cd ../.. && bash tests/test-run-checkov.sh skills/github-repository-security-audit/scripts/run-checkov.sh'
+            'cd ../.. && bash tests/test-run-checkov.sh skills/github-repository-security-audit/scripts/scanners/checkov.sh'
       - name: Test dashboard normalization and publication
         run: node --test tests/test-dashboard.js tests/test-checkov-summary.js
       - name: Compare Checkov and Trivy IaC coverage
