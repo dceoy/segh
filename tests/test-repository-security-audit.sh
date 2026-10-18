@@ -313,6 +313,45 @@ for tool in scorecard zizmor actionlint shellcheck checkov helm kubectl trivy; d
   ln -s fake-scanner "$fake_bin/$tool"
 done
 
+cat > "$fake_bin/docker" <<'EOF_DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == *'type=bind'* && "$*" == *'readonly'* ]] || exit 71
+case "$*" in
+  *'ghcr.io/google/osv-scanner:'*)
+    if [[ "${FAKE_OSV_ERROR:-}" == 1 ]]; then exit 77; fi
+    if [[ "${FAKE_OSV_FINDING:-}" == 1 ]]; then
+      printf '%s\n' '{"results":[{"packages":[{"groups":[{"ids":["GHSA-test"]}]}]}]}'
+      exit 1
+    fi
+    printf '%s\n' '{"results":[]}'
+    ;;
+  *'trufflesecurity/trufflehog:'*)
+    [[ "$*" == *'--network none'* && "$*" == *'--no-verification'* ]] || exit 72
+    if [[ "${FAKE_TRUFFLEHOG_ERROR:-}" == 1 ]]; then exit 78; fi
+    if [[ "${FAKE_TRUFFLEHOG_FINDING:-}" == 1 ]]; then
+      printf '%s\n' '{"DetectorName":"Fixture","Verified":false,"Raw":"RAW_CANARY_SECRET","SourceMetadata":{"Data":{"Git":{"file":"install.sh","line":1,"commit":"abcd"}}}}'
+    fi
+    ;;
+  *) exit 73 ;;
+esac
+EOF_DOCKER
+cat > "$fake_bin/uvx" <<'EOF_UVX'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == *'semgrep==1.180.0'* && "$*" == *'--metrics off'* && "$*" == *'--no-git-ignore'* ]] || exit 74
+if [[ "${FAKE_SEMGREP_ERROR:-}" == 1 ]]; then
+  printf '%s\n' '{"results":[],"errors":[{"message":"fixture failure"}]}'
+  exit 2
+fi
+if [[ "${FAKE_SEMGREP_FINDING:-}" == 1 ]]; then
+  printf '%s\n' '{"results":[{"check_id":"fixture.rule"}],"errors":[]}'
+  exit 1
+fi
+printf '%s\n' '{"results":[],"errors":[]}'
+EOF_UVX
+chmod +x "$fake_bin/docker" "$fake_bin/uvx"
+
 run_audit() {
   local label=$1
   local destination="$root/$label"
@@ -372,6 +411,12 @@ run_audit() {
     FAKE_PLATFORM="${FAKE_PLATFORM:-}" \
     FAKE_MACHINE="${FAKE_MACHINE:-}" \
     FAKE_ROSETTA="${FAKE_ROSETTA:-}" \
+    FAKE_OSV_FINDING="${FAKE_OSV_FINDING:-}" \
+    FAKE_OSV_ERROR="${FAKE_OSV_ERROR:-}" \
+    FAKE_SEMGREP_FINDING="${FAKE_SEMGREP_FINDING:-}" \
+    FAKE_SEMGREP_ERROR="${FAKE_SEMGREP_ERROR:-}" \
+    FAKE_TRUFFLEHOG_FINDING="${FAKE_TRUFFLEHOG_FINDING:-}" \
+    FAKE_TRUFFLEHOG_ERROR="${FAKE_TRUFFLEHOG_ERROR:-}" \
     "$audit" --repo "$requested_repo" --output "$destination" \
     > "$root/$label.log" 2>&1
   status=$?
@@ -392,7 +437,7 @@ jq -e '
     (.evidence.file | type == "string"))
 ' "$root/first/github-controls.json" > /dev/null
 [[ "$(jq -r '.overall_status' "$root/first/summary.json")" == findings ]]
-[[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 7 ]]
+[[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 10 ]]
 [[ "$(jq -r '.controls[] | select(.id == "actions_permissions") | .state' "$root/first/github-controls.json")" == finding ]]
 [[ "$(jq -r '.controls[] | select(.id == "vulnerability_alerts") | .state' "$root/first/github-controls.json")" == pass ]]
 [[ "$(jq -r '.controls[] | select(.id == "dependabot_security_updates") | .state' "$root/first/github-controls.json")" == unknown ]]
@@ -451,6 +496,33 @@ run_audit zizmor-finding
 [[ "$(jq -r '.scanners[] | select(.name == "zizmor") | .findings' "$root/zizmor-finding/summary.json")" == 1 ]]
 [[ "$(jq -r '.overall_status' "$root/zizmor-finding/summary.json")" != error ]]
 FAKE_ZIZMOR_FINDING=''
+
+FAKE_OSV_FINDING=1
+run_audit osv-finding
+[[ "$(jq -r '.scanners[] | select(.name == "osv-scanner") | .status' "$root/osv-finding/summary.json")" == findings ]]
+[[ "$(jq -r '.scanners[] | select(.name == "osv-scanner") | .findings' "$root/osv-finding/summary.json")" == 1 ]]
+FAKE_OSV_FINDING=''
+
+FAKE_SEMGREP_FINDING=1
+run_audit semgrep-finding
+[[ "$(jq -r '.scanners[] | select(.name == "semgrep") | .status' "$root/semgrep-finding/summary.json")" == findings ]]
+FAKE_SEMGREP_FINDING=''
+
+FAKE_TRUFFLEHOG_FINDING=1
+run_audit trufflehog-finding
+[[ "$(jq -r '.scanners[] | select(.name == "trufflehog") | .status' "$root/trufflehog-finding/summary.json")" == findings ]]
+if grep -R -F 'RAW_CANARY_SECRET' "$root/trufflehog-finding"; then exit 1; fi
+FAKE_TRUFFLEHOG_FINDING=''
+
+FAKE_SEMGREP_ERROR=1
+run_audit semgrep-error
+[[ "$(jq -r '.scanners[] | select(.name == "semgrep") | .status' "$root/semgrep-error/summary.json")" == error ]]
+FAKE_SEMGREP_ERROR=''
+
+FAKE_TRUFFLEHOG_ERROR=1
+run_audit trufflehog-error
+[[ "$(jq -r '.scanners[] | select(.name == "trufflehog") | .status' "$root/trufflehog-error/summary.json")" == error ]]
+FAKE_TRUFFLEHOG_ERROR=''
 
 run_audit lfs
 [[ "$(cat "$root/lfs.status")" == 1 ]]
