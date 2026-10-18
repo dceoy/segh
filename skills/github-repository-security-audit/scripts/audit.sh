@@ -576,6 +576,12 @@ versions_status=0
   mise -C "$skill_root" exec --locked -- kubectl version --client || versions_status=1
   printf 'trivy: '
   mise -C "$skill_root" exec --locked -- trivy --version | head -n 1 || versions_status=1
+  printf 'osv-scanner: '
+  mise -C "$skill_root" exec --locked -- osv-scanner --version || versions_status=1
+  printf 'trufflehog: '
+  mise -C "$skill_root" exec --locked -- trufflehog --version || versions_status=1
+  printf 'uvx: '
+  mise -C "$skill_root" exec --locked -- uvx --version || versions_status=1
 } > "$output/scanner-versions.txt" 2> "$output/scanner-versions.log"
 printf '%s\n' "$versions_status" > "$output/versions-status.txt"
 
@@ -862,8 +868,8 @@ record_trivy_scanner() {
 record_trivy_scanner vulnerability Vulnerabilities
 record_trivy_scanner secret Secrets
 
-# The new scanners share the existing trusted, disposable checkout. Failure
-# is retained in native status evidence rather than silently skipped.
+# Additional native scanners share the preflighted disposable checkout.
+# Keep the scanner adapter separate from GitHub controls and evidence parsing.
 bash "$skill_root/scripts/run-additional-scanners.sh" "$checkout" "$output"
 {
   printf 'osv-scanner: v2.7.0 (digest-pinned image)\n'
