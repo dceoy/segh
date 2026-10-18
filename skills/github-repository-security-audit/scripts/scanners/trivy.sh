@@ -16,7 +16,7 @@ run_trivy() {
   set +e
   env "${trivy_env[@]}" mise -C "$skill_root" exec --locked -- trivy filesystem --config /dev/null --ignorefile /dev/null \
     --scanners "$scanner_kind" --exit-code 1 --format json --output "$output_file" \
-    --skip-dirs "$checkout/.git" --skip-version-check "$checkout" \
+    --skip-dirs "$checkout/.git" --skip-version-check --disable-telemetry "$checkout" \
     > "$output/trivy-$file_kind.log" 2>&1
   local status=$?
   set -e

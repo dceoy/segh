@@ -279,6 +279,9 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
+    env:
+      GH_TELEMETRY: 'false'
+      MISE_USE_VERSIONS_HOST_TRACK: 'false'
     permissions:
       contents: read
       checks: read
@@ -661,7 +664,7 @@ jobs:
         run: |
           trivy filesystem --config /dev/null --ignorefile /dev/null --scanners vuln \
             --exit-code 1 --format json --output results/trivy-vulnerability.json \
-            --skip-dirs _target/.git --skip-version-check _target \
+            --skip-dirs _target/.git --skip-version-check --disable-telemetry _target \
             2> results/trivy-vulnerability.log
       - name: Run Trivy secret scan
         if: always() && steps.preflight.outcome == 'success'
@@ -670,7 +673,7 @@ jobs:
         run: |
           trivy filesystem --config /dev/null --ignorefile /dev/null --scanners secret \
             --exit-code 1 --format json --output results/trivy-secret.json \
-            --skip-dirs _target/.git --skip-version-check _target \
+            --skip-dirs _target/.git --skip-version-check --disable-telemetry _target \
             2> results/trivy-secret.log
       - name: Build bounded dashboard summary
         if: always() && steps.target.outcome == 'success' && steps.trusted.outcome == 'success'

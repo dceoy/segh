@@ -2,6 +2,7 @@
 
 set -euo pipefail
 umask 077
+export GH_TELEMETRY=false
 
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 readonly skill_root
