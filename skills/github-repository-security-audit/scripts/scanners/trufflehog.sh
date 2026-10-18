@@ -13,6 +13,7 @@ trap 'rm -rf -- "$tmp"' EXIT
 set +e
 mise -C "$skill_root" exec --locked -- \
   trufflehog git "file://$checkout" --no-update --no-verification \
+  --no-ignore-tag --fail-on-scan-errors \
   --results=verified,unknown,unverified --json \
   > "$tmp/trufflehog-raw.jsonl" 2> "$tmp/trufflehog-stderr"
 trufflehog_status=$?

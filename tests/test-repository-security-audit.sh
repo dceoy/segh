@@ -317,8 +317,13 @@ cat > "$fake_bin/osv-scanner" <<'EOF_OSV'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == --version ]]; then printf '%s\n' 'osv-scanner 2.7.0'; exit 0; fi
-[[ "$*" == *'scan source'* && "$*" == *'--config /dev/null'* ]] || exit 71
+[[ "$*" == *'scan source'* && "$*" == *'--config /dev/null'* && "$*" == *'--no-ignore'* ]] || exit 71
+[[ "$*" != *'--include-git-root'* ]] || exit 71
 if [[ "$FAKE_OSV_ERROR" == 1 ]]; then exit 77; fi
+if [[ "$FAKE_OSV_NO_PACKAGES" == 1 ]]; then
+  printf '%s\n' '{"results":[]}'
+  exit 128
+fi
 if [[ "$FAKE_OSV_FINDING" == 1 ]]; then
   printf '%s\n' '{"results":[{"packages":[{"groups":[{"ids":["GHSA-test"]}]}]}]}'
   exit 1
@@ -330,6 +335,21 @@ cat > "$fake_bin/trufflehog" <<'EOF_TRUFFLEHOG'
 set -euo pipefail
 if [[ "$1" == --version ]]; then printf '%s\n' 'trufflehog 3.99.2'; exit 0; fi
 [[ "$*" == *'git file://'* && "$*" == *'--no-verification'* && "$*" == *'--no-update'* ]] || exit 72
+# A target-owned trufflehog:ignore annotation suppresses detections unless
+# --no-ignore-tag is supplied.
+if [[ "$FAKE_TRUFFLEHOG_IGNORE_TAG" == 1 ]]; then
+  if [[ "$*" == *'--no-ignore-tag'* ]]; then
+    printf '%s\n' '{"DetectorName":"IgnoredFixture","Verified":false,"Raw":"RAW_CANARY_SECRET","SourceMetadata":{"Data":{"Git":{"file":"install.sh","line":1,"commit":"abcd"}}}}'
+  fi
+  exit 0
+fi
+# Simulate a partial engine error: without the fail flag TruffleHog can
+# otherwise return success and misrepresent an incomplete scan as clean.
+if [[ "$FAKE_TRUFFLEHOG_PARTIAL_ERROR" == 1 ]]; then
+  printf '%s\n' 'scan source failed for a chunk' >&2
+  if [[ "$*" == *'--fail-on-scan-errors'* ]]; then exit 78; fi
+  exit 0
+fi
 if [[ "$FAKE_TRUFFLEHOG_ERROR" == 1 ]]; then exit 78; fi
 if [[ "$FAKE_TRUFFLEHOG_FINDING" == 1 ]]; then
   printf '%s\n' '{"DetectorName":"Fixture","Verified":false,"Raw":"RAW_CANARY_SECRET","SourceMetadata":{"Data":{"Git":{"file":"install.sh","line":1,"commit":"abcd"}}}}'
@@ -413,10 +433,13 @@ run_audit() {
     FAKE_ROSETTA="${FAKE_ROSETTA:-}" \
     FAKE_OSV_FINDING="${FAKE_OSV_FINDING:-}" \
     FAKE_OSV_ERROR="${FAKE_OSV_ERROR:-}" \
+    FAKE_OSV_NO_PACKAGES="${FAKE_OSV_NO_PACKAGES:-}" \
     FAKE_SEMGREP_FINDING="${FAKE_SEMGREP_FINDING:-}" \
     FAKE_SEMGREP_ERROR="${FAKE_SEMGREP_ERROR:-}" \
     FAKE_TRUFFLEHOG_FINDING="${FAKE_TRUFFLEHOG_FINDING:-}" \
     FAKE_TRUFFLEHOG_ERROR="${FAKE_TRUFFLEHOG_ERROR:-}" \
+    FAKE_TRUFFLEHOG_IGNORE_TAG="${FAKE_TRUFFLEHOG_IGNORE_TAG:-}" \
+    FAKE_TRUFFLEHOG_PARTIAL_ERROR="${FAKE_TRUFFLEHOG_PARTIAL_ERROR:-}" \
     "$audit" --repo "$requested_repo" --output "$destination" \
     > "$root/$label.log" 2>&1
   status=$?
@@ -508,6 +531,12 @@ run_audit osv-finding
 [[ "$(jq -r '.scanners[] | select(.name == "osv-scanner") | .findings' "$root/osv-finding/summary.json")" == 1 ]]
 FAKE_OSV_FINDING=''
 
+FAKE_OSV_NO_PACKAGES=1
+run_audit osv-no-packages
+[[ "$(jq -r '.scanners[] | select(.name == "osv-scanner") | .status' "$root/osv-no-packages/summary.json")" == skipped ]]
+[[ "$(jq -r '[.scanner_gaps[] | select(.id == "osv-scanner" and .status == "skipped")] | length' "$root/osv-no-packages/coverage-gaps.json")" == 1 ]]
+FAKE_OSV_NO_PACKAGES=''
+
 FAKE_SEMGREP_FINDING=1
 run_audit semgrep-finding
 [[ "$(jq -r '.scanners[] | select(.name == "semgrep") | .status' "$root/semgrep-finding/summary.json")" == findings ]]
@@ -518,6 +547,18 @@ run_audit trufflehog-finding
 [[ "$(jq -r '.scanners[] | select(.name == "trufflehog") | .status' "$root/trufflehog-finding/summary.json")" == findings ]]
 if grep -R -F 'RAW_CANARY_SECRET' "$root/trufflehog-finding"; then exit 1; fi
 FAKE_TRUFFLEHOG_FINDING=''
+
+FAKE_TRUFFLEHOG_IGNORE_TAG=1
+run_audit trufflehog-ignore-tag
+[[ "$(jq -r '.scanners[] | select(.name == "trufflehog") | .status' "$root/trufflehog-ignore-tag/summary.json")" == findings ]]
+if grep -R -F 'RAW_CANARY_SECRET' "$root/trufflehog-ignore-tag"; then exit 1; fi
+FAKE_TRUFFLEHOG_IGNORE_TAG=''
+
+FAKE_TRUFFLEHOG_PARTIAL_ERROR=1
+run_audit trufflehog-partial-error
+[[ "$(jq -r '.scanners[] | select(.name == "trufflehog") | .status' "$root/trufflehog-partial-error/summary.json")" == error ]]
+[[ "$(jq -r '.overall_status' "$root/trufflehog-partial-error/summary.json")" == error ]]
+FAKE_TRUFFLEHOG_PARTIAL_ERROR=''
 
 FAKE_SEMGREP_ERROR=1
 run_audit semgrep-error
