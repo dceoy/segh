@@ -45,14 +45,17 @@ the repository's root runtime configuration.
 
 The skill additionally runs **OSV-Scanner** for dependency vulnerabilities,
 **Semgrep OSS** for SAST, and **TruffleHog** for Git-history secrets.
-Docker is required for the digest-pinned OSV-Scanner and TruffleHog
-containers; `uvx` is required for pinned Semgrep. Missing dependencies are
-audit errors, not silently skipped coverage. OSV's vulnerability feed and
-Semgrep's rule registry require network access.
+All three tools are executed natively; OSV-Scanner, TruffleHog and uv
+(the `uvx` runner for pinned Semgrep) are version-pinned in the skill-local
+`mise.toml` and checksummed in `mise.lock`. Docker is not required.
+Missing or incompatible executables are audit errors, not silent skips.
+OSV's vulnerability feed and Semgrep's rule registry require network access.
 
-TruffleHog explicitly disables verification and container network access;
-its findings are unverified candidates. Raw secret values are discarded,
-and only detector, file, line and commit metadata are retained.
+TruffleHog disables both verification and updates. Its findings are
+unverified candidates. Native execution does not provide network isolation;
+use an externally restricted host when strict offline scanning is required.
+Raw secret values are discarded, and only detector, file, line and commit
+metadata are retained.
 Temporary checkout ignore files are removed before these extra scanners
 so that target-owned ignore directives cannot suppress their coverage.
 
