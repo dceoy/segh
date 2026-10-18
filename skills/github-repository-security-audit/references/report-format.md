@@ -29,7 +29,7 @@ unknown/error controls. A missing permission is a coverage gap, not a pass.
 ## Source scanners
 
 Report the native result for Scorecard, zizmor, actionlint, ShellCheck,
-Checkov, Trivy vulnerability, and Trivy secret scans. Preserve the distinction
+Checkov, Trivy vulnerability, Trivy secret, OSV-Scanner dependency, Semgrep SAST, and TruffleHog Git-history scans. Preserve the distinction
 between findings and execution/evidence errors. Checkov is the only IaC
 misconfiguration scanner; do not duplicate a Checkov IaC finding as a Trivy
 misconfiguration finding.
@@ -39,7 +39,9 @@ misconfiguration finding.
 Use `coverage-gaps.json`, preflight logs, scanner status files, and native
 logs. Call out missing GitHub permissions, unsupported endpoints, untracked
 or rejected target content, renderer failures, parser errors, and any scanner
-that did not run. Always disclose the accepted Checkov parse-evidence gaps for
+that did not run. Note missing native toolchain components as scanner errors, OSV's
+no-supported-dependencies state, and TruffleHog's intentionally unverified
+secret candidates. Always disclose the accepted Checkov parse-evidence gaps for
 Serverless and OpenAPI content, even when `coverage-gaps.json` has no runtime
 entry for them; these limitations are not clean/no-finding evidence. Never
 describe an incomplete audit as clean.

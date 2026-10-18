@@ -3,7 +3,51 @@
 set -euo pipefail
 umask 077
 
-skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ "${1:-}" == --audit-scan ]]; then
+  shift
+  # shellcheck source=skills/github-repository-security-audit/scripts/scanners/common.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
+shell_files=()
+declare -A shell_seen=()
+while IFS= read -r -d '' entry; do
+  mode=${entry%% *}
+  [[ "$mode" == 100644 || "$mode" == 100755 ]] || continue
+  path=${entry#*$'\t'}
+  include=false
+  case "$path" in
+    *.sh|*.bash|*.bats) include=true ;;
+  esac
+  if [[ "$include" == false ]]; then
+    first_line=''
+    IFS= LC_ALL=C read -r -n 256 first_line < "$checkout/$path" || true
+    if has_supported_shell_shebang "$first_line"; then
+      include=true
+    fi
+  fi
+  if [[ "$include" == true && -z "${shell_seen[$path]:-}" ]]; then
+    shell_files+=("$checkout/$path")
+    shell_seen[$path]=1
+  fi
+done < <(git -C "$checkout" ls-files --stage -z)
+
+if ((${#shell_files[@]} == 0)); then
+  printf '%s\n' '[]' > "$output/shellcheck.json"
+  : > "$output/shellcheck.log"
+  printf '%s\n' 0 > "$output/shellcheck-status.txt"
+else
+  set +e
+  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- "$skill_root/scripts/scanners/shellcheck.sh" \
+    --color=never --format=json1 --rcfile /dev/null \
+    --severity=style -- "${shell_files[@]}" > "$output/shellcheck.json" 2> "$output/shellcheck.log"
+  shellcheck_status=$?
+  set -e
+  printf '%s\n' "$shellcheck_status" > "$output/shellcheck-status.txt"
+fi
+
+  exit 0
+fi
+
+skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 readonly skill_root
 unset SHELLCHECK_OPTS
 

@@ -154,6 +154,9 @@ if [[ ${1:-} == repo && ${2:-} == view ]]; then
   exit 0
 fi
 if [[ ${1:-} == repo && ${2:-} == clone ]]; then
+  # The history scanner needs blobs from every commit, not just HEAD.
+  # A promisor partial clone becomes incomplete after the remote is removed.
+  [[ "$*" != *'--filter=blob:none'* ]] || exit 93
   destination=${4:?clone destination missing}
   printf '%s\n' "$destination" > "${GIT_CLONE_DEST_LOG:-/dev/null}"
   git clone -q --no-checkout --no-tags --no-recurse-submodules "$SOURCE_REPO" "$destination"
@@ -313,6 +316,65 @@ for tool in scorecard zizmor actionlint shellcheck checkov helm kubectl trivy; d
   ln -s fake-scanner "$fake_bin/$tool"
 done
 
+cat > "$fake_bin/osv-scanner" <<'EOF_OSV'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == --version ]]; then printf '%s\n' 'osv-scanner 2.7.0'; exit 0; fi
+[[ "$*" == *'scan source'* && "$*" == *'--config /dev/null'* && "$*" == *'--no-ignore'* ]] || exit 71
+[[ "$*" != *'--include-git-root'* ]] || exit 71
+if [[ "$FAKE_OSV_ERROR" == 1 ]]; then exit 77; fi
+if [[ "$FAKE_OSV_NO_PACKAGES" == 1 ]]; then
+  printf '%s\n' '{"results":[]}'
+  exit 128
+fi
+if [[ "$FAKE_OSV_FINDING" == 1 ]]; then
+  printf '%s\n' '{"results":[{"packages":[{"groups":[{"ids":["GHSA-test"]}]}]}]}'
+  exit 1
+fi
+printf '%s\n' '{"results":[]}'
+EOF_OSV
+cat > "$fake_bin/trufflehog" <<'EOF_TRUFFLEHOG'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == --version ]]; then printf '%s\n' 'trufflehog 3.99.2'; exit 0; fi
+[[ "$*" == *'git file://'* && "$*" == *'--no-verification'* && "$*" == *'--no-update'* ]] || exit 72
+# A target-owned trufflehog:ignore annotation suppresses detections unless
+# --no-ignore-tag is supplied.
+if [[ "$FAKE_TRUFFLEHOG_IGNORE_TAG" == 1 ]]; then
+  if [[ "$*" == *'--no-ignore-tag'* ]]; then
+    printf '%s\n' '{"DetectorName":"IgnoredFixture","Verified":false,"Raw":"RAW_CANARY_SECRET","SourceMetadata":{"Data":{"Git":{"file":"install.sh","line":1,"commit":"abcd"}}}}'
+  fi
+  exit 0
+fi
+# Simulate a partial engine error: without the fail flag TruffleHog can
+# otherwise return success and misrepresent an incomplete scan as clean.
+if [[ "$FAKE_TRUFFLEHOG_PARTIAL_ERROR" == 1 ]]; then
+  printf '%s\n' 'scan source failed for a chunk' >&2
+  if [[ "$*" == *'--fail-on-scan-errors'* ]]; then exit 78; fi
+  exit 0
+fi
+if [[ "$FAKE_TRUFFLEHOG_ERROR" == 1 ]]; then exit 78; fi
+if [[ "$FAKE_TRUFFLEHOG_FINDING" == 1 ]]; then
+  printf '%s\n' '{"DetectorName":"Fixture","Verified":false,"Raw":"RAW_CANARY_SECRET","SourceMetadata":{"Data":{"Git":{"file":"install.sh","line":1,"commit":"abcd"}}}}'
+fi
+EOF_TRUFFLEHOG
+cat > "$fake_bin/uvx" <<'EOF_UVX'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == --version ]]; then printf '%s\n' 'uvx 0.10.0'; exit 0; fi
+[[ "$*" == *'semgrep==1.180.0'* && "$*" == *'--metrics off'* && "$*" == *'--no-git-ignore'* ]] || exit 74
+if [[ "$FAKE_SEMGREP_ERROR" == 1 ]]; then
+  printf '%s\n' '{"results":[],"errors":[{"message":"fixture failure"}]}'
+  exit 2
+fi
+if [[ "$FAKE_SEMGREP_FINDING" == 1 ]]; then
+  printf '%s\n' '{"results":[{"check_id":"fixture.rule"}],"errors":[]}'
+  exit 1
+fi
+printf '%s\n' '{"results":[],"errors":[]}'
+EOF_UVX
+chmod +x "$fake_bin/osv-scanner" "$fake_bin/trufflehog" "$fake_bin/uvx"
+
 run_audit() {
   local label=$1
   local destination="$root/$label"
@@ -372,6 +434,15 @@ run_audit() {
     FAKE_PLATFORM="${FAKE_PLATFORM:-}" \
     FAKE_MACHINE="${FAKE_MACHINE:-}" \
     FAKE_ROSETTA="${FAKE_ROSETTA:-}" \
+    FAKE_OSV_FINDING="${FAKE_OSV_FINDING:-}" \
+    FAKE_OSV_ERROR="${FAKE_OSV_ERROR:-}" \
+    FAKE_OSV_NO_PACKAGES="${FAKE_OSV_NO_PACKAGES:-}" \
+    FAKE_SEMGREP_FINDING="${FAKE_SEMGREP_FINDING:-}" \
+    FAKE_SEMGREP_ERROR="${FAKE_SEMGREP_ERROR:-}" \
+    FAKE_TRUFFLEHOG_FINDING="${FAKE_TRUFFLEHOG_FINDING:-}" \
+    FAKE_TRUFFLEHOG_ERROR="${FAKE_TRUFFLEHOG_ERROR:-}" \
+    FAKE_TRUFFLEHOG_IGNORE_TAG="${FAKE_TRUFFLEHOG_IGNORE_TAG:-}" \
+    FAKE_TRUFFLEHOG_PARTIAL_ERROR="${FAKE_TRUFFLEHOG_PARTIAL_ERROR:-}" \
     "$audit" --repo "$requested_repo" --output "$destination" \
     > "$root/$label.log" 2>&1
   status=$?
@@ -392,7 +463,15 @@ jq -e '
     (.evidence.file | type == "string"))
 ' "$root/first/github-controls.json" > /dev/null
 [[ "$(jq -r '.overall_status' "$root/first/summary.json")" == findings ]]
-[[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 7 ]]
+[[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 10 ]]
+[[ "$(cat "$root/first/scanners-run-status.txt")" == 0 ]]
+[[ -f "$root/first/scanners-run.log" ]]
+grep -F 'osv-scanner scan source' "$root/first.mise.log" > /dev/null
+grep -F 'trufflehog git file://' "$root/first.mise.log" > /dev/null
+# Scanner entrypoints, including Checkov, need the installed locked toolchain
+# on PATH; merely installing binaries is insufficient without mise exec.
+grep -F 'exec --locked -- bash ' "$root/first.mise.log" | grep -F '/scanners/checkov.sh' > /dev/null
+grep -F 'uvx --from semgrep==1.180.0' "$root/first.mise.log" > /dev/null
 [[ "$(jq -r '.controls[] | select(.id == "actions_permissions") | .state' "$root/first/github-controls.json")" == finding ]]
 [[ "$(jq -r '.controls[] | select(.id == "vulnerability_alerts") | .state' "$root/first/github-controls.json")" == pass ]]
 [[ "$(jq -r '.controls[] | select(.id == "dependabot_security_updates") | .state' "$root/first/github-controls.json")" == unknown ]]
@@ -451,6 +530,51 @@ run_audit zizmor-finding
 [[ "$(jq -r '.scanners[] | select(.name == "zizmor") | .findings' "$root/zizmor-finding/summary.json")" == 1 ]]
 [[ "$(jq -r '.overall_status' "$root/zizmor-finding/summary.json")" != error ]]
 FAKE_ZIZMOR_FINDING=''
+
+FAKE_OSV_FINDING=1
+run_audit osv-finding
+[[ "$(jq -r '.scanners[] | select(.name == "osv-scanner") | .status' "$root/osv-finding/summary.json")" == findings ]]
+[[ "$(jq -r '.scanners[] | select(.name == "osv-scanner") | .findings' "$root/osv-finding/summary.json")" == 1 ]]
+FAKE_OSV_FINDING=''
+
+FAKE_OSV_NO_PACKAGES=1
+run_audit osv-no-packages
+[[ "$(jq -r '.scanners[] | select(.name == "osv-scanner") | .status' "$root/osv-no-packages/summary.json")" == skipped ]]
+[[ "$(jq -r '[.scanner_gaps[] | select(.id == "osv-scanner" and .status == "skipped")] | length' "$root/osv-no-packages/coverage-gaps.json")" == 1 ]]
+FAKE_OSV_NO_PACKAGES=''
+
+FAKE_SEMGREP_FINDING=1
+run_audit semgrep-finding
+[[ "$(jq -r '.scanners[] | select(.name == "semgrep") | .status' "$root/semgrep-finding/summary.json")" == findings ]]
+FAKE_SEMGREP_FINDING=''
+
+FAKE_TRUFFLEHOG_FINDING=1
+run_audit trufflehog-finding
+[[ "$(jq -r '.scanners[] | select(.name == "trufflehog") | .status' "$root/trufflehog-finding/summary.json")" == findings ]]
+if grep -R -F 'RAW_CANARY_SECRET' "$root/trufflehog-finding"; then exit 1; fi
+FAKE_TRUFFLEHOG_FINDING=''
+
+FAKE_TRUFFLEHOG_IGNORE_TAG=1
+run_audit trufflehog-ignore-tag
+[[ "$(jq -r '.scanners[] | select(.name == "trufflehog") | .status' "$root/trufflehog-ignore-tag/summary.json")" == findings ]]
+if grep -R -F 'RAW_CANARY_SECRET' "$root/trufflehog-ignore-tag"; then exit 1; fi
+FAKE_TRUFFLEHOG_IGNORE_TAG=''
+
+FAKE_TRUFFLEHOG_PARTIAL_ERROR=1
+run_audit trufflehog-partial-error
+[[ "$(jq -r '.scanners[] | select(.name == "trufflehog") | .status' "$root/trufflehog-partial-error/summary.json")" == error ]]
+[[ "$(jq -r '.overall_status' "$root/trufflehog-partial-error/summary.json")" == error ]]
+FAKE_TRUFFLEHOG_PARTIAL_ERROR=''
+
+FAKE_SEMGREP_ERROR=1
+run_audit semgrep-error
+[[ "$(jq -r '.scanners[] | select(.name == "semgrep") | .status' "$root/semgrep-error/summary.json")" == error ]]
+FAKE_SEMGREP_ERROR=''
+
+FAKE_TRUFFLEHOG_ERROR=1
+run_audit trufflehog-error
+[[ "$(jq -r '.scanners[] | select(.name == "trufflehog") | .status' "$root/trufflehog-error/summary.json")" == error ]]
+FAKE_TRUFFLEHOG_ERROR=''
 
 run_audit lfs
 [[ "$(cat "$root/lfs.status")" == 1 ]]

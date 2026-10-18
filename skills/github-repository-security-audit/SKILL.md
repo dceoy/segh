@@ -35,13 +35,40 @@ scanner, parser, renderer, API response, or evidence check must remain an
 error or coverage gap; do not turn it into a pass in the report.
 
 The detached checkout is kept under the audit's private temporary directory
-and removed when the audit exits. Git operations after cloning ignore system
-and global configuration, including environment-injected configuration
-parameters, before target-controlled attributes can select filters.
+and removed when the audit exits. The clone fetches complete Git history,
+including historical blobs, so TruffleHog can scan past commits after the
+remote has been removed. This can increase download size for large
+repositories; incomplete Git history must not count as a clean secret scan.
+Git operations after cloning ignore system and global configuration,
+including environment-injected configuration parameters, before
+target-controlled attributes can select filters.
 
 The first run may install the exact versions in `mise.toml`; use `--locked` as
 the script does. The lockfile is skill-local so this audit does not depend on
 the repository's root runtime configuration.
+
+The entry point `audit.sh` handles GitHub controls, the checkout/preflight
+boundary, evidence interpretation, and summary generation. **All native source scanner commands** are dispatched by
+`scripts/run-scanners.sh` to one tool-specific entry point in `scripts/scanners/`.
+The Checkov and ShellCheck entries retain their trusted policy enforcement;
+shared Git index selection lives in `scripts/scanners/common.sh`. Scanner findings and execution failures are recorded
+separately so that incomplete coverage cannot appear clean.
+
+The skill additionally runs **OSV-Scanner** for dependency vulnerabilities,
+**Semgrep OSS** for SAST, and **TruffleHog** for Git-history secrets.
+All three tools are executed natively; OSV-Scanner, TruffleHog and uv
+(the `uvx` runner for pinned Semgrep) are version-pinned in the skill-local
+`mise.toml` and checksummed in `mise.lock`. Docker is not required.
+Missing or incompatible executables are audit errors, not silent skips.
+OSV's vulnerability feed and Semgrep's rule registry require network access.
+
+TruffleHog disables both verification and updates. Its findings are
+unverified candidates. Native execution does not provide network isolation;
+use an externally restricted host when strict offline scanning is required.
+Raw secret values are discarded, and only detector, file, line and commit
+metadata are retained.
+Temporary checkout ignore files are removed before these extra scanners
+so that target-owned ignore directives cannot suppress their coverage.
 
 The pinned Checkov release provides a Darwin x86_64 binary but no Darwin
 arm64 binary. On Apple Silicon macOS, the audit therefore requires Rosetta 2
@@ -67,6 +94,11 @@ Use native scanner evidence rather than inventing scores or thresholds:
 - Scorecard is informational evidence. Its scores do not become findings.
 - Checkov owns IaC misconfiguration findings. Trivy is limited to
   vulnerabilities and secrets.
+- OSV-Scanner reports vulnerable dependency versions. Exit code 128 means no
+  supported dependencies were detected (`skipped`), not a clean scan.
+- Semgrep uses the trusted `p/default` rules with telemetry disabled.
+- TruffleHog findings are **unverified** Git-history secret candidates;
+  never present them as confirmed live credentials.
 - `unknown` means the control was not observable with the available
   permission or product semantics; it is a coverage gap, not evidence of
   enablement or disablement.
