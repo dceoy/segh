@@ -313,44 +313,44 @@ for tool in scorecard zizmor actionlint shellcheck checkov helm kubectl trivy; d
   ln -s fake-scanner "$fake_bin/$tool"
 done
 
-cat > "$fake_bin/docker" <<'EOF_DOCKER'
+cat > "$fake_bin/osv-scanner" <<'EOF_OSV'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$*" == *'type=bind'* && "$*" == *'readonly'* ]] || exit 71
-case "$*" in
-  *'ghcr.io/google/osv-scanner:'*)
-    if [[ "${FAKE_OSV_ERROR:-}" == 1 ]]; then exit 77; fi
-    if [[ "${FAKE_OSV_FINDING:-}" == 1 ]]; then
-      printf '%s\n' '{"results":[{"packages":[{"groups":[{"ids":["GHSA-test"]}]}]}]}'
-      exit 1
-    fi
-    printf '%s\n' '{"results":[]}'
-    ;;
-  *'trufflesecurity/trufflehog:'*)
-    [[ "$*" == *'--network none'* && "$*" == *'--no-verification'* ]] || exit 72
-    if [[ "${FAKE_TRUFFLEHOG_ERROR:-}" == 1 ]]; then exit 78; fi
-    if [[ "${FAKE_TRUFFLEHOG_FINDING:-}" == 1 ]]; then
-      printf '%s\n' '{"DetectorName":"Fixture","Verified":false,"Raw":"RAW_CANARY_SECRET","SourceMetadata":{"Data":{"Git":{"file":"install.sh","line":1,"commit":"abcd"}}}}'
-    fi
-    ;;
-  *) exit 73 ;;
-esac
-EOF_DOCKER
+if [[ "$1" == --version ]]; then printf '%s\n' 'osv-scanner 2.7.0'; exit 0; fi
+[[ "$*" == *'scan source'* && "$*" == *'--config /dev/null'* ]] || exit 71
+if [[ "$FAKE_OSV_ERROR" == 1 ]]; then exit 77; fi
+if [[ "$FAKE_OSV_FINDING" == 1 ]]; then
+  printf '%s\n' '{"results":[{"packages":[{"groups":[{"ids":["GHSA-test"]}]}]}]}'
+  exit 1
+fi
+printf '%s\n' '{"results":[]}'
+EOF_OSV
+cat > "$fake_bin/trufflehog" <<'EOF_TRUFFLEHOG'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == --version ]]; then printf '%s\n' 'trufflehog 3.99.2'; exit 0; fi
+[[ "$*" == *'git file://'* && "$*" == *'--no-verification'* && "$*" == *'--no-update'* ]] || exit 72
+if [[ "$FAKE_TRUFFLEHOG_ERROR" == 1 ]]; then exit 78; fi
+if [[ "$FAKE_TRUFFLEHOG_FINDING" == 1 ]]; then
+  printf '%s\n' '{"DetectorName":"Fixture","Verified":false,"Raw":"RAW_CANARY_SECRET","SourceMetadata":{"Data":{"Git":{"file":"install.sh","line":1,"commit":"abcd"}}}}'
+fi
+EOF_TRUFFLEHOG
 cat > "$fake_bin/uvx" <<'EOF_UVX'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$1" == --version ]]; then printf '%s\n' 'uvx 0.10.0'; exit 0; fi
 [[ "$*" == *'semgrep==1.180.0'* && "$*" == *'--metrics off'* && "$*" == *'--no-git-ignore'* ]] || exit 74
-if [[ "${FAKE_SEMGREP_ERROR:-}" == 1 ]]; then
+if [[ "$FAKE_SEMGREP_ERROR" == 1 ]]; then
   printf '%s\n' '{"results":[],"errors":[{"message":"fixture failure"}]}'
   exit 2
 fi
-if [[ "${FAKE_SEMGREP_FINDING:-}" == 1 ]]; then
+if [[ "$FAKE_SEMGREP_FINDING" == 1 ]]; then
   printf '%s\n' '{"results":[{"check_id":"fixture.rule"}],"errors":[]}'
   exit 1
 fi
 printf '%s\n' '{"results":[],"errors":[]}'
 EOF_UVX
-chmod +x "$fake_bin/docker" "$fake_bin/uvx"
+chmod +x "$fake_bin/osv-scanner" "$fake_bin/trufflehog" "$fake_bin/uvx"
 
 run_audit() {
   local label=$1
@@ -438,6 +438,9 @@ jq -e '
 ' "$root/first/github-controls.json" > /dev/null
 [[ "$(jq -r '.overall_status' "$root/first/summary.json")" == findings ]]
 [[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 10 ]]
+grep -F 'osv-scanner scan source' "$root/first.mise.log" > /dev/null
+grep -F 'trufflehog git file://' "$root/first.mise.log" > /dev/null
+grep -F 'uvx --from semgrep==1.180.0' "$root/first.mise.log" > /dev/null
 [[ "$(jq -r '.controls[] | select(.id == "actions_permissions") | .state' "$root/first/github-controls.json")" == finding ]]
 [[ "$(jq -r '.controls[] | select(.id == "vulnerability_alerts") | .state' "$root/first/github-controls.json")" == pass ]]
 [[ "$(jq -r '.controls[] | select(.id == "dependabot_security_updates") | .state' "$root/first/github-controls.json")" == unknown ]]
