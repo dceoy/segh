@@ -154,6 +154,9 @@ if [[ ${1:-} == repo && ${2:-} == view ]]; then
   exit 0
 fi
 if [[ ${1:-} == repo && ${2:-} == clone ]]; then
+  # The history scanner needs blobs from every commit, not just HEAD.
+  # A promisor partial clone becomes incomplete after the remote is removed.
+  [[ "$*" != *'--filter=blob:none'* ]] || exit 93
   destination=${4:?clone destination missing}
   printf '%s\n' "$destination" > "${GIT_CLONE_DEST_LOG:-/dev/null}"
   git clone -q --no-checkout --no-tags --no-recurse-submodules "$SOURCE_REPO" "$destination"

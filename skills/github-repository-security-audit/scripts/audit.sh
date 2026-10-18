@@ -501,7 +501,7 @@ if ((toolchain_status == 0)); then
   set +e
   GH_PROMPT_DISABLED=1 GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1 \
     gh repo clone "$repo" "$checkout" --no-upstream -- \
-    --no-checkout --filter=blob:none --no-tags --no-recurse-submodules \
+    --no-checkout --no-tags --no-recurse-submodules \
     > "$output/checkout.log" 2>&1
   checkout_status=$?
   set -e

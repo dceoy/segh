@@ -35,9 +35,13 @@ scanner, parser, renderer, API response, or evidence check must remain an
 error or coverage gap; do not turn it into a pass in the report.
 
 The detached checkout is kept under the audit's private temporary directory
-and removed when the audit exits. Git operations after cloning ignore system
-and global configuration, including environment-injected configuration
-parameters, before target-controlled attributes can select filters.
+and removed when the audit exits. The clone fetches complete Git history,
+including historical blobs, so TruffleHog can scan past commits after the
+remote has been removed. This can increase download size for large
+repositories; incomplete Git history must not count as a clean secret scan.
+Git operations after cloning ignore system and global configuration,
+including environment-injected configuration parameters, before
+target-controlled attributes can select filters.
 
 The first run may install the exact versions in `mise.toml`; use `--locked` as
 the script does. The lockfile is skill-local so this audit does not depend on
