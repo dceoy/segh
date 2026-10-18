@@ -39,7 +39,7 @@ misconfiguration finding.
 Use `coverage-gaps.json`, preflight logs, scanner status files, and native
 logs. Call out missing GitHub permissions, unsupported endpoints, untracked
 or rejected target content, renderer failures, parser errors, and any scanner
-that did not run. Note missing Docker/uvx as scanner errors, OSV's
+that did not run. Note missing native toolchain components as scanner errors, OSV's
 no-supported-dependencies state, and TruffleHog's intentionally unverified
 secret candidates. Always disclose the accepted Checkov parse-evidence gaps for
 Serverless and OpenAPI content, even when `coverage-gaps.json` has no runtime
