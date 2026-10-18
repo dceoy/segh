@@ -484,6 +484,9 @@ if grep -R -F -- 'gh-login-token' "$root/first"; then exit 1; fi
 if grep -v -- '--method GET' "$root/gh.log"; then exit 1; fi
 if grep -F -- 'misconfig' "$root/scanner.log"; then exit 1; fi
 [[ ! -e "$root/first/trivy-misconfiguration.json" ]]
+# Both vulnerability and secret scans must suppress telemetry independently of
+# target-owned configuration or caller-controlled TRIVY_* environment values.
+[[ "$(grep -cE '^trivy filesystem .*--disable-telemetry ' "$root/scanner.log")" == 2 ]]
 
 FAKE_GH_FEATURES=404
 run_audit feature-404
