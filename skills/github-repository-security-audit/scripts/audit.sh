@@ -864,7 +864,7 @@ record_trivy_scanner secret Secrets
 
 # The new scanners share the existing trusted, disposable checkout. Failure
 # is retained in native status evidence rather than silently skipped.
-"$skill_root/scripts/run-additional-scanners.sh" "$checkout" "$output"
+bash "$skill_root/scripts/run-additional-scanners.sh" "$checkout" "$output"
 {
   printf 'osv-scanner: v2.7.0 (digest-pinned image)\n'
   printf 'semgrep: 1.180.0 (uvx)\n'
