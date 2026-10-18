@@ -25,7 +25,8 @@ for scanner in scorecard zizmor actionlint shellcheck checkov trivy osv-scanner 
     args=(--audit-scan "${args[@]}")
   fi
   set +e
-  bash "$skill_root/scripts/scanners/$scanner.sh" "${args[@]}" \
+  mise -C "$skill_root" exec --locked -- \
+    bash "$skill_root/scripts/scanners/$scanner.sh" "${args[@]}" \
     > "$output/$scanner-run.log" 2>&1
   status=$?
   set -e
