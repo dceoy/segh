@@ -5,7 +5,8 @@ umask 077
 
 if [[ "${1:-}" == --audit-scan ]]; then
   shift
-  source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
+  # shellcheck source=skills/github-repository-security-audit/scripts/scanners/common.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 shell_files=()
 declare -A shell_seen=()
 while IFS= read -r -d '' entry; do

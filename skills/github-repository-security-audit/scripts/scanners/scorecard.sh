@@ -2,6 +2,7 @@
 
 set -euo pipefail
 umask 077
+# shellcheck source=skills/github-repository-security-audit/scripts/scanners/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 
 readonly repo=${3:?repository is required}

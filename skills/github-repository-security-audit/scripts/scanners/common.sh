@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Shared trusted file selection for scanner entry points.
+# shellcheck disable=SC2034
 
 set -euo pipefail
 umask 077
