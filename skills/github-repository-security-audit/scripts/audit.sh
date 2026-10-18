@@ -395,6 +395,9 @@ record_all_scanners_error() {
   record_scanner checkov error 0 misconfiguration
   record_scanner trivy-vulnerability error 0 vulnerability
   record_scanner trivy-secret error 0 secret
+  record_scanner osv-scanner error 0 vulnerability
+  record_scanner semgrep error 0 sast
+  record_scanner trufflehog error 0 secret
 }
 
 write_empty_scanner_evidence() {
@@ -418,6 +421,12 @@ write_empty_scanner_evidence() {
     printf '%s\n' '{"SchemaVersion":2,"Trivy":{},"Results":[]}' > "$output/trivy-$kind.json"
     printf '%s\n' 2 > "$output/trivy-$kind-status.txt"
   done
+  for name in osv-scanner semgrep trufflehog; do
+    printf '%s\n' 2 > "$output/$name-status.txt"
+  done
+  printf '%s\n' '{"results":[]}' > "$output/osv-scanner.json"
+  printf '%s\n' '{"results":[],"errors":[]}' > "$output/semgrep.json"
+  printf '%s\n' '[]' > "$output/trufflehog.json"
 }
 
 status_value() {
@@ -852,6 +861,73 @@ record_trivy_scanner() {
 
 record_trivy_scanner vulnerability Vulnerabilities
 record_trivy_scanner secret Secrets
+
+# The new scanners share the existing trusted, disposable checkout. Failure
+# is retained in native status evidence rather than silently skipped.
+"$skill_root/scripts/run-additional-scanners.sh" "$checkout" "$output"
+{
+  printf 'osv-scanner: v2.7.0 (digest-pinned image)\n'
+  printf 'semgrep: 1.180.0 (uvx)\n'
+  printf 'trufflehog: 3.99.2 (digest-pinned image, offline)\n'
+} >> "$output/scanner-versions.txt"
+
+osv_status=$(cat -- "$output/osv-scanner-status.txt")
+if [[ "$osv_status" == 128 ]]; then
+  record_scanner osv-scanner skipped 0
+elif osv_count=$(jq -er '
+  if type == "object" and (.results | type == "array") and
+     all(.results[]; (.packages | type == "array") and
+       all(.packages[]; (.groups | type == "array"))) then
+    [.results[].packages[].groups[]] | length
+  else halt_error(1) end
+' "$output/osv-scanner.json" 2> /dev/null); then
+  if ((osv_count > 0)) && [[ "$osv_status" == 1 ]]; then
+    record_scanner osv-scanner findings "$osv_count" vulnerability
+  elif ((osv_count == 0)) && [[ "$osv_status" == 0 ]]; then
+    record_scanner osv-scanner pass 0
+  else
+    record_scanner osv-scanner error 0 vulnerability
+  fi
+else
+  record_scanner osv-scanner error 0 vulnerability
+fi
+
+semgrep_status=$(cat -- "$output/semgrep-status.txt")
+if semgrep_count=$(jq -er '
+  if type == "object" and (.results | type == "array") and
+     (.errors | type == "array") and (.errors | length) == 0 then
+    .results | length
+  else halt_error(1) end
+' "$output/semgrep.json" 2> /dev/null); then
+  if ((semgrep_count > 0)) && [[ "$semgrep_status" == 1 ]]; then
+    record_scanner semgrep findings "$semgrep_count" sast
+  elif ((semgrep_count == 0)) && [[ "$semgrep_status" == 0 ]]; then
+    record_scanner semgrep pass 0
+  else
+    record_scanner semgrep error 0 sast
+  fi
+else
+  record_scanner semgrep error 0 sast
+fi
+
+trufflehog_status=$(cat -- "$output/trufflehog-status.txt")
+if trufflehog_count=$(jq -er '
+  if type == "array" and all(.[];
+    (.detector | type == "string") and
+    (.verified | type == "boolean") and (.file | type == "string") and
+    (.commit | type == "string") and (.line | type == "number")) then
+    length
+  else halt_error(1) end
+' "$output/trufflehog.json" 2> /dev/null) &&
+    [[ "$trufflehog_status" == 0 ]]; then
+  if ((trufflehog_count > 0)); then
+    record_scanner trufflehog findings "$trufflehog_count" secret
+  else
+    record_scanner trufflehog pass 0
+  fi
+else
+  record_scanner trufflehog error 0 secret
+fi
 
 control_error=false
 control_finding=false
