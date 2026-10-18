@@ -43,6 +43,19 @@ The first run may install the exact versions in `mise.toml`; use `--locked` as
 the script does. The lockfile is skill-local so this audit does not depend on
 the repository's root runtime configuration.
 
+The skill additionally runs **OSV-Scanner** for dependency vulnerabilities,
+**Semgrep OSS** for SAST, and **TruffleHog** for Git-history secrets.
+Docker is required for the digest-pinned OSV-Scanner and TruffleHog
+containers; `uvx` is required for pinned Semgrep. Missing dependencies are
+audit errors, not silently skipped coverage. OSV's vulnerability feed and
+Semgrep's rule registry require network access.
+
+TruffleHog explicitly disables verification and container network access;
+its findings are unverified candidates. Raw secret values are discarded,
+and only detector, file, line and commit metadata are retained.
+Temporary checkout ignore files are removed before these extra scanners
+so that target-owned ignore directives cannot suppress their coverage.
+
 The pinned Checkov release provides a Darwin x86_64 binary but no Darwin
 arm64 binary. On Apple Silicon macOS, the audit therefore requires Rosetta 2
 for the locked Checkov tool; it fails before toolchain installation with a
@@ -67,6 +80,11 @@ Use native scanner evidence rather than inventing scores or thresholds:
 - Scorecard is informational evidence. Its scores do not become findings.
 - Checkov owns IaC misconfiguration findings. Trivy is limited to
   vulnerabilities and secrets.
+- OSV-Scanner reports vulnerable dependency versions. Exit code 128 means no
+  supported dependencies were detected (`skipped`), not a clean scan.
+- Semgrep uses the trusted `p/default` rules with telemetry disabled.
+- TruffleHog findings are **unverified** Git-history secret candidates;
+  never present them as confirmed live credentials.
 - `unknown` means the control was not observable with the available
   permission or product semantics; it is a coverage gap, not evidence of
   enablement or disablement.
