@@ -1,5 +1,6 @@
 [settings]
 lockfile = true
+use_versions_host_track = false
 
 [tools]
 actionlint = "1.7.12"
