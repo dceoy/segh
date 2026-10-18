@@ -421,8 +421,8 @@ write_empty_scanner_evidence() {
     printf '%s\n' '{"SchemaVersion":2,"Trivy":{},"Results":[]}' > "$output/trivy-$kind.json"
     printf '%s\n' 2 > "$output/trivy-$kind-status.txt"
   done
-  for name in osv-scanner semgrep trufflehog; do
-    printf '%s\n' 2 > "$output/$name-status.txt"
+  for scanner_kind in osv-scanner semgrep trufflehog; do
+    printf '%s\n' 2 > "$output/$scanner_kind-status.txt"
   done
   printf '%s\n' '{"results":[]}' > "$output/osv-scanner.json"
   printf '%s\n' '{"results":[],"errors":[]}' > "$output/semgrep.json"
