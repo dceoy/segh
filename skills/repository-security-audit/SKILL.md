@@ -43,10 +43,11 @@ Git operations after cloning ignore system and global configuration,
 including environment-injected configuration parameters, before
 target-controlled attributes can select filters.
 
-The first run may install the current latest tool versions declared in the
-repository-root `mise.toml`. This is the only mise configuration, and no
-`mise.lock` is used. The resulting tool versions are captured in
-`scanner-versions.txt` because subsequent audits may resolve newer releases.
+The first run installs the tool versions pinned by the repository-root
+`mise.lock` (enabled via `lockfile = true` in `mise.toml`, the only mise
+configuration). Pins move only when the lockfile is regenerated, so audits
+track the committed versions rather than the newest releases. The resulting
+tool versions are captured in `scanner-versions.txt`.
 
 The entry point `audit.sh` handles GitHub controls, the checkout/preflight
 boundary, evidence interpretation, and summary generation. **All native source scanner commands** are dispatched by
@@ -59,7 +60,7 @@ The skill additionally runs **OSV-Scanner** for dependency vulnerabilities,
 **Semgrep OSS** for SAST, and **TruffleHog** for Git-history secrets.
 All three tools are executed natively; OSV-Scanner, TruffleHog and uv
 (the `uvx` runner for pinned Semgrep) are installed from the repository-root
-`mise.toml` with `latest` version selectors. Docker is not required.
+`mise.toml` and pinned by `mise.lock`. Docker is not required.
 Missing or incompatible executables are audit errors, not silent skips.
 OSV's vulnerability feed and Semgrep's rule registry require network access.
 
