@@ -486,7 +486,7 @@ jobs:
               ;;
           esac
           git -C _target add .
-      - name: Install checksum-verified scanners
+      - name: Install scanner tools
         if: steps.checkout.outcome == 'success'
         id: tools
         continue-on-error: ${{ inputs.validation_mode }}
@@ -495,7 +495,6 @@ jobs:
           version: 2026.8.3
           sha256: 66585ac496c10bf6fbf13272e3e550c1813aed0e1cb780b9bb73c1751de49289
           working_directory: _trusted
-          install_args: --locked
       - name: Record scanner versions
         if: steps.tools.outcome == 'success'
         id: versions

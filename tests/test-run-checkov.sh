@@ -185,7 +185,7 @@ if ! timeout 20 "$runner" "$serverless_leak_dir" "$results" > "$root/serverless-
 fi
 [[ "$(cat "$results/checkov-status.txt")" == 0 ]]
 
-# Helm 4.2.3 validates values.schema.json by default and its JSON-schema
+# Helm 4 validates values.schema.json by default and its JSON-schema
 # compiler resolves file:/http:/https: $ref loaders with no containment
 # check; Checkov invokes `helm template` itself, so this must be fixed for
 # both the pre-render check and Checkov's own invocation. Point a chart's

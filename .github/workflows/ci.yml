@@ -55,14 +55,11 @@ jobs:
           persist-credentials: false
           lfs: false
           submodules: false
-      - name: Install checksum-verified tools
+      - name: Install scanner tools
         uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
           version: 2026.8.3
           sha256: 66585ac496c10bf6fbf13272e3e550c1813aed0e1cb780b9bb73c1751de49289
-          install_args: --locked
-      - name: Validate standalone audit toolchain lock
-        run: mise -y -C skills/github-repository-security-audit install --locked
       - name: Validate workflow credential boundary
         run: |
           shellcheck --exclude=SC2016 scripts/validate-workflow-boundary.sh
@@ -75,10 +72,8 @@ jobs:
         run: bash tests/test-repository-security-audit.sh
       - name: Test standalone boundary helpers
         run: |
-          mise -C skills/github-repository-security-audit exec --locked -- bash -c \
-            'cd ../.. && bash tests/test-preflight.sh skills/github-repository-security-audit/scripts/preflight.sh'
-          mise -C skills/github-repository-security-audit exec --locked -- bash -c \
-            'cd ../.. && bash tests/test-run-checkov.sh skills/github-repository-security-audit/scripts/scanners/checkov.sh'
+          mise exec -- bash tests/test-preflight.sh skills/repository-security-audit/scripts/preflight.sh
+          mise exec -- bash tests/test-run-checkov.sh skills/repository-security-audit/scripts/scanners/checkov.sh
       - name: Test dashboard normalization and publication
         run: node --test tests/test-dashboard.js tests/test-checkov-summary.js
       - name: Compare Checkov and Trivy IaC coverage

@@ -31,7 +31,7 @@ Scanner-native collection is used only when it preserves the preflighted target 
   - **OpenAPI:** `openapi/runner.py::parse_format()` catches `ValueError` from its YAML/JSON parsing and returns `None` for a malformed OpenAPI document.
 - **Trivy:** keep native `filesystem` collection for vulnerability and secret scanning only. It runs only after preflight has excluded untracked content and unsafe Git object types; target-owned Trivy configuration and ignore files are disabled with `/dev/null`, and `.git` is excluded.
 
-The standalone `github-repository-security-audit` skill additionally runs
+The standalone `repository-security-audit` skill additionally runs
 OSV-Scanner, Semgrep OSS, and TruffleHog without verification or updates against the preflighted
 detached checkout. It retains dependency and SAST findings, plus only
 redacted Git-history secret metadata. These Docker-free tools are added to the **skill**

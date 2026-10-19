@@ -2,7 +2,7 @@
 
 set -euo pipefail
 umask 077
-# shellcheck source=skills/github-repository-security-audit/scripts/scanners/common.sh
+# shellcheck source=skills/repository-security-audit/scripts/scanners/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 
 run_trivy() {
@@ -14,7 +14,7 @@ run_trivy() {
     trivy_env+=(-u "$variable")
   done
   set +e
-  env "${trivy_env[@]}" mise -C "$skill_root" exec --locked -- trivy filesystem --config /dev/null --ignorefile /dev/null \
+  env "${trivy_env[@]}" mise -C "$repo_root" exec -- trivy filesystem --config /dev/null --ignorefile /dev/null \
     --scanners "$scanner_kind" --exit-code 1 --format json --output "$output_file" \
     --skip-dirs "$checkout/.git" --skip-version-check --disable-telemetry "$checkout" \
     > "$output/trivy-$file_kind.log" 2>&1

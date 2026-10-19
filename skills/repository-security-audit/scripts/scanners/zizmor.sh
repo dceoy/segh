@@ -2,7 +2,7 @@
 
 set -euo pipefail
 umask 077
-# shellcheck source=skills/github-repository-security-audit/scripts/scanners/common.sh
+# shellcheck source=skills/repository-security-audit/scripts/scanners/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 
 zizmor_files=()
@@ -14,7 +14,7 @@ if ((${#zizmor_files[@]} == 0)); then
   printf '%s\n' 0 > "$output/zizmor-status.txt"
 else
   set +e
-  mise -C "$skill_root" exec --locked -- zizmor --offline --no-config --no-ignores --no-exit-codes --strict-collection \
+  mise -C "$repo_root" exec -- zizmor --offline --no-config --no-ignores --no-exit-codes --strict-collection \
     --persona regular --min-severity medium --min-confidence high --format json "${zizmor_files[@]}" \
     > "$output/zizmor.json" 2> "$output/zizmor.log"
   zizmor_status=$?

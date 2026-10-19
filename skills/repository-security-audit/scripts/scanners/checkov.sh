@@ -16,7 +16,7 @@ rm -rf -- "$scan_root/.git"
 rm -f -- "$scan_root/.checkov.yml" "$scan_root/.checkov.yaml"
 mkdir -p -- "$results"
 
-# Helm 4.2.3 validates values.schema.json by default, and its JSON-schema
+# Helm 4 validates values.schema.json by default, and its JSON-schema
 # compiler resolves file:/http:/https: $ref loaders with no containment
 # check, so a chart-controlled schema can force target-controlled network
 # access or read arbitrary files. Checkov invokes `helm template` itself, so

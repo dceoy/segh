@@ -1,6 +1,6 @@
 ---
-name: github-repository-security-audit
-description: Audit one GitHub repository's immutable default-branch revision with pinned source scanners and read-only GitHub security controls, retaining machine-readable evidence for an agent-written report.
+name: repository-security-audit
+description: Audit one GitHub repository's immutable default-branch revision with repository-managed source scanners and read-only GitHub security controls, retaining machine-readable evidence for an agent-written report.
 ---
 
 # GitHub repository security audit
@@ -15,7 +15,7 @@ production organization workflow at runtime.
 From the repository containing this skill, run:
 
 ```bash
-.agents/skills/github-repository-security-audit/scripts/audit.sh \
+.agents/skills/repository-security-audit/scripts/audit.sh \
   --repo OWNER/REPO \
   --output ./security-audit
 ```
@@ -29,7 +29,7 @@ that results from separate audits cannot be mixed.
 
 The script resolves the default branch to a lowercase 40-character commit
 SHA, checks out only that detached revision with credentials and submodules
-disabled, runs the locked toolchain from this directory, and stores evidence
+disabled, runs the repository-root mise toolchain, and stores evidence
 outside the checkout. Target files are never executed. A failed preflight,
 scanner, parser, renderer, API response, or evidence check must remain an
 error or coverage gap; do not turn it into a pass in the report.
@@ -43,9 +43,10 @@ Git operations after cloning ignore system and global configuration,
 including environment-injected configuration parameters, before
 target-controlled attributes can select filters.
 
-The first run may install the exact versions in `mise.toml`; use `--locked` as
-the script does. The lockfile is skill-local so this audit does not depend on
-the repository's root runtime configuration.
+The first run may install the current latest tool versions declared in the
+repository-root `mise.toml`. This is the only mise configuration, and no
+`mise.lock` is used. The resulting tool versions are captured in
+`scanner-versions.txt` because subsequent audits may resolve newer releases.
 
 The entry point `audit.sh` handles GitHub controls, the checkout/preflight
 boundary, evidence interpretation, and summary generation. **All native source scanner commands** are dispatched by
@@ -57,8 +58,8 @@ separately so that incomplete coverage cannot appear clean.
 The skill additionally runs **OSV-Scanner** for dependency vulnerabilities,
 **Semgrep OSS** for SAST, and **TruffleHog** for Git-history secrets.
 All three tools are executed natively; OSV-Scanner, TruffleHog and uv
-(the `uvx` runner for pinned Semgrep) are version-pinned in the skill-local
-`mise.toml` and checksummed in `mise.lock`. Docker is not required.
+(the `uvx` runner for pinned Semgrep) are installed from the repository-root
+`mise.toml` with `latest` version selectors. Docker is not required.
 Missing or incompatible executables are audit errors, not silent skips.
 OSV's vulnerability feed and Semgrep's rule registry require network access.
 
@@ -70,10 +71,9 @@ metadata are retained.
 Temporary checkout ignore files are removed before these extra scanners
 so that target-owned ignore directives cannot suppress their coverage.
 
-The pinned Checkov release provides a Darwin x86_64 binary but no Darwin
-arm64 binary. On Apple Silicon macOS, the audit therefore requires Rosetta 2
-for the locked Checkov tool; it fails before toolchain installation with a
-clear prerequisite error when x86_64 execution is unavailable.
+The audit currently requires Rosetta 2 on Apple Silicon macOS for the
+Darwin x86_64 Checkov binary; it fails before toolchain installation when
+x86_64 execution is unavailable.
 
 ShellCheck runs through the skill-local trusted wrapper. It removes external
 source loading and rejects target-owned ShellCheck directives so target files

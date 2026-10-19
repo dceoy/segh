@@ -2,11 +2,11 @@
 
 set -euo pipefail
 umask 077
-# shellcheck source=skills/github-repository-security-audit/scripts/scanners/common.sh
+# shellcheck source=skills/repository-security-audit/scripts/scanners/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 
 set +e
-mise -C "$skill_root" exec --locked -- osv-scanner scan source \
+mise -C "$repo_root" exec -- osv-scanner scan source \
   --recursive --no-ignore --config /dev/null \
   --format json "$checkout" \
   > "$output/osv-scanner.json" 2> "$output/osv-scanner.log"

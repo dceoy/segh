@@ -5,7 +5,8 @@ umask 077
 export GH_TELEMETRY=false
 
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-readonly skill_root
+repo_root=$(cd -- "$skill_root/../.." && pwd)
+readonly skill_root repo_root
 readonly repo_pattern='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
 
 repo=''
@@ -23,7 +24,7 @@ EOF
 
 fail() {
   local message=$1
-  printf 'github-repository-security-audit: %s\n' "$message" >&2
+  printf 'repository-security-audit: %s\n' "$message" >&2
   if [[ -n "${output:-}" && -d "${output:-}" ]]; then
     printf '%s\n' "$message" > "$output/audit-error.txt"
   fi
@@ -60,7 +61,7 @@ shopt -s nullglob dotglob
 output_entries=("$output"/*)
 shopt -u nullglob dotglob
 if ((${#output_entries[@]} > 0)); then
-  printf 'github-repository-security-audit: output directory must be empty: %s\n' "$output" >&2
+  printf 'repository-security-audit: output directory must be empty: %s\n' "$output" >&2
   exit 1
 fi
 unset output_entries
@@ -461,7 +462,7 @@ build_summary() {
         versions: $versions_stage, preflight: $preflight_stage},
       scanners: $scanners,
       github_controls: $controls[0].controls,
-      evidence_artifact: "github-repository-security-audit"}' \
+      evidence_artifact: "repository-security-audit"}' \
     > "$output/summary.json"
   jq '{schema_version: 1,
       gaps: [.github_controls[] | select(.state == "unknown") | {id, reason, required_permission}],
@@ -479,16 +480,16 @@ host_arch=$(uname -m)
 if [[ "$host_os" == Darwin && "$host_arch" == arm64 ]]; then
   if ! arch -x86_64 /usr/bin/true > "$output/toolchain.log" 2>&1; then
     toolchain_status=1
-    printf '%s\n' 'Apple Silicon macOS requires Rosetta 2 for the locked Darwin x86_64 Checkov binary' >> "$output/toolchain.log"
+    printf '%s\n' 'Apple Silicon macOS requires Rosetta 2 for the Darwin x86_64 Checkov binary' >> "$output/toolchain.log"
   fi
 fi
 if ((toolchain_status == 0)); then
   if ! command -v mise > /dev/null 2>&1; then
     toolchain_status=127
-    printf '%s\n' 'mise is required to install and run the locked audit toolchain' > "$output/toolchain.log"
+    printf '%s\n' 'mise is required to install and run the repository-root audit toolchain' > "$output/toolchain.log"
   else
     set +e
-    mise -y -C "$skill_root" install --locked > "$output/toolchain.log" 2>&1
+    mise -y -C "$repo_root" install > "$output/toolchain.log" 2>&1
     toolchain_status=$?
     set -e
   fi
@@ -562,27 +563,27 @@ fi
 versions_status=0
 {
   printf 'scorecard: '
-  mise -C "$skill_root" exec --locked -- scorecard version || versions_status=1
+  mise -C "$repo_root" exec -- scorecard version || versions_status=1
   printf 'zizmor: '
-  mise -C "$skill_root" exec --locked -- zizmor --version || versions_status=1
+  mise -C "$repo_root" exec -- zizmor --version || versions_status=1
   printf 'actionlint: '
-  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- actionlint -version || versions_status=1
+  env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- actionlint -version || versions_status=1
   printf 'shellcheck: '
-  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- shellcheck --version | head -n 2 | tail -n 1 || versions_status=1
+  env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- shellcheck --version | head -n 2 | tail -n 1 || versions_status=1
   printf 'checkov: '
-  mise -C "$skill_root" exec --locked -- checkov --version || versions_status=1
+  mise -C "$repo_root" exec -- checkov --version || versions_status=1
   printf 'helm: '
-  mise -C "$skill_root" exec --locked -- helm version --short || versions_status=1
+  mise -C "$repo_root" exec -- helm version --short || versions_status=1
   printf 'kubectl: '
-  mise -C "$skill_root" exec --locked -- kubectl version --client || versions_status=1
+  mise -C "$repo_root" exec -- kubectl version --client || versions_status=1
   printf 'trivy: '
-  mise -C "$skill_root" exec --locked -- trivy --version | head -n 1 || versions_status=1
+  mise -C "$repo_root" exec -- trivy --version | head -n 1 || versions_status=1
   printf 'osv-scanner: '
-  mise -C "$skill_root" exec --locked -- osv-scanner --version || versions_status=1
+  mise -C "$repo_root" exec -- osv-scanner --version || versions_status=1
   printf 'trufflehog: '
-  mise -C "$skill_root" exec --locked -- trufflehog --version || versions_status=1
+  mise -C "$repo_root" exec -- trufflehog --version || versions_status=1
   printf 'uvx: '
-  mise -C "$skill_root" exec --locked -- uvx --version || versions_status=1
+  mise -C "$repo_root" exec -- uvx --version || versions_status=1
 } > "$output/scanner-versions.txt" 2> "$output/scanner-versions.log"
 printf '%s\n' "$versions_status" > "$output/versions-status.txt"
 

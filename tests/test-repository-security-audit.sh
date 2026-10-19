@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-readonly audit=${1:-skills/github-repository-security-audit/scripts/audit.sh}
+readonly audit=${1:-skills/repository-security-audit/scripts/audit.sh}
 root=$(mktemp -d)
 readonly root
 trap 'rm -rf -- "$root"' EXIT
@@ -468,9 +468,9 @@ jq -e '
 [[ -f "$root/first/scanners-run.log" ]]
 grep -F 'osv-scanner scan source' "$root/first.mise.log" > /dev/null
 grep -F 'trufflehog git file://' "$root/first.mise.log" > /dev/null
-# Scanner entrypoints, including Checkov, need the installed locked toolchain
+# Scanner entrypoints, including Checkov, need the installed root toolchain
 # on PATH; merely installing binaries is insufficient without mise exec.
-grep -F 'exec --locked -- bash ' "$root/first.mise.log" | grep -F '/scanners/checkov.sh' > /dev/null
+grep -F 'exec -- bash ' "$root/first.mise.log" | grep -F '/scanners/checkov.sh' > /dev/null
 grep -F 'uvx --from semgrep==1.180.0' "$root/first.mise.log" > /dev/null
 [[ "$(jq -r '.controls[] | select(.id == "actions_permissions") | .state' "$root/first/github-controls.json")" == finding ]]
 [[ "$(jq -r '.controls[] | select(.id == "vulnerability_alerts") | .state' "$root/first/github-controls.json")" == pass ]]
