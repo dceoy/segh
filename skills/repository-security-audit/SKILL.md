@@ -43,10 +43,11 @@ Git operations after cloning ignore system and global configuration,
 including environment-injected configuration parameters, before
 target-controlled attributes can select filters.
 
-The first run may install the current latest tool versions declared in the
-skill-local `mise.toml`, independently of the host repository's mise configuration.
-`MISE_CEILING_PATHS` prevents loading host project-level configs. The skill-local
-`mise.lock` records the resolved versions and checksums for Linux and macOS;
+The first run installs tools from the skill-local `mise.toml`, independently
+of the host repository's mise configuration. `MISE_CEILING_PATHS` prevents
+loading host project-level configs. The skill-local `mise.lock` pins
+resolved versions and checksums for Linux and macOS; regenerate it to update
+`latest` selections after the seven-day minimum release age.
 `scanner-versions.txt` captures the versions actually used in each audit.
 
 The entry point `audit.sh` handles GitHub controls, the checkout/preflight
