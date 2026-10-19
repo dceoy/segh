@@ -48,7 +48,8 @@ fi
 fi
 
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-readonly skill_root
+repo_root=$(cd -- "$skill_root/../.." && pwd)
+readonly skill_root repo_root
 unset SHELLCHECK_OPTS
 
 shellcheck_args=()
