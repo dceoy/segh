@@ -18,7 +18,7 @@ if ! "$skill_root/scripts/validate-trivy-directives.sh" "$checkout" > "$output/t
 fi
 
 set +e
-env "${trivy_env[@]}" mise -C "$repo_root" exec -- trivy filesystem --config /dev/null --ignorefile /dev/null \
+env "${trivy_env[@]}" mise -C "$skill_root" exec -- trivy filesystem --config /dev/null --ignorefile /dev/null \
   --scanners vuln,secret,misconfig --exit-code 1 --format json --output "$output/trivy.json" \
   --skip-dirs "$checkout/.git" --skip-version-check --disable-telemetry "$checkout" \
   > "$output/trivy.log" 2>&1

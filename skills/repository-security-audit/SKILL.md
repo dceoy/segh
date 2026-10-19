@@ -29,7 +29,7 @@ that results from separate audits cannot be mixed.
 
 The script resolves the default branch to a lowercase 40-character commit
 SHA, checks out only that detached revision with credentials and submodules
-disabled, runs the repository-root mise toolchain, and stores evidence
+disabled, runs the skill-local mise toolchain, and stores evidence
 outside the checkout. Target files are never executed. A failed preflight,
 scanner, parser, renderer, API response, or evidence check must remain an
 error or coverage gap; do not turn it into a pass in the report.
@@ -44,8 +44,8 @@ including environment-injected configuration parameters, before
 target-controlled attributes can select filters.
 
 The first run may install the current latest tool versions declared in the
-repository-root `mise.toml`. This is the only mise configuration, and no
-`mise.lock` is used. The resulting tool versions are captured in
+skill-local `mise.toml`, independently of the host repository's mise configuration.
+`MISE_CEILING_PATHS` prevents loading host project-level configs. No `mise.lock` is used. The resulting tool versions are captured in
 `scanner-versions.txt` because subsequent audits may resolve newer releases.
 
 The entry point `audit.sh` handles GitHub controls, the checkout/preflight
@@ -58,7 +58,7 @@ separately so that incomplete coverage cannot appear clean.
 The skill additionally runs **OSV-Scanner** for dependency vulnerabilities,
 **Semgrep OSS** for SAST, and **TruffleHog** for Git-history secrets.
 All three tools are executed natively; OSV-Scanner, TruffleHog and uv
-(the `uvx` runner for pinned Semgrep) are installed from the repository-root
+(the `uvx` runner for pinned Semgrep) are installed from the skill-local
 `mise.toml` with `latest` version selectors. Docker is not required.
 Missing or incompatible executables are audit errors, not silent skips.
 OSV's vulnerability feed and Semgrep's rule registry require network access.

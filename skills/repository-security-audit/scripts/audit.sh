@@ -5,8 +5,8 @@ umask 077
 export GH_TELEMETRY=false
 
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-repo_root=$(cd -- "$skill_root/../.." && pwd)
-readonly skill_root repo_root
+readonly skill_root
+export MISE_CEILING_PATHS="$(dirname -- "$skill_root")"
 readonly repo_pattern='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
 
 repo=''
@@ -485,10 +485,10 @@ fi
 if ((toolchain_status == 0)); then
   if ! command -v mise > /dev/null 2>&1; then
     toolchain_status=127
-    printf '%s\n' 'mise is required to install and run the repository-root audit toolchain' > "$output/toolchain.log"
+    printf '%s\n' 'mise is required to install and run the skill-local audit toolchain' > "$output/toolchain.log"
   else
     set +e
-    mise -y -C "$repo_root" install > "$output/toolchain.log" 2>&1
+    mise -y -C "$skill_root" install > "$output/toolchain.log" 2>&1
     toolchain_status=$?
     set -e
   fi
@@ -562,27 +562,27 @@ fi
 versions_status=0
 {
   printf 'scorecard: '
-  mise -C "$repo_root" exec -- scorecard version || versions_status=1
+  mise -C "$skill_root" exec -- scorecard version || versions_status=1
   printf 'zizmor: '
-  mise -C "$repo_root" exec -- zizmor --version || versions_status=1
+  mise -C "$skill_root" exec -- zizmor --version || versions_status=1
   printf 'actionlint: '
-  env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- actionlint -version || versions_status=1
+  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec -- actionlint -version || versions_status=1
   printf 'shellcheck: '
-  env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- shellcheck --version | head -n 2 | tail -n 1 || versions_status=1
+  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec -- shellcheck --version | head -n 2 | tail -n 1 || versions_status=1
   printf 'checkov: '
-  mise -C "$repo_root" exec -- checkov --version || versions_status=1
+  mise -C "$skill_root" exec -- checkov --version || versions_status=1
   printf 'helm: '
-  mise -C "$repo_root" exec -- helm version --short || versions_status=1
+  mise -C "$skill_root" exec -- helm version --short || versions_status=1
   printf 'kubectl: '
-  mise -C "$repo_root" exec -- kubectl version --client || versions_status=1
+  mise -C "$skill_root" exec -- kubectl version --client || versions_status=1
   printf 'trivy: '
-  mise -C "$repo_root" exec -- trivy --version | head -n 1 || versions_status=1
+  mise -C "$skill_root" exec -- trivy --version | head -n 1 || versions_status=1
   printf 'osv-scanner: '
-  mise -C "$repo_root" exec -- osv-scanner --version || versions_status=1
+  mise -C "$skill_root" exec -- osv-scanner --version || versions_status=1
   printf 'trufflehog: '
-  mise -C "$repo_root" exec -- trufflehog --version || versions_status=1
+  mise -C "$skill_root" exec -- trufflehog --version || versions_status=1
   printf 'uvx: '
-  mise -C "$repo_root" exec -- uvx --version || versions_status=1
+  mise -C "$skill_root" exec -- uvx --version || versions_status=1
 } > "$output/scanner-versions.txt" 2> "$output/scanner-versions.log"
 printf '%s\n' "$versions_status" > "$output/versions-status.txt"
 

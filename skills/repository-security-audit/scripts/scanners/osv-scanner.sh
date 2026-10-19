@@ -6,7 +6,7 @@ umask 077
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 
 set +e
-mise -C "$repo_root" exec -- osv-scanner scan source \
+mise -C "$skill_root" exec -- osv-scanner scan source \
   --recursive --no-ignore --config /dev/null \
   --format json "$checkout" \
   > "$output/osv-scanner.json" 2> "$output/osv-scanner.log"
