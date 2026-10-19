@@ -1,6 +1,6 @@
 [settings]
 minimum_release_age = "7d"
-lockfile = false
+lockfile = true
 use_versions_host_track = false
 
 [tools]
