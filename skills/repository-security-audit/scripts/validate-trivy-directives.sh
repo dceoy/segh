@@ -5,7 +5,8 @@ set -euo pipefail
 readonly target=${1:?target checkout is required}
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 readonly skill_root
-export MISE_CEILING_PATHS="$(dirname -- "$skill_root")"
+MISE_CEILING_PATHS=$(dirname -- "$skill_root")
+export MISE_CEILING_PATHS
 index=$(mktemp)
 readonly index
 trap 'rm -f -- "$index"' EXIT

@@ -6,7 +6,8 @@ export GH_TELEMETRY=false
 
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 readonly skill_root
-export MISE_CEILING_PATHS="$(dirname -- "$skill_root")"
+MISE_CEILING_PATHS=$(dirname -- "$skill_root")
+export MISE_CEILING_PATHS
 readonly repo_pattern='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
 
 repo=''

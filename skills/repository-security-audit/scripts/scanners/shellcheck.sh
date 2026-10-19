@@ -49,7 +49,8 @@ fi
 
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 readonly skill_root
-export MISE_CEILING_PATHS="$(dirname -- "$skill_root")"
+MISE_CEILING_PATHS=$(dirname -- "$skill_root")
+export MISE_CEILING_PATHS
 unset SHELLCHECK_OPTS
 
 shellcheck_args=()

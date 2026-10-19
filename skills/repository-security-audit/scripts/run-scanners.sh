@@ -9,7 +9,8 @@ checkout=$(cd -- "${3:?checkout is required}" && pwd)
 output=$(cd -- "${4:?evidence directory required}" && pwd)
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 readonly checkout output skill_root
-export MISE_CEILING_PATHS="$(dirname -- "$skill_root")"
+MISE_CEILING_PATHS=$(dirname -- "$skill_root")
+export MISE_CEILING_PATHS
 
 # The checkout passed preflight. Target-owned ignore rules must not
 # suppress the native scanners. Only this disposable checkout is modified.
