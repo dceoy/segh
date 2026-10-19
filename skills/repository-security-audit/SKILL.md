@@ -45,8 +45,9 @@ target-controlled attributes can select filters.
 
 The first run may install the current latest tool versions declared in the
 skill-local `mise.toml`, independently of the host repository's mise configuration.
-`MISE_CEILING_PATHS` prevents loading host project-level configs. No `mise.lock` is used. The resulting tool versions are captured in
-`scanner-versions.txt` because subsequent audits may resolve newer releases.
+`MISE_CEILING_PATHS` prevents loading host project-level configs. The skill-local
+`mise.lock` records the resolved versions and checksums for Linux and macOS;
+`scanner-versions.txt` captures the versions actually used in each audit.
 
 The entry point `audit.sh` handles GitHub controls, the checkout/preflight
 boundary, evidence interpretation, and summary generation. **All native source scanner commands** are dispatched by
