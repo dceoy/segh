@@ -114,7 +114,7 @@ readonly lfs_target_sha
 cat > "$fake_bin/mise" <<'EOF_MISE'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> "${MISE_LOG:-/dev/null}"
+printf '%s|%s\n' "${MISE_CEILING_PATHS:-unset}" "$*" >> "${MISE_LOG:-/dev/null}"
 while [[ ${1:-} == -y || ${1:-} == --yes ]]; do shift; done
 while [[ ${1:-} == -C ]]; do shift 2; done
 case "${1:-}" in
@@ -493,9 +493,11 @@ jq -e '
 [[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 11 ]]
 [[ "$(cat "$root/first/scanners-run-status.txt")" == 0 ]]
 [[ -f "$root/first/scanners-run.log" ]]
+expected_ceiling=$(cd -- "$(dirname -- "$audit")/../.." && pwd)
+[[ "$(cut -d '|' -f 1 "$root/first.mise.log" | LC_ALL=C sort -u)" == "$expected_ceiling" ]]
 grep -F 'osv-scanner scan source' "$root/first.mise.log" > /dev/null
 grep -F 'trufflehog git file://' "$root/first.mise.log" > /dev/null
-# Scanner entrypoints, including Checkov, need the installed root toolchain
+# Scanner entrypoints, including Checkov, need the installed skill-local toolchain
 # on PATH; merely installing binaries is insufficient without mise exec.
 grep -F 'exec -- bash ' "$root/first.mise.log" | grep -F '/scanners/checkov.sh' > /dev/null
 grep -F 'uvx --from semgrep==1.180.0' "$root/first.mise.log" > /dev/null

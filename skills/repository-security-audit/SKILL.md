@@ -29,7 +29,7 @@ that results from separate audits cannot be mixed.
 
 The script resolves the default branch to a lowercase 40-character commit
 SHA, checks out only that detached revision with credentials and submodules
-disabled, runs the repository-root mise toolchain, and stores evidence
+disabled, runs the skill-local mise toolchain, and stores evidence
 outside the checkout. Target files are never executed. A failed preflight,
 scanner, parser, renderer, API response, or evidence check must remain an
 error or coverage gap; do not turn it into a pass in the report.
@@ -43,11 +43,12 @@ Git operations after cloning ignore system and global configuration,
 including environment-injected configuration parameters, before
 target-controlled attributes can select filters.
 
-The first run installs the tool versions pinned by the repository-root
-`mise.lock` (enabled via `lockfile = true` in `mise.toml`, the only mise
-configuration). Pins move only when the lockfile is regenerated, so audits
-track the committed versions rather than the newest releases. The resulting
-tool versions are captured in `scanner-versions.txt`.
+The first run installs tools from the skill-local `mise.toml`, independently
+of the host repository's mise configuration. `MISE_CEILING_PATHS` prevents
+loading host project-level configs. The skill-local `mise.lock` pins
+resolved versions and checksums for Linux and macOS; regenerate it to update
+`latest` selections after the seven-day minimum release age.
+`scanner-versions.txt` captures the versions actually used in each audit.
 
 The entry point `audit.sh` handles GitHub controls, the checkout/preflight
 boundary, evidence interpretation, and summary generation. **All native source scanner commands** are dispatched by
@@ -59,8 +60,8 @@ separately so that incomplete coverage cannot appear clean.
 The skill additionally runs **OSV-Scanner** for dependency vulnerabilities,
 **Semgrep OSS** for SAST, and **TruffleHog** for Git-history secrets.
 All three tools are executed natively; OSV-Scanner, TruffleHog and uv
-(the `uvx` runner for pinned Semgrep) are installed from the repository-root
-`mise.toml` and pinned by `mise.lock`. Docker is not required.
+(the `uvx` runner for pinned Semgrep) are installed from the skill-local
+`mise.toml` with `latest` version selectors. Docker is not required.
 Missing or incompatible executables are audit errors, not silent skips.
 OSV's vulnerability feed and Semgrep's rule registry require network access.
 

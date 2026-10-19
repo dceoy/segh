@@ -11,7 +11,7 @@ trap 'rm -rf -- "$tmp"' EXIT
 # the absence of Docker is not a replacement for OS-level network isolation.
 # Raw detector results may contain credentials: allowlist fields before writing.
 set +e
-mise -C "$repo_root" exec -- \
+mise -C "$skill_root" exec -- \
   trufflehog git "file://$checkout" --no-update --no-verification \
   --no-ignore-tag --fail-on-scan-errors \
   --results=verified,unknown,unverified --json \

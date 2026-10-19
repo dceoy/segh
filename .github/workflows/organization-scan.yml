@@ -282,6 +282,7 @@ jobs:
     env:
       GH_TELEMETRY: 'false'
       MISE_USE_VERSIONS_HOST_TRACK: 'false'
+      MISE_CEILING_PATHS: ${{ github.workspace }}/_trusted/skills
     permissions:
       contents: read
       checks: read
@@ -494,7 +495,7 @@ jobs:
         with:
           version: 2026.8.3
           sha256: 66585ac496c10bf6fbf13272e3e550c1813aed0e1cb780b9bb73c1751de49289
-          working_directory: _trusted
+          working_directory: _trusted/skills/repository-security-audit
       - name: Record scanner versions
         if: steps.tools.outcome == 'success'
         id: versions

@@ -33,7 +33,7 @@ if ((scorecard_auth_status == 0)); then
   : > "$output/scorecard-auth.log"
   set +e
   GITHUB_AUTH_TOKEN="$scorecard_token" \
-    mise -C "$repo_root" exec -- scorecard --repo="$repo" --commit="$commit_sha" \
+    mise -C "$skill_root" exec -- scorecard --repo="$repo" --commit="$commit_sha" \
       --show-details --format=json > "$output/scorecard.json" 2> "$output/scorecard.log"
   scorecard_status=$?
   set -e
