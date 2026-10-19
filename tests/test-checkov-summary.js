@@ -25,8 +25,7 @@ function fixture() {
   fs.writeFileSync(path.join(dir, "actionlint.jsonl"), "");
   writeJson(path.join(dir, "shellcheck.json"), []);
   fs.writeFileSync(path.join(dir, "shellcheck-status.txt"), "0\n");
-  writeJson(path.join(dir, "trivy-vulnerability.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
-  writeJson(path.join(dir, "trivy-secret.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
+  writeJson(path.join(dir, "trivy.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
   return dir;
 }
 
@@ -41,8 +40,7 @@ function env(overrides = {}) {
     ACTIONLINT_OUTCOME: "success",
     SHELLCHECK_OUTCOME: "success",
     CHECKOV_OUTCOME: "success",
-    TRIVY_VULNERABILITY_OUTCOME: "success",
-    TRIVY_SECRET_OUTCOME: "success",
+    TRIVY_OUTCOME: "success",
     ...overrides,
   };
 }

@@ -130,23 +130,38 @@ function parseCheckov(resultsDir, outcome) {
   }
 }
 
-function parseTrivy(resultsDir, outcome, kind, property, category) {
-  const name = `trivy-${kind}`;
-  if (outcome === "skipped") return result(name, "skipped");
-  const file = path.join(resultsDir, `${name}.json`);
-  if (!exists(file)) return result(name, "error");
+function parseTrivy(resultsDir, outcome) {
+  const kinds = [
+    ["vulnerability", "Vulnerabilities", "vulnerability"],
+    ["secret", "Secrets", "secret"],
+    ["misconfiguration", "Misconfigurations", "misconfiguration"],
+  ];
+  const all = (status) => kinds.map(([kind]) => result("trivy-" + kind, status));
+  if (outcome === "skipped") return all("skipped");
+  const file = path.join(resultsDir, "trivy.json");
+  if (!exists(file)) return all("error");
   try {
     const data = readJson(file);
-    if (!data || typeof data !== "object" || Array.isArray(data)) return result(name, "error");
+    if (!data || typeof data !== "object" || Array.isArray(data)) return all("error");
     let rows;
     if (Array.isArray(data.Results)) rows = data.Results;
-    else if (outcome === "success" && data.Results === undefined && data.SchemaVersion === 2 && data.Trivy && typeof data.Trivy === "object") rows = [];
-    else return result(name, "error");
-    const findings = rows.reduce((count, row) => count + (Array.isArray(row?.[property]) ? row[property].length : 0), 0);
-    if (findings) return result(name, "findings", findings, category);
-    return result(name, outcome === "success" ? "pass" : "error");
+    else if (data.Results === undefined && data.SchemaVersion === 2 &&
+      data.Trivy && typeof data.Trivy === "object" && !Array.isArray(data.Trivy)) rows = [];
+    else return all("error");
+    if (!rows.every((row) => row && typeof row === "object" && !Array.isArray(row) &&
+      kinds.every(([, property]) => row[property] === undefined || Array.isArray(row[property])))) {
+      return all("error");
+    }
+    const counts = kinds.map(([, property]) => rows.reduce((n, row) => n + (row[property]?.length ?? 0), 0));
+    const total = counts.reduce((a, b) => a + b, 0);
+    if ((outcome === "success" && total !== 0) ||
+      (outcome === "failure" && total === 0) ||
+      !["success", "failure"].includes(outcome)) return all("error");
+    return kinds.map(([kind, , category], index) => counts[index]
+      ? result("trivy-" + kind, "findings", counts[index], category)
+      : result("trivy-" + kind, "pass"));
   } catch {
-    return result(name, "error");
+    return all("error");
   }
 }
 
@@ -173,8 +188,7 @@ function buildSummary({resultsDir, env = process.env}) {
     actionlint: normalizeOutcome(env.ACTIONLINT_OUTCOME),
     shellcheck: normalizeOutcome(env.SHELLCHECK_OUTCOME),
     checkov: normalizeOutcome(env.CHECKOV_OUTCOME),
-    trivyVulnerability: normalizeOutcome(env.TRIVY_VULNERABILITY_OUTCOME),
-    trivySecret: normalizeOutcome(env.TRIVY_SECRET_OUTCOME),
+    trivy: normalizeOutcome(env.TRIVY_OUTCOME),
   };
 
   const scanners = [
@@ -183,8 +197,7 @@ function buildSummary({resultsDir, env = process.env}) {
     parseActionlint(resultsDir, outcomes.actionlint),
     parseShellcheck(resultsDir, outcomes.shellcheck),
     parseCheckov(resultsDir, outcomes.checkov),
-    parseTrivy(resultsDir, outcomes.trivyVulnerability, "vulnerability", "Vulnerabilities", "vulnerability"),
-    parseTrivy(resultsDir, outcomes.trivySecret, "secret", "Secrets", "secret"),
+    ...parseTrivy(resultsDir, outcomes.trivy),
   ];
 
   let overallStatus = "pass";

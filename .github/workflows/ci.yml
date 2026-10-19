@@ -76,7 +76,7 @@ jobs:
           mise exec -- bash tests/test-run-checkov.sh skills/repository-security-audit/scripts/scanners/checkov.sh
       - name: Test dashboard normalization and publication
         run: node --test tests/test-dashboard.js tests/test-checkov-summary.js
-      - name: Compare Checkov and Trivy IaC coverage
+      - name: Validate Checkov and Trivy IaC coverage
         run: |
           [[ -f tests/fixtures/iac/.checkov.yml ]]
           set +e

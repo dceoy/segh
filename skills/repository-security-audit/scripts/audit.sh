@@ -397,6 +397,7 @@ record_all_scanners_error() {
   record_scanner checkov error 0 misconfiguration
   record_scanner trivy-vulnerability error 0 vulnerability
   record_scanner trivy-secret error 0 secret
+  record_scanner trivy-misconfiguration error 0 misconfiguration
   record_scanner osv-scanner error 0 vulnerability
   record_scanner semgrep error 0 sast
   record_scanner trufflehog error 0 secret
@@ -419,10 +420,8 @@ write_empty_scanner_evidence() {
   printf '%s\n' 2 > "$output/shellcheck-status.txt"
   printf '%s\n' 'null' > "$output/checkov.json"
   printf '%s\n' 2 > "$output/checkov-status.txt"
-  for kind in vulnerability secret; do
-    printf '%s\n' '{"SchemaVersion":2,"Trivy":{},"Results":[]}' > "$output/trivy-$kind.json"
-    printf '%s\n' 2 > "$output/trivy-$kind-status.txt"
-  done
+  printf '%s\n' '{"SchemaVersion":2,"Trivy":{},"Results":[]}' > "$output/trivy.json"
+  printf '%s\n' 2 > "$output/trivy-status.txt"
   for scanner_kind in osv-scanner semgrep trufflehog; do
     printf '%s\n' 2 > "$output/$scanner_kind-status.txt"
   done
@@ -682,32 +681,47 @@ else
   record_scanner checkov error 0 misconfiguration
 fi
 
-record_trivy_scanner() {
-  local kind=$1 property=$2
-  local status count file="$output/trivy-$kind.json"
-  status=$(cat -- "$output/trivy-$kind-status.txt")
-  if ! count=$(jq -er --arg property "$property" '
-    . as $data |
-    if ($data | type == "object") and
-       (($data.Results | type == "array") or
-        ($data.Results == null and $data.SchemaVersion == 2 and ($data.Trivy | type == "object"))) then
-      [$data.Results[]?[$property][]?] | length
-    else
-      halt_error(1)
-    end
-  ' "$file" 2> /dev/null); then
-    record_scanner "trivy-$kind" error 0 "$kind"
-  elif ((count > 0)) && [[ "$status" == 1 ]]; then
-    record_scanner "trivy-$kind" findings "$count" "$kind"
-  elif ((count == 0)) && [[ "$status" == 0 ]]; then
-    record_scanner "trivy-$kind" pass 0
+trivy_status=$(cat -- "$output/trivy-status.txt" 2> /dev/null || printf '2')
+if trivy_counts=$(jq -er '
+  if type != "object" then halt_error(1) end |
+  (if (.Results | type) == "array" then .Results
+   elif (.Results == null) and .SchemaVersion == 2 and (.Trivy | type) == "object"
+   then []
+   else halt_error(1) end) as $rows |
+  if any($rows[]; type != "object" or
+    ((.Vulnerabilities? != null) and (.Vulnerabilities | type) != "array") or
+    ((.Secrets? != null) and (.Secrets | type) != "array") or
+    ((.Misconfigurations? != null) and (.Misconfigurations | type) != "array"))
+  then halt_error(1)
+  else [
+    ([$rows[] | .Vulnerabilities[]?] | length),
+    ([$rows[] | .Secrets[]?] | length),
+    ([$rows[] | .Misconfigurations[]?] | length)
+  ] | @tsv end
+' "$output/trivy.json" 2> /dev/null); then
+  IFS=$'\t' read -r trivy_vuln trivy_secret trivy_misconfig <<< "$trivy_counts"
+  trivy_total=$((trivy_vuln + trivy_secret + trivy_misconfig))
+  if { [[ "$trivy_status" == 0 ]] && ((trivy_total == 0)); } ||
+     { [[ "$trivy_status" == 1 ]] && ((trivy_total > 0)); }; then
+    for entry in "vulnerability:$trivy_vuln" "secret:$trivy_secret" "misconfiguration:$trivy_misconfig"; do
+      kind=${entry%%:*}
+      count=${entry#*:}
+      if ((count > 0)); then
+        record_scanner "trivy-$kind" findings "$count" "$kind"
+      else
+        record_scanner "trivy-$kind" pass 0
+      fi
+    done
   else
-    record_scanner "trivy-$kind" error "$count" "$kind"
+    record_scanner trivy-vulnerability error 0 vulnerability
+    record_scanner trivy-secret error 0 secret
+    record_scanner trivy-misconfiguration error 0 misconfiguration
   fi
-}
-
-record_trivy_scanner vulnerability Vulnerabilities
-record_trivy_scanner secret Secrets
+else
+  record_scanner trivy-vulnerability error 0 vulnerability
+  record_scanner trivy-secret error 0 secret
+  record_scanner trivy-misconfiguration error 0 misconfiguration
+fi
 
 osv_status=$(cat -- "$output/osv-scanner-status.txt")
 if [[ "$osv_status" == 128 ]]; then

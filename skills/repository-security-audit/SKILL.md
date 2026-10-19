@@ -92,8 +92,10 @@ native scanner files before writing a report. Then read:
 Use native scanner evidence rather than inventing scores or thresholds:
 
 - Scorecard is informational evidence. Its scores do not become findings.
-- Checkov owns IaC misconfiguration findings. Trivy is limited to
-  vulnerabilities and secrets.
+- Checkov and Trivy both report IaC misconfigurations independently; Trivy
+  runs vulnerability, secret, and misconfiguration scans in one invocation.
+  Cross-tool overlaps are possible and must not be described as distinct
+  confirmed vulnerabilities without inspecting their native evidence.
 - OSV-Scanner reports vulnerable dependency versions. Exit code 128 means no
   supported dependencies were detected (`skipped`), not a clean scan.
 - Semgrep uses the trusted `p/default` rules with telemetry disabled.
