@@ -96,7 +96,11 @@ Use native scanner evidence rather than inventing scores or thresholds:
   runs vulnerability, secret, and misconfiguration scans in one invocation.
   Target-owned Trivy inline suppression directives (including legacy tfsec aliases)
   are rejected as scanner errors; conservative matching can also reject directive-shaped
-  documentation or string literals. Cross-tool overlaps are possible and must not be described as distinct
+  documentation or string literals. Terraform/OpenTofu module declarations (including
+  local modules) in `.tf`, `.tofu`, `.tf.json`, and `.tofu.json` are also rejected before
+  Trivy runs, preventing target-controlled module downloads. Unparseable configurations
+  fail closed. These cases leave all three Trivy categories as errors, not clean scans.
+  Cross-tool overlaps are possible and must not be described as distinct
   confirmed vulnerabilities without inspecting their native evidence.
 - OSV-Scanner reports vulnerable dependency versions. Exit code 128 means no
   supported dependencies were detected (`skipped`), not a clean scan.
