@@ -17,6 +17,10 @@ git -C "$source_repo" config user.email segh-validation@example.invalid
 
 mkdir -p "$source_repo/.github/workflows"
 printf '%s\n' 'safe' > "$source_repo/README.md"
+mkdir -p "$source_repo/nested"
+for policy in .gitignore .semgrepignore nested/.gitignore nested/.semgrepignore; do
+  printf '%s\n' '*.ignored-fixture' > "$source_repo/$policy"
+done
 cat > "$source_repo/.github/workflows/ci.yml" <<'EOF_WORKFLOW'
 name: Fixture
 on:

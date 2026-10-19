@@ -73,6 +73,16 @@ reordered|2|#trivy:exp:2221-01-02:ignore:*
 conditional|2|#tfsec:ignore:AVD-TEST[port=443]
 CASES
 
+# The standalone dispatcher deliberately removes tracked ignore policies.
+mkdir -p "$root/_target/nested"
+for policy in .gitignore .semgrepignore nested/.gitignore nested/.semgrepignore; do
+  printf '%s\n' '*.ignored-fixture' > "$root/_target/$policy"
+  git -C "$root/_target" add -- "$policy"
+  rm -- "$root/_target/$policy"
+done
+printf 'safe\n' > "$root/_target/- input file.tf"
+"$trusted/skills/repository-security-audit/scripts/validate-trivy-directives.sh" "$root/_target"
+
 # Enumeration and read failures must not become clean scans.
 real_git=$(command -v git)
 export REAL_GIT="$real_git"

@@ -18,6 +18,13 @@ while IFS= read -r -d '' entry; do
   mode=${entry%% *}
   [[ "$mode" == 100644 || "$mode" == 100755 ]] || continue
   path=${entry#*$'\t'}
+  # The standalone dispatcher deliberately removes these ignore policies
+  # after preflight. They are not scanner inputs once removed.
+  case "$path" in
+    .gitignore|*/.gitignore|.semgrepignore|*/.semgrepignore)
+      [[ -e "$target/$path" ]] || continue
+      ;;
+  esac
   set +e
   LC_ALL=C grep -aEq '(trivy|tfsec):([^[:space:]]*:)*ignore:' -- "$target/$path"
   status=$?
