@@ -76,8 +76,8 @@ jobs:
         run: bash tests/test-repository-security-audit.sh
       - name: Test standalone boundary helpers
         run: |
-          mise -C skills/repository-security-audit exec -- bash tests/test-preflight.sh skills/repository-security-audit/scripts/preflight.sh
-          mise -C skills/repository-security-audit exec -- bash tests/test-run-checkov.sh skills/repository-security-audit/scripts/scanners/checkov.sh
+          bash tests/test-preflight.sh skills/repository-security-audit/scripts/preflight.sh
+          bash tests/test-run-checkov.sh skills/repository-security-audit/scripts/scanners/checkov.sh
       - name: Test dashboard normalization and publication
         run: node --test tests/test-dashboard.js tests/test-checkov-summary.js
       - name: Validate Checkov and Trivy IaC coverage
