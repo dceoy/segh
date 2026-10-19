@@ -56,6 +56,16 @@ git -C "$directive_source" commit -qm 'add shellcheck directive fixture'
 directive_target_sha=$(git -C "$directive_source" rev-parse HEAD)
 readonly directive_source directive_target_sha
 
+trivy_source="$root/trivy-source"
+git clone -q "$source_repo" "$trivy_source"
+git -C "$trivy_source" config user.name segh-validation
+git -C "$trivy_source" config user.email segh-validation@example.invalid
+printf '%s\n' 'FROM alpine:3.20' '#trivy:ignore:*' 'USER root' > "$trivy_source/Dockerfile"
+git -C "$trivy_source" add Dockerfile
+git -C "$trivy_source" commit -qm 'add Trivy suppression fixture'
+trivy_target_sha=$(git -C "$trivy_source" rev-parse HEAD)
+readonly trivy_source trivy_target_sha
+
 filter_source="$root/filter-source"
 git clone -q "$source_repo" "$filter_source"
 git -C "$filter_source" config user.name segh-validation
@@ -402,6 +412,10 @@ run_audit() {
     source_for_audit=$directive_source
     target_for_audit=$directive_target_sha
   fi
+  if [[ "$label" == trivy-directive ]]; then
+    source_for_audit=$trivy_source
+    target_for_audit=$trivy_target_sha
+  fi
   if [[ "$label" == git-filter ]]; then
     source_for_audit=$filter_source
     target_for_audit=$filter_target_sha
@@ -687,6 +701,9 @@ for category in vuln secret misconfig; do
   [[ "$(jq -r --arg name "trivy-$scanner" '.scanners[] | select(.name == $name) | .findings' "$root/trivy-$category-finding/summary.json")" == 1 ]]
 done
 FAKE_TRIVY_FINDING=invalid
+run_audit trivy-directive
+[[ "$(cat "$root/trivy-directive/trivy-status.txt")" == 2 ]]
+[[ "$(jq -r '[.scanners[] | select(.name | startswith("trivy-")) | select(.status == "error")] | length' "$root/trivy-directive/summary.json")" == 3 ]]
 run_audit trivy-invalid-evidence
 [[ "$(jq -r '[.scanners[] | select(.name | startswith("trivy-")) | select(.status == "error")] | length' "$root/trivy-invalid-evidence/summary.json")" == 3 ]]
 FAKE_TRIVY_FINDING=''

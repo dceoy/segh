@@ -94,7 +94,9 @@ Use native scanner evidence rather than inventing scores or thresholds:
 - Scorecard is informational evidence. Its scores do not become findings.
 - Checkov and Trivy both report IaC misconfigurations independently; Trivy
   runs vulnerability, secret, and misconfiguration scans in one invocation.
-  Cross-tool overlaps are possible and must not be described as distinct
+  Target-owned Trivy inline suppression directives (including legacy tfsec aliases)
+  are rejected as scanner errors; conservative matching can also reject directive-shaped
+  documentation or string literals. Cross-tool overlaps are possible and must not be described as distinct
   confirmed vulnerabilities without inspecting their native evidence.
 - OSV-Scanner reports vulnerable dependency versions. Exit code 128 means no
   supported dependencies were detected (`skipped`), not a clean scan.

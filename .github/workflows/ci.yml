@@ -68,6 +68,8 @@ jobs:
         run: bash tests/test-preflight.sh
       - name: Test Checkov runner fail-closed behavior
         run: bash tests/test-run-checkov.sh
+      - name: Test Trivy inline suppression boundary
+        run: bash tests/test-trivy-directives.sh
       - name: Test standalone repository security audit
         run: bash tests/test-repository-security-audit.sh
       - name: Test standalone boundary helpers

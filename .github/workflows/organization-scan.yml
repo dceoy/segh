@@ -661,6 +661,10 @@ jobs:
         id: trivy
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
+          : > results/trivy.json
+          if ! _trusted/skills/repository-security-audit/scripts/validate-trivy-directives.sh _target 2> results/trivy.log; then
+            exit 2
+          fi
           trivy filesystem --config /dev/null --ignorefile /dev/null --scanners vuln,secret,misconfig \
             --exit-code 1 --format json --output results/trivy.json \
             --skip-dirs _target/.git --skip-version-check --disable-telemetry _target \
