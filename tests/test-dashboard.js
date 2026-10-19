@@ -189,7 +189,7 @@ test("combined Trivy evidence separates vulnerability, secret, and misconfigurat
     ]);
     const cases = [
       {Results: [{Misconfigurations: "not an array"}]},
-      {Results: [], SchemaVersion: 2},
+      {Results: "invalid", SchemaVersion: 2},
       {Results: [{Secrets: [{RuleID: "secret"}]}]},
     ];
     for (const evidence of cases) {
