@@ -2,7 +2,7 @@
 
 set -euo pipefail
 umask 077
-# shellcheck source=skills/github-repository-security-audit/scripts/scanners/common.sh
+# shellcheck source=skills/repository-security-audit/scripts/scanners/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 
 tmp=$(mktemp -d)
@@ -11,7 +11,7 @@ trap 'rm -rf -- "$tmp"' EXIT
 # the absence of Docker is not a replacement for OS-level network isolation.
 # Raw detector results may contain credentials: allowlist fields before writing.
 set +e
-mise -C "$skill_root" exec --locked -- \
+mise -C "$repo_root" exec -- \
   trufflehog git "file://$checkout" --no-update --no-verification \
   --no-ignore-tag --fail-on-scan-errors \
   --results=verified,unknown,unverified --json \

@@ -119,10 +119,12 @@ assert_present "$checkov_runner_text" 'CHECKOV_KUSTOMIZE_ALLOWED_REMOTE_PREFIXES
 assert_present "$checkov_runner_text" 'checkov.json' 'Checkov native JSON evidence must be retained'
 assert_present "$checkov_runner_text" 'checkov-status.txt' 'Checkov execution status must be retained'
 assert_absent "$checkov_runner_text" 'external-checks' 'external Checkov checks must not be loaded'
-assert_value '[.jobs.scan.steps[] | select(.id == "trivy-misconfiguration")] | length' '0' \
-  'Trivy misconfiguration scanning must not remain in the production scanner'
-trivy_steps=$(yq -o=json '[.jobs.scan.steps[] | select(.id == "trivy-vulnerability" or .id == "trivy-secret")]' "$scan")
-assert_absent "$trivy_steps" '--scanners misconfig' 'Trivy must remain limited to vulnerability and secret scanning'
+assert_value '[.jobs.scan.steps[] | select(.id == "trivy")] | length' '1' \
+  'one combined Trivy source scan is required'
+trivy_steps=$(yq -r '.jobs.scan.steps[] | select(.id == "trivy") | .run' "$scan")
+assert_present "$trivy_steps" '--scanners vuln,secret,misconfig' 'Trivy must run all three scanner kinds'
+assert_present "$trivy_steps" '_trusted/skills/repository-security-audit/scripts/validate-trivy-directives.sh _target' \
+  'Trivy must reject target-owned inline suppressions'
 
 references=$(
   yq -r '.. | select(tag == "!!str") | select(contains("steps.target-token.outputs.token")) | path | join("/")' "$scan" |

@@ -8,7 +8,8 @@ readonly commit_sha=${2:?commit SHA is required}
 checkout=$(cd -- "${3:?checkout is required}" && pwd)
 output=$(cd -- "${4:?evidence directory required}" && pwd)
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-readonly checkout output skill_root
+repo_root=$(cd -- "$skill_root/../.." && pwd)
+readonly checkout output skill_root repo_root
 
 # The checkout passed preflight. Target-owned ignore rules must not
 # suppress the native scanners. Only this disposable checkout is modified.
@@ -25,7 +26,7 @@ for scanner in scorecard zizmor actionlint shellcheck checkov trivy osv-scanner 
     args=(--audit-scan "${args[@]}")
   fi
   set +e
-  mise -C "$skill_root" exec --locked -- \
+  mise -C "$repo_root" exec -- \
     bash "$skill_root/scripts/scanners/$scanner.sh" "${args[@]}" \
     > "$output/$scanner-run.log" 2>&1
   status=$?

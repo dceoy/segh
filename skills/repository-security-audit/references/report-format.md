@@ -29,10 +29,10 @@ unknown/error controls. A missing permission is a coverage gap, not a pass.
 ## Source scanners
 
 Report the native result for Scorecard, zizmor, actionlint, ShellCheck,
-Checkov, Trivy vulnerability, Trivy secret, OSV-Scanner dependency, Semgrep SAST, and TruffleHog Git-history scans. Preserve the distinction
-between findings and execution/evidence errors. Checkov is the only IaC
-misconfiguration scanner; do not duplicate a Checkov IaC finding as a Trivy
-misconfiguration finding.
+Checkov, Trivy vulnerability, Trivy secret, Trivy misconfiguration, OSV-Scanner dependency, Semgrep SAST, and TruffleHog Git-history scans. Preserve the distinction
+between findings and execution/evidence errors. Checkov and Trivy both scan IaC misconfigurations; present their native
+results separately and note any overlapping findings, rather than summing
+cross-tool counts as unique problems.
 
 ## Coverage gaps / permissions
 

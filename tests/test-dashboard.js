@@ -25,6 +25,7 @@ const SCANNER_NAMES = [
   "checkov",
   "trivy-vulnerability",
   "trivy-secret",
+  "trivy-misconfiguration",
 ];
 
 function tempDir() {
@@ -47,9 +48,7 @@ function scannerFixture(dir) {
   fs.writeFileSync(path.join(dir, "actionlint.jsonl"), "");
   writeJson(path.join(dir, "shellcheck.json"), []);
   fs.writeFileSync(path.join(dir, "shellcheck-status.txt"), "0\n");
-  writeJson(path.join(dir, "trivy-vulnerability.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
-  writeJson(path.join(dir, "trivy-secret.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
-  writeJson(path.join(dir, "trivy-misconfiguration.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
+  writeJson(path.join(dir, "trivy.json"), {SchemaVersion: 2, Trivy: {}, Results: []});
 }
 
 function successEnv(overrides = {}) {
@@ -62,9 +61,7 @@ function successEnv(overrides = {}) {
     ZIZMOR_OUTCOME: "success",
     ACTIONLINT_OUTCOME: "success",
     SHELLCHECK_OUTCOME: "success",
-    TRIVY_VULNERABILITY_OUTCOME: "success",
-    TRIVY_SECRET_OUTCOME: "success",
-    TRIVY_MISCONFIGURATION_OUTCOME: "success",
+    TRIVY_OUTCOME: "success",
     ...overrides,
   };
 }
@@ -167,6 +164,40 @@ test("summary keeps only current-state dashboard data", () => {
     assert.deepEqual(findings.scanners.find((scanner) => scanner.name === "zizmor"), {
       name: "zizmor", status: "findings", findings: 1, category: "actions",
     });
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test("combined Trivy evidence separates vulnerability, secret, and misconfiguration findings", () => {
+  const dir = tempDir();
+  try {
+    scannerFixture(dir);
+    writeJson(path.join(dir, "trivy.json"), {
+      SchemaVersion: 2,
+      Results: [{
+        Vulnerabilities: [{VulnerabilityID: "CVE-fixture"}],
+        Misconfigurations: [{ID: "AVD-fixture"}],
+      }],
+    });
+    const summary = buildSummary({resultsDir: dir, env: successEnv({TRIVY_OUTCOME: "failure"})});
+    assert.equal(summary.overall_status, "findings");
+    assert.deepEqual(summary.scanners.filter((s) => s.name.startsWith("trivy-")), [
+      {name: "trivy-vulnerability", status: "findings", findings: 1, category: "vulnerability"},
+      {name: "trivy-secret", status: "pass", findings: 0},
+      {name: "trivy-misconfiguration", status: "findings", findings: 1, category: "misconfiguration"},
+    ]);
+    const cases = [
+      {Results: [{Misconfigurations: "not an array"}]},
+      {Results: "invalid", SchemaVersion: 2},
+      {Results: [{Secrets: [{RuleID: "secret"}]}]},
+    ];
+    for (const evidence of cases) {
+      writeJson(path.join(dir, "trivy.json"), evidence);
+      const error = buildSummary({resultsDir: dir, env: successEnv()});
+      assert.equal(error.overall_status, "error");
+      assert.ok(error.scanners.filter((s) => s.name.startsWith("trivy-")).every((s) => s.status === "error"));
+    }
   } finally {
     fs.rmSync(dir, {recursive: true, force: true});
   }

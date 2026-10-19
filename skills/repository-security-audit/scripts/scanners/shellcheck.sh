@@ -5,7 +5,7 @@ umask 077
 
 if [[ "${1:-}" == --audit-scan ]]; then
   shift
-  # shellcheck source=skills/github-repository-security-audit/scripts/scanners/common.sh
+  # shellcheck source=skills/repository-security-audit/scripts/scanners/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 shell_files=()
 declare -A shell_seen=()
@@ -36,7 +36,7 @@ if ((${#shell_files[@]} == 0)); then
   printf '%s\n' 0 > "$output/shellcheck-status.txt"
 else
   set +e
-  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- "$skill_root/scripts/scanners/shellcheck.sh" \
+  env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- "$skill_root/scripts/scanners/shellcheck.sh" \
     --color=never --format=json1 --rcfile /dev/null \
     --severity=style -- "${shell_files[@]}" > "$output/shellcheck.json" 2> "$output/shellcheck.log"
   shellcheck_status=$?
@@ -48,7 +48,8 @@ fi
 fi
 
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-readonly skill_root
+repo_root=$(cd -- "$skill_root/../.." && pwd)
+readonly skill_root repo_root
 unset SHELLCHECK_OPTS
 
 shellcheck_args=()
@@ -79,11 +80,11 @@ reject_directives() {
   grep_status=$?
   set -e
   if ((grep_status == 0)); then
-    printf 'github-repository-security-audit: target-owned ShellCheck directive rejected: %s\n' "$file" >&2
+    printf 'repository-security-audit: target-owned ShellCheck directive rejected: %s\n' "$file" >&2
     return 1
   fi
   if ((grep_status > 1)); then
-    printf 'github-repository-security-audit: unable to inspect ShellCheck input: %s\n' "$file" >&2
+    printf 'repository-security-audit: unable to inspect ShellCheck input: %s\n' "$file" >&2
     return 1
   fi
 }
@@ -100,6 +101,6 @@ for input_file in "${input_files[@]}"; do
 done
 
 if [[ "$stdin_requested" == true ]]; then
-  exec env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- shellcheck "${shellcheck_args[@]}" < "$stdin_file"
+  exec env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- shellcheck "${shellcheck_args[@]}" < "$stdin_file"
 fi
-exec env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- shellcheck "${shellcheck_args[@]}"
+exec env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- shellcheck "${shellcheck_args[@]}"

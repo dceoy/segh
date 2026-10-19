@@ -7,7 +7,8 @@ umask 077
 checkout=$(cd -- "${1:?checkout is required}" && pwd)
 output=$(cd -- "${2:?output is required}" && pwd)
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-readonly checkout output skill_root
+repo_root=$(cd -- "$skill_root/../.." && pwd)
+readonly checkout output skill_root repo_root
 
 run_index_selection() {
   local -n destination=$1

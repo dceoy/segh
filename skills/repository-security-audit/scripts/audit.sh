@@ -5,7 +5,8 @@ umask 077
 export GH_TELEMETRY=false
 
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-readonly skill_root
+repo_root=$(cd -- "$skill_root/../.." && pwd)
+readonly skill_root repo_root
 readonly repo_pattern='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
 
 repo=''
@@ -23,7 +24,7 @@ EOF
 
 fail() {
   local message=$1
-  printf 'github-repository-security-audit: %s\n' "$message" >&2
+  printf 'repository-security-audit: %s\n' "$message" >&2
   if [[ -n "${output:-}" && -d "${output:-}" ]]; then
     printf '%s\n' "$message" > "$output/audit-error.txt"
   fi
@@ -60,7 +61,7 @@ shopt -s nullglob dotglob
 output_entries=("$output"/*)
 shopt -u nullglob dotglob
 if ((${#output_entries[@]} > 0)); then
-  printf 'github-repository-security-audit: output directory must be empty: %s\n' "$output" >&2
+  printf 'repository-security-audit: output directory must be empty: %s\n' "$output" >&2
   exit 1
 fi
 unset output_entries
@@ -396,6 +397,7 @@ record_all_scanners_error() {
   record_scanner checkov error 0 misconfiguration
   record_scanner trivy-vulnerability error 0 vulnerability
   record_scanner trivy-secret error 0 secret
+  record_scanner trivy-misconfiguration error 0 misconfiguration
   record_scanner osv-scanner error 0 vulnerability
   record_scanner semgrep error 0 sast
   record_scanner trufflehog error 0 secret
@@ -418,10 +420,8 @@ write_empty_scanner_evidence() {
   printf '%s\n' 2 > "$output/shellcheck-status.txt"
   printf '%s\n' 'null' > "$output/checkov.json"
   printf '%s\n' 2 > "$output/checkov-status.txt"
-  for kind in vulnerability secret; do
-    printf '%s\n' '{"SchemaVersion":2,"Trivy":{},"Results":[]}' > "$output/trivy-$kind.json"
-    printf '%s\n' 2 > "$output/trivy-$kind-status.txt"
-  done
+  printf '%s\n' '{"SchemaVersion":2,"Trivy":{},"Results":[]}' > "$output/trivy.json"
+  printf '%s\n' 2 > "$output/trivy-status.txt"
   for scanner_kind in osv-scanner semgrep trufflehog; do
     printf '%s\n' 2 > "$output/$scanner_kind-status.txt"
   done
@@ -461,7 +461,7 @@ build_summary() {
         versions: $versions_stage, preflight: $preflight_stage},
       scanners: $scanners,
       github_controls: $controls[0].controls,
-      evidence_artifact: "github-repository-security-audit"}' \
+      evidence_artifact: "repository-security-audit"}' \
     > "$output/summary.json"
   jq '{schema_version: 1,
       gaps: [.github_controls[] | select(.state == "unknown") | {id, reason, required_permission}],
@@ -479,16 +479,16 @@ host_arch=$(uname -m)
 if [[ "$host_os" == Darwin && "$host_arch" == arm64 ]]; then
   if ! arch -x86_64 /usr/bin/true > "$output/toolchain.log" 2>&1; then
     toolchain_status=1
-    printf '%s\n' 'Apple Silicon macOS requires Rosetta 2 for the locked Darwin x86_64 Checkov binary' >> "$output/toolchain.log"
+    printf '%s\n' 'Apple Silicon macOS requires Rosetta 2 for the Darwin x86_64 Checkov binary' >> "$output/toolchain.log"
   fi
 fi
 if ((toolchain_status == 0)); then
   if ! command -v mise > /dev/null 2>&1; then
     toolchain_status=127
-    printf '%s\n' 'mise is required to install and run the locked audit toolchain' > "$output/toolchain.log"
+    printf '%s\n' 'mise is required to install and run the repository-root audit toolchain' > "$output/toolchain.log"
   else
     set +e
-    mise -y -C "$skill_root" install --locked > "$output/toolchain.log" 2>&1
+    mise -y -C "$repo_root" install > "$output/toolchain.log" 2>&1
     toolchain_status=$?
     set -e
   fi
@@ -562,27 +562,27 @@ fi
 versions_status=0
 {
   printf 'scorecard: '
-  mise -C "$skill_root" exec --locked -- scorecard version || versions_status=1
+  mise -C "$repo_root" exec -- scorecard version || versions_status=1
   printf 'zizmor: '
-  mise -C "$skill_root" exec --locked -- zizmor --version || versions_status=1
+  mise -C "$repo_root" exec -- zizmor --version || versions_status=1
   printf 'actionlint: '
-  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- actionlint -version || versions_status=1
+  env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- actionlint -version || versions_status=1
   printf 'shellcheck: '
-  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec --locked -- shellcheck --version | head -n 2 | tail -n 1 || versions_status=1
+  env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- shellcheck --version | head -n 2 | tail -n 1 || versions_status=1
   printf 'checkov: '
-  mise -C "$skill_root" exec --locked -- checkov --version || versions_status=1
+  mise -C "$repo_root" exec -- checkov --version || versions_status=1
   printf 'helm: '
-  mise -C "$skill_root" exec --locked -- helm version --short || versions_status=1
+  mise -C "$repo_root" exec -- helm version --short || versions_status=1
   printf 'kubectl: '
-  mise -C "$skill_root" exec --locked -- kubectl version --client || versions_status=1
+  mise -C "$repo_root" exec -- kubectl version --client || versions_status=1
   printf 'trivy: '
-  mise -C "$skill_root" exec --locked -- trivy --version | head -n 1 || versions_status=1
+  mise -C "$repo_root" exec -- trivy --version | head -n 1 || versions_status=1
   printf 'osv-scanner: '
-  mise -C "$skill_root" exec --locked -- osv-scanner --version || versions_status=1
+  mise -C "$repo_root" exec -- osv-scanner --version || versions_status=1
   printf 'trufflehog: '
-  mise -C "$skill_root" exec --locked -- trufflehog --version || versions_status=1
+  mise -C "$repo_root" exec -- trufflehog --version || versions_status=1
   printf 'uvx: '
-  mise -C "$skill_root" exec --locked -- uvx --version || versions_status=1
+  mise -C "$repo_root" exec -- uvx --version || versions_status=1
 } > "$output/scanner-versions.txt" 2> "$output/scanner-versions.log"
 printf '%s\n' "$versions_status" > "$output/versions-status.txt"
 
@@ -681,32 +681,47 @@ else
   record_scanner checkov error 0 misconfiguration
 fi
 
-record_trivy_scanner() {
-  local kind=$1 property=$2
-  local status count file="$output/trivy-$kind.json"
-  status=$(cat -- "$output/trivy-$kind-status.txt")
-  if ! count=$(jq -er --arg property "$property" '
-    . as $data |
-    if ($data | type == "object") and
-       (($data.Results | type == "array") or
-        ($data.Results == null and $data.SchemaVersion == 2 and ($data.Trivy | type == "object"))) then
-      [$data.Results[]?[$property][]?] | length
-    else
-      halt_error(1)
-    end
-  ' "$file" 2> /dev/null); then
-    record_scanner "trivy-$kind" error 0 "$kind"
-  elif ((count > 0)) && [[ "$status" == 1 ]]; then
-    record_scanner "trivy-$kind" findings "$count" "$kind"
-  elif ((count == 0)) && [[ "$status" == 0 ]]; then
-    record_scanner "trivy-$kind" pass 0
+trivy_status=$(cat -- "$output/trivy-status.txt" 2> /dev/null || printf '2')
+if trivy_counts=$(jq -er '
+  if type != "object" then halt_error(1) end |
+  (if (.Results | type) == "array" then .Results
+   elif (.Results == null) and .SchemaVersion == 2 and (.Trivy | type) == "object"
+   then []
+   else halt_error(1) end) as $rows |
+  if any($rows[]; type != "object" or
+    ((.Vulnerabilities? != null) and (.Vulnerabilities | type) != "array") or
+    ((.Secrets? != null) and (.Secrets | type) != "array") or
+    ((.Misconfigurations? != null) and (.Misconfigurations | type) != "array"))
+  then halt_error(1)
+  else [
+    ([$rows[] | .Vulnerabilities[]?] | length),
+    ([$rows[] | .Secrets[]?] | length),
+    ([$rows[] | .Misconfigurations[]?] | length)
+  ] | @tsv end
+' "$output/trivy.json" 2> /dev/null); then
+  IFS=$'\t' read -r trivy_vuln trivy_secret trivy_misconfig <<< "$trivy_counts"
+  trivy_total=$((trivy_vuln + trivy_secret + trivy_misconfig))
+  if { [[ "$trivy_status" == 0 ]] && ((trivy_total == 0)); } ||
+     { [[ "$trivy_status" == 1 ]] && ((trivy_total > 0)); }; then
+    for entry in "vulnerability:$trivy_vuln" "secret:$trivy_secret" "misconfiguration:$trivy_misconfig"; do
+      kind=${entry%%:*}
+      count=${entry#*:}
+      if ((count > 0)); then
+        record_scanner "trivy-$kind" findings "$count" "$kind"
+      else
+        record_scanner "trivy-$kind" pass 0
+      fi
+    done
   else
-    record_scanner "trivy-$kind" error "$count" "$kind"
+    record_scanner trivy-vulnerability error 0 vulnerability
+    record_scanner trivy-secret error 0 secret
+    record_scanner trivy-misconfiguration error 0 misconfiguration
   fi
-}
-
-record_trivy_scanner vulnerability Vulnerabilities
-record_trivy_scanner secret Secrets
+else
+  record_scanner trivy-vulnerability error 0 vulnerability
+  record_scanner trivy-secret error 0 secret
+  record_scanner trivy-misconfiguration error 0 misconfiguration
+fi
 
 osv_status=$(cat -- "$output/osv-scanner-status.txt")
 if [[ "$osv_status" == 128 ]]; then

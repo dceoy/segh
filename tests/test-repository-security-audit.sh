@@ -2,10 +2,11 @@
 
 set -euo pipefail
 
-readonly audit=${1:-skills/github-repository-security-audit/scripts/audit.sh}
+readonly audit=${1:-skills/repository-security-audit/scripts/audit.sh}
 root=$(mktemp -d)
 readonly root
 trap 'rm -rf -- "$root"' EXIT
+trap 'status=$?; printf "Audit fixture test failed at line %s (status %s)\n" "$LINENO" "$status" >&2; if [[ -f "$root/first/summary.json" ]]; then jq -c "{overall_status,stage_status,scanners: [.scanners[] | {name,status}]}" "$root/first/summary.json" >&2; fi' ERR
 
 source_repo="$root/source"
 fake_bin="$root/bin"
@@ -16,6 +17,10 @@ git -C "$source_repo" config user.email segh-validation@example.invalid
 
 mkdir -p "$source_repo/.github/workflows"
 printf '%s\n' 'safe' > "$source_repo/README.md"
+mkdir -p "$source_repo/nested"
+for policy in .gitignore .semgrepignore nested/.gitignore nested/.semgrepignore; do
+  printf '%s\n' '*.ignored-fixture' > "$source_repo/$policy"
+done
 cat > "$source_repo/.github/workflows/ci.yml" <<'EOF_WORKFLOW'
 name: Fixture
 on:
@@ -54,6 +59,16 @@ git -C "$directive_source" add install.sh
 git -C "$directive_source" commit -qm 'add shellcheck directive fixture'
 directive_target_sha=$(git -C "$directive_source" rev-parse HEAD)
 readonly directive_source directive_target_sha
+
+trivy_source="$root/trivy-source"
+git clone -q "$source_repo" "$trivy_source"
+git -C "$trivy_source" config user.name segh-validation
+git -C "$trivy_source" config user.email segh-validation@example.invalid
+printf '%s\n' 'FROM alpine:3.20' '#trivy:ignore:*' 'USER root' > "$trivy_source/Dockerfile"
+git -C "$trivy_source" add Dockerfile
+git -C "$trivy_source" commit -qm 'add Trivy suppression fixture'
+trivy_target_sha=$(git -C "$trivy_source" rev-parse HEAD)
+readonly trivy_source trivy_target_sha
 
 filter_source="$root/filter-source"
 git clone -q "$source_repo" "$filter_source"
@@ -301,10 +316,17 @@ case "$tool" in
       printf '%s\n' 'Version: 0.72.0'
     else
       if [[ -n ${TRIVY_SKIP_FILES:-} ]]; then exit 43; fi
+      [[ "$*" == *'--scanners vuln,secret,misconfig'* ]] || exit 45
       for ((i = 1; i <= $#; i++)); do
         if [[ ${!i:-} == --output ]]; then
           next=$((i + 1))
-          printf '%s\n' '{"SchemaVersion":2,"Trivy":{},"Results":[]}' > "${!next}"
+          case "${FAKE_TRIVY_FINDING:-}" in
+            vuln) printf '%s\n' '{"SchemaVersion":2,"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-fixture"}]}]}' > "${!next}"; exit 1 ;;
+            secret) printf '%s\n' '{"SchemaVersion":2,"Results":[{"Secrets":[{"RuleID":"fixture"}]}]}' > "${!next}"; exit 1 ;;
+            misconfig) printf '%s\n' '{"SchemaVersion":2,"Results":[{"Misconfigurations":[{"ID":"AVD-fixture"}]}]}' > "${!next}"; exit 1 ;;
+            invalid) printf '%s\n' '{"SchemaVersion":2,"Results":[{"Misconfigurations":"invalid"}]}' > "${!next}" ;;
+            *) printf '%s\n' '{"SchemaVersion":2,"Trivy":{},"Results":[]}' > "${!next}" ;;
+          esac
         fi
       done
     fi
@@ -394,6 +416,10 @@ run_audit() {
     source_for_audit=$directive_source
     target_for_audit=$directive_target_sha
   fi
+  if [[ "$label" == trivy-directive ]]; then
+    source_for_audit=$trivy_source
+    target_for_audit=$trivy_target_sha
+  fi
   if [[ "$label" == git-filter ]]; then
     source_for_audit=$filter_source
     target_for_audit=$filter_target_sha
@@ -427,6 +453,7 @@ run_audit() {
     FAKE_SHELLCHECK_EXTERNAL="${FAKE_SHELLCHECK_EXTERNAL:-}" \
     FAKE_ZIZMOR_FINDING="${FAKE_ZIZMOR_FINDING:-}" \
     TRIVY_SKIP_FILES="${TRIVY_SKIP_FILES:-}" \
+    FAKE_TRIVY_FINDING="${FAKE_TRIVY_FINDING:-}" \
     SHELLCHECK_OPTS="${SHELLCHECK_OPTS:-}" \
     FAKE_GH_MIXED_CASE="${FAKE_GH_MIXED_CASE:-}" \
     FAKE_BAD_PREFLIGHT="${FAKE_BAD_PREFLIGHT:-}" \
@@ -463,14 +490,14 @@ jq -e '
     (.evidence.file | type == "string"))
 ' "$root/first/github-controls.json" > /dev/null
 [[ "$(jq -r '.overall_status' "$root/first/summary.json")" == findings ]]
-[[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 10 ]]
+[[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 11 ]]
 [[ "$(cat "$root/first/scanners-run-status.txt")" == 0 ]]
 [[ -f "$root/first/scanners-run.log" ]]
 grep -F 'osv-scanner scan source' "$root/first.mise.log" > /dev/null
 grep -F 'trufflehog git file://' "$root/first.mise.log" > /dev/null
-# Scanner entrypoints, including Checkov, need the installed locked toolchain
+# Scanner entrypoints, including Checkov, need the installed root toolchain
 # on PATH; merely installing binaries is insufficient without mise exec.
-grep -F 'exec --locked -- bash ' "$root/first.mise.log" | grep -F '/scanners/checkov.sh' > /dev/null
+grep -F 'exec -- bash ' "$root/first.mise.log" | grep -F '/scanners/checkov.sh' > /dev/null
 grep -F 'uvx --from semgrep==1.180.0' "$root/first.mise.log" > /dev/null
 [[ "$(jq -r '.controls[] | select(.id == "actions_permissions") | .state' "$root/first/github-controls.json")" == finding ]]
 [[ "$(jq -r '.controls[] | select(.id == "vulnerability_alerts") | .state' "$root/first/github-controls.json")" == pass ]]
@@ -482,11 +509,9 @@ grep -F 'uvx --from semgrep==1.180.0' "$root/first.mise.log" > /dev/null
 [[ "$(cat "$root/first.checkout-config")" == '1|/dev/null|0|' ]]
 if grep -R -F -- 'gh-login-token' "$root/first"; then exit 1; fi
 if grep -v -- '--method GET' "$root/gh.log"; then exit 1; fi
-if grep -F -- 'misconfig' "$root/scanner.log"; then exit 1; fi
-[[ ! -e "$root/first/trivy-misconfiguration.json" ]]
-# Both vulnerability and secret scans must suppress telemetry independently of
-# target-owned configuration or caller-controlled TRIVY_* environment values.
-[[ "$(grep -cE '^trivy filesystem .*--disable-telemetry ' "$root/scanner.log")" == 2 ]]
+[[ "$(grep -cE '^trivy filesystem .*--scanners vuln,secret,misconfig .*--disable-telemetry ' "$root/scanner.log")" == 1 ]]
+[[ -f "$root/first/trivy.json" && -f "$root/first/trivy-status.txt" ]]
+[[ "$(jq -r '.scanners[] | select(.name == "trivy-misconfiguration") | .status' "$root/first/summary.json")" == pass ]]
 
 FAKE_GH_FEATURES=404
 run_audit feature-404
@@ -665,7 +690,27 @@ TRIVY_SKIP_FILES='**/*'
 run_audit trivy-env
 [[ "$(jq -r '.scanners[] | select(.name == "trivy-vulnerability") | .status' "$root/trivy-env/summary.json")" == pass ]]
 [[ "$(jq -r '.scanners[] | select(.name == "trivy-secret") | .status' "$root/trivy-env/summary.json")" == pass ]]
+[[ "$(jq -r '.scanners[] | select(.name == "trivy-misconfiguration") | .status' "$root/trivy-env/summary.json")" == pass ]]
 TRIVY_SKIP_FILES=''
+for category in vuln secret misconfig; do
+  FAKE_TRIVY_FINDING="$category"
+  run_audit "trivy-$category-finding"
+  [[ "$(cat "$root/trivy-$category-finding.status")" == 1 ]]
+  case "$category" in
+    vuln) scanner=vulnerability ;;
+    secret) scanner=secret ;;
+    misconfig) scanner=misconfiguration ;;
+  esac
+  [[ "$(jq -r --arg name "trivy-$scanner" '.scanners[] | select(.name == $name) | .status' "$root/trivy-$category-finding/summary.json")" == findings ]]
+  [[ "$(jq -r --arg name "trivy-$scanner" '.scanners[] | select(.name == $name) | .findings' "$root/trivy-$category-finding/summary.json")" == 1 ]]
+done
+FAKE_TRIVY_FINDING=invalid
+run_audit trivy-directive
+[[ "$(cat "$root/trivy-directive/trivy-status.txt")" == 2 ]]
+[[ "$(jq -r '[.scanners[] | select(.name | startswith("trivy-")) | select(.status == "error")] | length' "$root/trivy-directive/summary.json")" == 3 ]]
+run_audit trivy-invalid-evidence
+[[ "$(jq -r '[.scanners[] | select(.name | startswith("trivy-")) | select(.status == "error")] | length' "$root/trivy-invalid-evidence/summary.json")" == 3 ]]
+FAKE_TRIVY_FINDING=''
 
 FAKE_PLATFORM=Darwin
 FAKE_MACHINE=arm64

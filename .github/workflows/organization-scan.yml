@@ -486,7 +486,7 @@ jobs:
               ;;
           esac
           git -C _target add .
-      - name: Install checksum-verified scanners
+      - name: Install scanner tools
         if: steps.checkout.outcome == 'success'
         id: tools
         continue-on-error: ${{ inputs.validation_mode }}
@@ -495,7 +495,6 @@ jobs:
           version: 2026.8.3
           sha256: 66585ac496c10bf6fbf13272e3e550c1813aed0e1cb780b9bb73c1751de49289
           working_directory: _trusted
-          install_args: --locked
       - name: Record scanner versions
         if: steps.tools.outcome == 'success'
         id: versions
@@ -657,24 +656,19 @@ jobs:
         id: checkov
         continue-on-error: ${{ inputs.validation_mode }}
         run: _trusted/scripts/run-checkov.sh _target results
-      - name: Run Trivy vulnerability scan
+      - name: Run Trivy source scan
         if: always() && steps.preflight.outcome == 'success'
-        id: trivy-vulnerability
+        id: trivy
         continue-on-error: ${{ inputs.validation_mode }}
         run: |
-          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners vuln \
-            --exit-code 1 --format json --output results/trivy-vulnerability.json \
+          : > results/trivy.json
+          if ! _trusted/skills/repository-security-audit/scripts/validate-trivy-directives.sh _target 2> results/trivy.log; then
+            exit 2
+          fi
+          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners vuln,secret,misconfig \
+            --exit-code 1 --format json --output results/trivy.json \
             --skip-dirs _target/.git --skip-version-check --disable-telemetry _target \
-            2> results/trivy-vulnerability.log
-      - name: Run Trivy secret scan
-        if: always() && steps.preflight.outcome == 'success'
-        id: trivy-secret
-        continue-on-error: ${{ inputs.validation_mode }}
-        run: |
-          trivy filesystem --config /dev/null --ignorefile /dev/null --scanners secret \
-            --exit-code 1 --format json --output results/trivy-secret.json \
-            --skip-dirs _target/.git --skip-version-check --disable-telemetry _target \
-            2> results/trivy-secret.log
+            2> results/trivy.log
       - name: Build bounded dashboard summary
         if: always() && steps.target.outcome == 'success' && steps.trusted.outcome == 'success'
         id: summary
@@ -688,8 +682,7 @@ jobs:
           ACTIONLINT_OUTCOME: ${{ steps.actionlint.outcome }}
           SHELLCHECK_OUTCOME: ${{ steps.shellcheck.outcome }}
           CHECKOV_OUTCOME: ${{ steps.checkov.outcome }}
-          TRIVY_VULNERABILITY_OUTCOME: ${{ steps.trivy-vulnerability.outcome }}
-          TRIVY_SECRET_OUTCOME: ${{ steps.trivy-secret.outcome }}
+          TRIVY_OUTCOME: ${{ steps.trivy.outcome }}
           DASHBOARD_REPOSITORY: ${{ github.repository }}
         run: node _trusted/scripts/build-dashboard-summary.js results results/summary.json
       - name: Retain bounded dashboard summary

@@ -14,6 +14,7 @@ const SCANNER_CATEGORIES = new Map([
   ["checkov", "misconfiguration"],
   ["trivy-vulnerability", "vulnerability"],
   ["trivy-secret", "secret"],
+  ["trivy-misconfiguration", "misconfiguration"],
 ]);
 const VALID_STATUS = new Set(["pass", "findings", "incomplete", "error"]);
 const VALID_SCANNER_STATUS = new Set(["pass", "findings", "skipped", "error"]);
