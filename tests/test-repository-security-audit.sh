@@ -6,6 +6,7 @@ readonly audit=${1:-skills/repository-security-audit/scripts/audit.sh}
 root=$(mktemp -d)
 readonly root
 trap 'rm -rf -- "$root"' EXIT
+trap 'printf "Audit fixture test failed at line %s (status %s)\n" "$LINENO" "$?" >&2' ERR
 
 source_repo="$root/source"
 fake_bin="$root/bin"
