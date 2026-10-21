@@ -1,0 +1,52 @@
+---
+name: CodeQL
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '**/action.yml'
+      - '**/action.yaml'
+      - '**/*.js'
+      - '**/*.mjs'
+      - '**/*.cjs'
+      - '**/*.jsx'
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/package.json'
+      - '**/pnpm-lock.yaml'
+      - '**/package-lock.json'
+      - '**/yarn.lock'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '**/action.yml'
+      - '**/action.yaml'
+      - '**/*.js'
+      - '**/*.mjs'
+      - '**/*.cjs'
+      - '**/*.jsx'
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/package.json'
+      - '**/pnpm-lock.yaml'
+      - '**/package-lock.json'
+      - '**/yarn.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  github-codeql-analysis:
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    uses: dceoy/gha-for-devops/.github/workflows/github-codeql-analysis.yml@main # zizmor: ignore[unpinned-uses]
+    with:
+      language: >
+        ["actions", "javascript-typescript"]
