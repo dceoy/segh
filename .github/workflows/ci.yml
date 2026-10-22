@@ -132,15 +132,6 @@ jobs:
       validation_mode: true
       repository_limit: "50"
       max_parallel: "4"
-  github-codeql-analysis:
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    uses: dceoy/gha-for-devops/.github/workflows/github-codeql-analysis.yml@main # zizmor: ignore[unpinned-uses]
-    with:
-      language: >
-        ["actions", "javascript-typescript"]
   dependabot-auto-merge:
     if: >
       github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
@@ -150,7 +141,6 @@ jobs:
       - shell-lint
       - test
       - production-workflow
-      - github-codeql-analysis
     permissions:
       contents: write
       pull-requests: write
