@@ -7,6 +7,7 @@ workflows:
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
         - 'jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550'
     '.github/workflows/claude.yml': []
+    '.github/workflows/codeql.yml': []
     '.github/workflows/organization-scan.yml':
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
         - 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510'
