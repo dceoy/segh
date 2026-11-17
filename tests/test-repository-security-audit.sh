@@ -305,12 +305,6 @@ case "$tool" in
   checkov)
     if [[ ${1:-} == --version ]]; then printf '%s\n' '3.3.9'; else printf '%s\n' '[{"check_type":"terraform","summary":{"failed":0,"skipped":0,"parsing_errors":0}}]'; fi
     ;;
-  helm)
-    if [[ ${1:-} == version ]]; then printf '%s\n' 'v4.2.3'; fi
-    ;;
-  kubectl)
-    if [[ ${1:-} == version ]]; then printf '%s\n' 'Client Version: v1.36.3'; fi
-    ;;
   trivy)
     if [[ ${1:-} == --version ]]; then
       printf '%s\n' 'Version: 0.72.0'
@@ -334,7 +328,7 @@ case "$tool" in
 esac
 EOF_SCANNER
 chmod +x "$fake_bin/mise" "$fake_bin/git" "$fake_bin/gh" "$fake_bin/uname" "$fake_bin/arch" "$fake_bin/fake-scanner"
-for tool in scorecard zizmor actionlint shellcheck checkov helm kubectl trivy; do
+for tool in scorecard zizmor actionlint shellcheck checkov trivy; do
   ln -s fake-scanner "$fake_bin/$tool"
 done
 
@@ -493,11 +487,11 @@ jq -e '
 [[ "$(jq -r '.scanners | length' "$root/first/summary.json")" == 11 ]]
 [[ "$(cat "$root/first/scanners-run-status.txt")" == 0 ]]
 [[ -f "$root/first/scanners-run.log" ]]
-expected_ceiling=$(cd -- "$(dirname -- "$audit")/../.." && pwd)
+expected_ceiling=$(cd -- "$(dirname -- "$audit")/../../../.." && pwd)
 [[ "$(cut -d '|' -f 1 "$root/first.mise.log" | LC_ALL=C sort -u)" == "$expected_ceiling" ]]
 grep -F 'osv-scanner scan source' "$root/first.mise.log" > /dev/null
 grep -F 'trufflehog git file://' "$root/first.mise.log" > /dev/null
-# Scanner entrypoints, including Checkov, need the installed skill-local toolchain
+# Scanner entrypoints, including Checkov, need the installed repository toolchain
 # on PATH; merely installing binaries is insufficient without mise exec.
 grep -F 'exec -- bash ' "$root/first.mise.log" | grep -F '/scanners/checkov.sh' > /dev/null
 grep -F 'uvx --from semgrep==1.180.0' "$root/first.mise.log" > /dev/null

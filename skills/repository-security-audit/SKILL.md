@@ -29,9 +29,9 @@ that results from separate audits cannot be mixed.
 
 The script resolves the default branch to a lowercase 40-character commit
 SHA, checks out only that detached revision with credentials and submodules
-disabled, runs the skill-local mise toolchain, and stores evidence
+disabled, runs the repository-managed mise toolchain, and stores evidence
 outside the checkout. Target files are never executed. A failed preflight,
-scanner, parser, renderer, API response, or evidence check must remain an
+scanner, parser, API response, or evidence check must remain an
 error or coverage gap; do not turn it into a pass in the report.
 
 The detached checkout is kept under the audit's private temporary directory
@@ -43,12 +43,13 @@ Git operations after cloning ignore system and global configuration,
 including environment-injected configuration parameters, before
 target-controlled attributes can select filters.
 
-The first run installs tools from the skill-local `mise.toml`, independently
-of the host repository's mise configuration. `MISE_CEILING_PATHS` prevents
-loading host project-level configs. The skill-local `mise.lock` pins
-resolved versions and checksums for Linux and macOS; regenerate it to update
-`latest` selections after the seven-day minimum release age.
-`scanner-versions.txt` captures the versions actually used in each audit.
+The first run installs tools from the repository-root `mise.toml`, independently
+of the audited repository's mise configuration. `MISE_CEILING_PATHS` blocks
+loading parent project configurations. Repository-root `mise.lock` pins
+versions and checksums for Linux and macOS; regenerate it after the one-day
+minimum release age to update `latest` selections. `scanner-versions.txt`
+records actual versions. Run this skill from a checkout of segh containing
+the repository-root mise files.
 
 The entry point `audit.sh` handles GitHub controls, the checkout/preflight
 boundary, evidence interpretation, and summary generation. **All native source scanner commands** are dispatched by
@@ -60,7 +61,7 @@ separately so that incomplete coverage cannot appear clean.
 The skill additionally runs **OSV-Scanner** for dependency vulnerabilities,
 **Semgrep OSS** for SAST, and **TruffleHog** for Git-history secrets.
 All three tools are executed natively; OSV-Scanner, TruffleHog and uv
-(the `uvx` runner for pinned Semgrep) are installed from the skill-local
+(the `uvx` runner for pinned Semgrep) are installed from the repository-root
 `mise.toml` with `latest` version selectors. Docker is not required.
 Missing or incompatible executables are audit errors, not silent skips.
 OSV's vulnerability feed and Semgrep's rule registry require network access.
@@ -94,7 +95,9 @@ Read `summary.json`, `github-controls.json`, `billing-exposure.json`,
 Use native scanner evidence rather than inventing scores or thresholds:
 
 - Scorecard is informational evidence. Its scores do not become findings.
-- Checkov and Trivy both report IaC misconfigurations independently; Trivy
+- Checkov and Trivy both report non-Kubernetes IaC misconfigurations independently.
+  Argo Workflows, Helm, Kubernetes, and Kustomize Checkov frameworks and
+  Helm/Kubernetes Trivy misconfiguration scanners are disabled. Trivy still
   runs vulnerability, secret, and misconfiguration scans in one invocation.
   Target-owned Trivy inline suppression directives (including legacy tfsec aliases)
   are rejected as scanner errors; conservative matching can also reject directive-shaped

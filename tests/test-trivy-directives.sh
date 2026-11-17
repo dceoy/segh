@@ -13,6 +13,9 @@ printf '%s\n' 'resource "fixture" "safe" {}' > "$root/_target/- input file.tf"
 git -C "$root/_target" add -- '- input file.tf'
 yq -r '.jobs.scan.steps[] | select(.id == "trivy") | .run' \
   "$trusted/.github/workflows/organization-scan.yml" > "$root/workflow.sh"
+grep -F -- "--misconfig-scanners azure-arm,cloudformation,dockerfile,terraform,terraformplan-json,terraformplan-snapshot,ansible" "$root/workflow.sh" > /dev/null
+grep -F -- "--misconfig-scanners azure-arm,cloudformation,dockerfile,terraform,terraformplan-json,terraformplan-snapshot,ansible" \
+  "$trusted/skills/repository-security-audit/scripts/scanners/trivy.sh" > /dev/null
 cat > "$root/bin/trivy" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
