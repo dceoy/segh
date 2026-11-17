@@ -27,7 +27,7 @@ assert_case \
 
 assert_case \
   '{"full_name":"org/private","visibility":"private","security_and_analysis":{"advanced_security":{"status":"disabled"},"secret_scanning":{"status":"disabled"},"secret_scanning_push_protection":{"status":"disabled"}}}' \
-  disabled not-enabled disabled not-enabled
+  unknown unknown disabled not-enabled
 
 assert_case \
   '{"full_name":"org/private","visibility":"private"}' \
@@ -43,6 +43,18 @@ assert_case \
 
 assert_case \
   '{"full_name":"org/private","visibility":"private","security_and_analysis":{"secret_scanning_push_protection":{"status":"disabled"}}}' \
+  unknown unknown unknown unknown
+
+assert_case \
+  '{"full_name":"org/private","visibility":"private","security_and_analysis":{"code_security":{"status":"disabled"},"secret_scanning":{"status":"disabled"}}}' \
+  disabled not-enabled disabled not-enabled
+
+assert_case \
+  '{"full_name":"org/private","visibility":"private","security_and_analysis":{"advanced_security":{"status":"enabled"}}}' \
+  enabled potential-license-required enabled potential-license-required
+
+assert_case \
+  '{"full_name":"org/private","visibility":"private","security_and_analysis":{"advanced_security":{"status":"disabled"}}}' \
   unknown unknown unknown unknown
 
 printf '%s\n' 'Billing-exposure classification tests passed.'
