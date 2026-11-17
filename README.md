@@ -42,6 +42,23 @@ source scanner execution to tool-specific scripts under `scripts/scanners/`.
 Checkov and ShellCheck keep their safety controls, and shared selection
 logic is factored into `scanners/common.sh`.
 
+## GitHub paid-feature exposure
+
+The standalone `repository-security-audit` skill reports a separate
+`billing-exposure.json` for repository-level GitHub Code Security and GitHub
+Secret Protection configuration. For private/internal repositories, observed
+enablement is flagged as `potential-license-required`; missing administration
+visibility is `unknown`, not evidence of a free or disabled configuration.
+Public-repository enablement does not imply private-repository license charges.
+This is a configuration signal, **not** a GitHub billing, active-committer,
+organization policy, or workflow SARIF-upload audit.
+
+The production `organization-scan.yml` remains a read-only OSS source scanner;
+it does not enable CodeQL or upload results to GitHub Code Scanning. The public
+`segh` development CI does use CodeQL. Simply declaring `security-events: write`
+is not billable; whether the permission can be removed depends on the
+requirements of the pinned reusable workflow.
+
 ## Architecture
 
 ```text
