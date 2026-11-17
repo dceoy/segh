@@ -59,7 +59,7 @@ jobs:
       - name: Install scanner tools
         uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.8.3
+          version: v2026.8.3
           sha256: 66585ac496c10bf6fbf13272e3e550c1813aed0e1cb780b9bb73c1751de49289
           working_directory: skills/repository-security-audit
       - name: Validate workflow credential boundary
