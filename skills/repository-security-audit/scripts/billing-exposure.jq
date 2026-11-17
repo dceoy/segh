@@ -5,7 +5,7 @@ def feature_fields($names):
 def observed_status($fields; $id):
   if any($fields[]; .status == "enabled") then "enabled"
   elif $id == "code-security" and any($fields[];
-      .status == "disabled" and (.name == "code_security" or .name == "advanced_security")) then "disabled"
+      .status == "disabled" and .name == "code_security") then "disabled"
   elif $id == "secret-protection" and any($fields[];
       .status == "disabled" and .name == "secret_scanning") then "disabled"
   else "unknown"
@@ -37,9 +37,9 @@ def feature($id; $license; $names; $visibility):
     source: "repository-metadata.json",
     features: [
       ($repo | feature("code-security"; "GitHub Code Security";
-        ["code_security", "advanced_security", "code_scanning_default_setup"]; $repo.visibility)),
+        ["code_security", "advanced_security"]; $repo.visibility)),
       ($repo | feature("secret-protection"; "GitHub Secret Protection";
-        ["secret_scanning", "secret_scanning_push_protection"]; $repo.visibility))
+        ["secret_scanning", "secret_scanning_push_protection", "advanced_security"]; $repo.visibility))
     ],
     limitations: [
       "Settings omitted by the API, including those hidden by permissions, are unknown, not disabled.",
