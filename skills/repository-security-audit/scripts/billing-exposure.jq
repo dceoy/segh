@@ -1,6 +1,10 @@
 def feature_fields($names):
-  (.security_and_analysis // {}) as $settings
-  | [$names[] as $name | {name: $name, status: ($settings[$name].status // null)}];
+  (.security_and_analysis | if type == "object" then . else {} end) as $settings
+  | [$names[] as $name | {
+      name: $name,
+      status: ($settings[$name] |
+        if type == "object" and (.status | type) == "string" then .status else null end)
+    }];
 
 def observed_status($fields; $id):
   if any($fields[]; .status == "enabled") then "enabled"
