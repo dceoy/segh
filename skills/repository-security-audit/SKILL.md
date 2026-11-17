@@ -83,8 +83,8 @@ cannot change the scanner's analysis policy.
 
 ## Interpret the evidence
 
-Read `summary.json`, `github-controls.json`, `coverage-gaps.json`, and the
-native scanner files before writing a report. Then read:
+Read `summary.json`, `github-controls.json`, `billing-exposure.json`,
+`coverage-gaps.json`, and the native scanner files before writing a report. Then read:
 
 - `references/checks.md` for the meaning of every GitHub control and its
   permission-dependent `unknown` state.
