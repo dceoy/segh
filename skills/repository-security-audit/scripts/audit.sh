@@ -379,6 +379,9 @@ jq -s --arg repository "$repo" --arg commit_sha "$commit_sha" \
   '{schema_version: 1, repository: $repository, commit_sha: $commit_sha, controls: .}' \
   "$tmp/controls.ndjson" > "$output/github-controls.json"
 
+# Keep license exposure separate from security-control findings.
+jq -f "$skill_root/scripts/billing-exposure.jq" "$output/repository-metadata.json" > "$output/billing-exposure.json"
+
 : > "$tmp/scanners.ndjson"
 
 record_scanner() {
@@ -450,6 +453,7 @@ build_summary() {
   jq -n \
     --slurpfile target "$output/target.json" \
     --slurpfile controls "$output/github-controls.json" \
+    --slurpfile billing "$output/billing-exposure.json" \
     --slurpfile scanners "$tmp/scanners.ndjson" \
     --arg overall "$overall" \
     --arg toolchain_stage "$toolchain_stage" --arg checkout_stage "$checkout_stage" \
@@ -462,10 +466,13 @@ build_summary() {
         versions: $versions_stage, preflight: $preflight_stage},
       scanners: $scanners,
       github_controls: $controls[0].controls,
+      billing_exposure: $billing[0],
       evidence_artifact: "repository-security-audit"}' \
     > "$output/summary.json"
   jq '{schema_version: 1,
       gaps: [.github_controls[] | select(.state == "unknown") | {id, reason, required_permission}],
+      billing_gaps: [.billing_exposure.features[] | select(.billing_exposure == "unknown") |
+        {id, reason: "paid-feature-state-not-observable"}],
       scanner_gaps: [.scanners[] | select(.status == "error" or .status == "skipped") |
         {id: .name, reason: "scanner-evidence-unavailable", status: .status}],
       stage_gaps: ([.stage_status | to_entries[] | select(.value != "0") |
