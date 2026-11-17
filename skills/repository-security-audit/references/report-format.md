@@ -26,6 +26,18 @@ Summarize every control from `github-controls.json`, including pass, finding,
 unknown, and error states. Explain the reason and required permission for
 unknown/error controls. A missing permission is a coverage gap, not a pass.
 
+## GitHub license exposure
+
+Report the independent `billing-exposure.json` classification for GitHub Code
+Security and GitHub Secret Protection. For private/internal repositories,
+`potential-license-required` means a corresponding setting was observed enabled,
+not that a bill or licensed seat was verified. `not-enabled` is based only on
+observed disabled settings; omitted settings are `unknown`, not disabled.
+Public repositories use `no-additional-license-for-public`. Do not label
+paid-feature enablement itself as a security vulnerability or infer billing from
+`security-events: write` alone. This check does not inspect GitHub Actions
+upload destinations, organization-wide policies, or invoices.
+
 ## Source scanners
 
 Report the native result for Scorecard, zizmor, actionlint, ShellCheck,

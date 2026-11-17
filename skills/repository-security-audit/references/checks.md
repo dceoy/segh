@@ -34,6 +34,31 @@ response with an attached configuration is `pass: association-observed`; a
 204 response is `pass: no-association`. Other successful response shapes are
 malformed evidence.
 
+## Billing exposure (independent of security controls)
+
+`billing-exposure.json` classifies repository-level paid security feature
+configuration separately from vulnerability findings. It uses the
+`security_and_analysis` fields returned by `GET /repos/{owner}/{repo}`:
+
+- `code_security` and legacy `advanced_security` indicate potential GitHub
+  Code Security exposure. `code_scanning_default_setup` is a code security
+  *configuration* setting, not a field in repository `security_and_analysis`.
+- `secret_scanning`, `secret_scanning_push_protection`, and legacy
+  `advanced_security` indicate possible GitHub Secret Protection exposure.
+  Legacy Advanced Security enablement can cover both licensed products.
+- On a public repository, the same enabled settings do not require an
+  additional private-repository license.
+- On private/internal repositories, observed enablement produces
+  `potential-license-required`; only an explicitly disabled primary product
+  setting (`code_security` or `secret_scanning`) produces `not-enabled`.
+  Disabled secondary settings or legacy GHAS alone do not establish that the
+  standalone product is disabled. Missing or unrecognized metadata is `unknown`.
+
+The data describes feature configuration, not billed active committers or actual
+invoices. An `unknown` value must never be interpreted as a free/disabled state.
+The standalone audit does not infer CodeQL/SARIF use from workflow files, and
+the production organization scan intentionally remains source-scan-only.
+
 ## GitHub Actions controls
 
 `actions_permissions` reads `GET /repos/{owner}/{repo}/actions/permissions`.
