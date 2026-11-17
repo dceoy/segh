@@ -46,7 +46,7 @@ jobs:
     env:
       GH_TELEMETRY: 'false'
       MISE_USE_VERSIONS_HOST_TRACK: 'false'
-      MISE_CEILING_PATHS: ${{ github.workspace }}/skills
+      MISE_CEILING_PATHS: ${{ github.workspace }}/..
     permissions:
       contents: read
     steps:
@@ -60,7 +60,7 @@ jobs:
         uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           auto_update: true
-          working_directory: skills/repository-security-audit
+          working_directory: .
       - name: Validate workflow credential boundary
         run: |
           shellcheck --exclude=SC2016 scripts/validate-workflow-boundary.sh
@@ -99,7 +99,7 @@ jobs:
           [[ "$trivy_status" -le 1 ]]
           [[ "$checkov_findings" -gt 0 ]]
           [[ "$checkov_parse_errors" -eq 0 ]]
-          for framework in cloudformation dockerfile helm kubernetes kustomize terraform; do
+          for framework in cloudformation dockerfile terraform; do
             jq -e --arg framework "$framework" \
               '[if type == "array" then .[] else . end
                 | select(.check_type == $framework and ((.summary.resource_count // 0) > 0))] | length > 0' \
@@ -118,6 +118,10 @@ jobs:
               checkov-coverage/checkov.json > /dev/null \
               || { echo "::error::Checkov produced no executed checks for framework: $framework"; exit 1; }
           done
+          jq -e '[if type == "array" then .[] else . end
+            | select(.check_type == "argo_workflows" or .check_type == "helm" or
+                     .check_type == "kubernetes" or .check_type == "kustomize")] | length == 0' \
+            checkov-coverage/checkov.json > /dev/null
           [[ "$checkov_parse_errors" -eq 0 ]]
   production-workflow:
     if: github.event_name == 'pull_request'
