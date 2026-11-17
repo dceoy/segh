@@ -74,6 +74,8 @@ jobs:
         run: bash tests/test-trivy-directives.sh
       - name: Test standalone repository security audit
         run: bash tests/test-repository-security-audit.sh
+      - name: Test paid GitHub security feature classification
+        run: bash tests/test-billing-exposure.sh
       - name: Test standalone boundary helpers
         run: |
           bash tests/test-preflight.sh skills/repository-security-audit/scripts/preflight.sh
