@@ -494,7 +494,6 @@ jobs:
         uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           auto_update: true
-          minimum_release_age: 7d
           working_directory: _trusted/skills/repository-security-audit
       - name: Record scanner versions
         if: steps.tools.outcome == 'success'
