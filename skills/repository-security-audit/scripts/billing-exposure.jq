@@ -2,10 +2,12 @@ def feature_fields($names):
   (.security_and_analysis // {}) as $settings
   | [$names[] as $name | {name: $name, status: ($settings[$name].status // null)}];
 
-def observed_status($fields):
+def observed_status($fields; $id):
   if any($fields[]; .status == "enabled") then "enabled"
-  elif any($fields[]; .status == "disabled") and
-       all($fields[]; .status == null or .status == "disabled") then "disabled"
+  elif $id == "code-security" and any($fields[];
+      .status == "disabled" and (.name == "code_security" or .name == "advanced_security")) then "disabled"
+  elif $id == "secret-protection" and any($fields[];
+      .status == "disabled" and .name == "secret_scanning") then "disabled"
   else "unknown"
   end;
 
@@ -18,7 +20,7 @@ def billing_exposure($visibility; $status):
 
 def feature($id; $license; $names; $visibility):
   feature_fields($names) as $fields
-  | observed_status($fields) as $status
+  | observed_status($fields; $id) as $status
   | {
       id: $id,
       license: $license,
