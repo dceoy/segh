@@ -28,27 +28,27 @@ url = "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_
 url_api = "https://api.github.com/repos/rhysd/actionlint/releases/assets/384924880"
 
 [[tools.checkov]]
-version = "3.4.0"
+version = "3.4.5"
 backend = "aqua:bridgecrewio/checkov"
 specifiers = ["latest"]
 
 [tools.checkov."platforms.linux-x64"]
-checksum = "sha256:59f301aab502600dc1bd547e0fa66f3871fd79b20cbd36594ac03d0190d5e913"
+checksum = "sha256:8b088b4b7c0ffffa47c5c463978057187c457b62ccdcc2137697d5b3be3de79e"
 checksum_source = "mise-versions"
-url = "https://github.com/bridgecrewio/checkov/releases/download/3.4.0/checkov_linux_X86_64.zip"
-url_api = "https://api.github.com/repos/bridgecrewio/checkov/releases/assets/686637877"
+url = "https://github.com/bridgecrewio/checkov/releases/download/3.4.5/checkov_linux_X86_64.zip"
+url_api = "https://api.github.com/repos/bridgecrewio/checkov/releases/assets/741419961"
 
 [tools.checkov."platforms.macos-arm64"]
-checksum = "sha256:07f6e06a609c87139924945e84c37b94afddd9b4367131c17cfc2f0e9dc7238e"
+checksum = "sha256:53dad6f879ff290d8c97284478b3312b79e4e2c85e40081db574268386fd89c0"
 checksum_source = "mise-versions"
-url = "https://github.com/bridgecrewio/checkov/releases/download/3.4.0/checkov_darwin_X86_64.zip"
-url_api = "https://api.github.com/repos/bridgecrewio/checkov/releases/assets/686638589"
+url = "https://github.com/bridgecrewio/checkov/releases/download/3.4.5/checkov_darwin_X86_64.zip"
+url_api = "https://api.github.com/repos/bridgecrewio/checkov/releases/assets/741420285"
 
 [tools.checkov."platforms.macos-x64"]
-checksum = "sha256:07f6e06a609c87139924945e84c37b94afddd9b4367131c17cfc2f0e9dc7238e"
+checksum = "sha256:53dad6f879ff290d8c97284478b3312b79e4e2c85e40081db574268386fd89c0"
 checksum_source = "mise-versions"
-url = "https://github.com/bridgecrewio/checkov/releases/download/3.4.0/checkov_darwin_X86_64.zip"
-url_api = "https://api.github.com/repos/bridgecrewio/checkov/releases/assets/686638589"
+url = "https://github.com/bridgecrewio/checkov/releases/download/3.4.5/checkov_darwin_X86_64.zip"
+url_api = "https://api.github.com/repos/bridgecrewio/checkov/releases/assets/741420285"
 
 [[tools.hcl2json]]
 version = "0.6.9"
