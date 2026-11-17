@@ -41,4 +41,8 @@ assert_case \
   '{"full_name":"org/private","visibility":"private","security_and_analysis":{"code_security":{"status":"not_set"},"secret_scanning":{"status":"unexpected"}}}' \
   unknown unknown unknown unknown
 
+assert_case \
+  '{"full_name":"org/private","visibility":"private","security_and_analysis":{"secret_scanning_push_protection":{"status":"disabled"}}}' \
+  unknown unknown unknown unknown
+
 printf '%s\n' 'Billing-exposure classification tests passed.'
