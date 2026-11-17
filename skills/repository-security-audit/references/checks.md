@@ -40,15 +40,19 @@ malformed evidence.
 configuration separately from vulnerability findings. It uses the
 `security_and_analysis` fields returned by `GET /repos/{owner}/{repo}`:
 
-- `code_security`, legacy `advanced_security`, and `code_scanning_default_setup`
-  indicate potential GitHub Code Security exposure.
-- `secret_scanning` and `secret_scanning_push_protection` indicate potential
-  GitHub Secret Protection exposure.
+- `code_security` and legacy `advanced_security` indicate potential GitHub
+  Code Security exposure. `code_scanning_default_setup` is a code security
+  *configuration* setting, not a field in repository `security_and_analysis`.
+- `secret_scanning`, `secret_scanning_push_protection`, and legacy
+  `advanced_security` indicate possible GitHub Secret Protection exposure.
+  Legacy Advanced Security enablement can cover both licensed products.
 - On a public repository, the same enabled settings do not require an
   additional private-repository license.
 - On private/internal repositories, observed enablement produces
-  `potential-license-required`; explicit disabled settings produce `not-enabled`;
-  missing or unrecognized metadata produces `unknown`.
+  `potential-license-required`; only an explicitly disabled primary product
+  setting (`code_security` or `secret_scanning`) produces `not-enabled`.
+  Disabled secondary settings or legacy GHAS alone do not establish that the
+  standalone product is disabled. Missing or unrecognized metadata is `unknown`.
 
 The data describes feature configuration, not billed active committers or actual
 invoices. An `unknown` value must never be interpreted as a free/disabled state.
