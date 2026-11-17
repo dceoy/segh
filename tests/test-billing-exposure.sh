@@ -57,4 +57,12 @@ assert_case \
   '{"full_name":"org/private","visibility":"private","security_and_analysis":{"advanced_security":{"status":"disabled"}}}' \
   unknown unknown unknown unknown
 
+assert_case \
+  '{"full_name":"org/private","visibility":"private","security_and_analysis":{"code_security":"enabled","secret_scanning":["enabled"]}}' \
+  unknown unknown unknown unknown
+
+assert_case \
+  '{"full_name":"org/private","visibility":"private","security_and_analysis":"malformed"}' \
+  unknown unknown unknown unknown
+
 printf '%s\n' 'Billing-exposure classification tests passed.'
