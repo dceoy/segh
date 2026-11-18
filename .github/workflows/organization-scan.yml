@@ -4,22 +4,27 @@ name: Organization source scan
 on:
   workflow_call:
     inputs:
-      repository_limit:
+      repository-limit:
         description: Maximum accepted GitHub App repository selection; larger selections fail closed
         required: false
         type: string
         default: "50"
-      max_parallel:
+      max-parallel:
         description: Maximum number of repository scans to run concurrently
         required: false
         type: string
         default: "4"
-      dashboard_publication:
+      use-dep-scan:
+        description: Whether to perform optional SBOM-only OWASP dep-scan without executing target code
+        required: false
+        type: boolean
+        default: false
+      dashboard-publication:
         description: Dashboard publication mode for reusable callers; use deferred when a final reconciler owns issue writes
         required: false
         type: string
         default: "inline"
-      validation_mode:
+      validation-mode:
         description: Internal production-path validation; accepted only for dceoy/segh pull requests
         required: false
         type: boolean
@@ -31,12 +36,17 @@ on:
         required: false
   workflow_dispatch:
     inputs:
-      repository_limit:
+      use-dep-scan:
+        description: Whether to run SBOM-only OWASP dep-scan
+        required: false
+        type: boolean
+        default: false
+      repository-limit:
         description: Maximum accepted GitHub App repository selection; larger selections fail closed
         required: false
         type: string
         default: "50"
-      max_parallel:
+      max-parallel:
         description: Maximum number of repository scans to run concurrently
         required: false
         type: string
@@ -62,7 +72,7 @@ jobs:
       max_parallel: ${{ steps.targets.outputs.max_parallel }}
     steps:
       - name: Require a private control repository
-        if: inputs.validation_mode != true
+        if: inputs['validation-mode'] != true
         env:
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
         run: |
@@ -71,7 +81,7 @@ jobs:
             exit 1
           fi
       - name: Require GitHub App credentials
-        if: inputs.validation_mode != true
+        if: inputs['validation-mode'] != true
         env:
           APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
           APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
@@ -81,7 +91,7 @@ jobs:
             exit 1
           fi
       - name: Create installation read token
-        if: inputs.validation_mode != true
+        if: inputs['validation-mode'] != true
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -94,14 +104,14 @@ jobs:
         id: targets
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          VALIDATION_MODE: ${{ inputs.validation_mode }}
+          VALIDATION_MODE: ${{ inputs['validation-mode'] }}
           CALLER_REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          REPOSITORY_LIMIT: ${{ inputs.repository_limit || '50' }}
-          MAX_PARALLEL: ${{ inputs.max_parallel || '4' }}
+          REPOSITORY_LIMIT: ${{ inputs['repository-limit'] || '50' }}
+          MAX_PARALLEL: ${{ inputs['max-parallel'] || '4' }}
         with:
-          github-token: ${{ inputs.validation_mode && github.token || steps.app-token.outputs.token }}
+          github-token: ${{ inputs['validation-mode'] && github.token || steps.app-token.outputs.token }}
           script: |
             const fs = require('fs');
             const shaPattern = /^[0-9a-f]{40}$/;
@@ -136,7 +146,7 @@ jobs:
               }
               selected.sort((left, right) => left.full_name < right.full_name ? -1 : left.full_name > right.full_name ? 1 : 0);
               if (selected.length > limit) {
-                throw new Error(`GitHub App selected ${selected.length} repositories, exceeding repository_limit=${limit}; refusing incomplete coverage.`);
+                throw new Error(`GitHub App selected ${selected.length} repositories, exceeding repository-limit=${limit}; refusing incomplete coverage.`);
               }
               return selected;
             };
@@ -194,13 +204,13 @@ jobs:
               try { await operation(); } catch (error) { if (pattern.test(error.message)) return; throw error; }
               throw new Error(`Expected validation failure matching ${pattern}.`);
             };
-            const repositoryLimit = boundedInteger(process.env.REPOSITORY_LIMIT, 'repository_limit', 1, 100);
+            const repositoryLimit = boundedInteger(process.env.REPOSITORY_LIMIT, 'repository-limit', 1, 100);
             const maxParallel = boundedInteger(process.env.MAX_PARALLEL, 'max_parallel', 1, 10);
             let matrix;
 
             if (process.env.VALIDATION_MODE === 'true') {
               if (process.env.CALLER_REPOSITORY !== 'dceoy/segh' || process.env.EVENT_NAME !== 'pull_request') {
-                throw new Error('validation_mode is restricted to pull requests in dceoy/segh.');
+                throw new Error('validation-mode is restricted to pull requests in dceoy/segh.');
               }
               if (!shaPattern.test(process.env.HEAD_SHA || '')) {
                 throw new Error('The validation pull request head must resolve to an immutable commit SHA.');
@@ -232,7 +242,7 @@ jobs:
               }
               await expectFailure(() => selectRepositories([alpha, alpha], 2), /duplicate repository IDs/);
               await expectFailure(() => selectRepositories([repository(6, 'bad', {owner: {login: ''}})], 1), /malformed or missing identity/);
-              await expectFailure(() => selectRepositories([alpha, beta], 1), /exceeding repository_limit=1/);
+              await expectFailure(() => selectRepositories([alpha, beta], 1), /exceeding repository-limit=1/);
               if (selectRepositories([], 1).length !== 0) throw new Error('Empty installation selection must remain valid.');
               await expectFailure(() => resolveMatrix({rest: {repos: {getCommit: async () => { throw new Error('not found'); }}}}, [alpha]), /failed to resolve default branch/);
               const resolved = await resolveMatrix({rest: {repos: {getCommit: async () => ({data: {sha: process.env.HEAD_SHA}})}}}, selected);
@@ -254,7 +264,7 @@ jobs:
             }
 
             validateMatrix(matrix);
-            if (matrix.include.length > repositoryLimit) throw new Error(`Resolved scan matrix violates repository_limit=${repositoryLimit}.`);
+            if (matrix.include.length > repositoryLimit) throw new Error(`Resolved scan matrix violates repository-limit=${repositoryLimit}.`);
             const matrixJson = JSON.stringify(matrix);
             fs.writeFileSync('matrix.json', `${matrixJson}\n`);
             core.setOutput('matrix', matrixJson);
@@ -291,7 +301,7 @@ jobs:
     steps:
       - name: Record immutable target metadata
         id: target
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         env:
           REPOSITORY_ID: ${{ matrix.id }}
           REPOSITORY: ${{ matrix.full_name }}
@@ -396,7 +406,7 @@ jobs:
           path: _trusted
           persist-credentials: false
       - name: Create repository-scoped read-only token
-        if: inputs.validation_mode != true
+        if: inputs['validation-mode'] != true
         id: target-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -411,19 +421,19 @@ jobs:
           permission-pull-requests: read
       - name: Check out untrusted target revision
         id: checkout
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ matrix.full_name }}
           ref: ${{ matrix.commit_sha }}
-          token: ${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}
+          token: ${{ inputs['validation-mode'] && github.token || steps.target-token.outputs.token }}
           path: _target
           persist-credentials: false
           fetch-depth: 1
           lfs: false
           submodules: false
       - name: Prepare boundary smoke fixture
-        if: inputs.validation_mode && steps.checkout.outcome == 'success'
+        if: inputs['validation-mode'] && steps.checkout.outcome == 'success'
         env:
           CASE: ${{ matrix.validation_case }}
         run: |
@@ -490,7 +500,7 @@ jobs:
       - name: Install scanner tools
         if: steps.checkout.outcome == 'success'
         id: tools
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           auto_update: true
@@ -498,7 +508,7 @@ jobs:
       - name: Record scanner versions
         if: steps.tools.outcome == 'success'
         id: versions
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         run: |
           {
             printf 'scorecard: '; scorecard version
@@ -511,15 +521,15 @@ jobs:
       - name: Validate target content
         if: steps.checkout.outcome == 'success' && steps.tools.outcome == 'success'
         id: preflight
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         shell: bash
         run: _trusted/scripts/preflight.sh _target 2>&1 | tee results/preflight.txt
       - name: Run OpenSSF Scorecard
         if: always() && steps.preflight.outcome == 'success'
         id: scorecard
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         env:
-          SEGH_TARGET_SCORECARD_TOKEN: ${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}
+          SEGH_TARGET_SCORECARD_TOKEN: ${{ inputs['validation-mode'] && github.token || steps.target-token.outputs.token }}
           REPOSITORY: ${{ matrix.full_name }}
           COMMIT_SHA: ${{ matrix.commit_sha }}
         run: |
@@ -538,7 +548,7 @@ jobs:
       - name: Run zizmor
         if: always() && steps.preflight.outcome == 'success'
         id: zizmor
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         run: |
           files=()
           while IFS= read -r -d '' entry; do
@@ -559,7 +569,7 @@ jobs:
       - name: Run actionlint
         if: always() && steps.preflight.outcome == 'success'
         id: actionlint
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         run: |
           files=()
           while IFS= read -r -d '' entry; do
@@ -579,7 +589,7 @@ jobs:
       - name: Run ShellCheck
         if: always() && steps.preflight.outcome == 'success'
         id: shellcheck
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         env:
           VALIDATION_CASE: ${{ matrix.validation_case }}
         run: |
@@ -652,12 +662,12 @@ jobs:
       - name: Run Checkov IaC scan
         if: always() && steps.preflight.outcome == 'success'
         id: checkov
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         run: _trusted/scripts/run-checkov.sh _target results
       - name: Run Trivy source scan
         if: always() && steps.preflight.outcome == 'success'
         id: trivy
-        continue-on-error: ${{ inputs.validation_mode }}
+        continue-on-error: ${{ inputs['validation-mode'] }}
         run: |
           : > results/trivy.json
           if ! _trusted/skills/repository-security-audit/scripts/validate-trivy-directives.sh _target 2> results/trivy.log; then
@@ -668,6 +678,11 @@ jobs:
             --exit-code 1 --format json --output results/trivy.json \
             --skip-dirs _target/.git --skip-version-check --disable-telemetry _target \
             2> results/trivy.log
+      - name: Run OWASP dep-scan on generated SBOM
+        if: always() && steps.preflight.outcome == 'success' && inputs['use-dep-scan'] == true
+        id: dep-scan
+        continue-on-error: ${{ inputs['validation-mode'] }}
+        run: bash _trusted/scripts/run-dep-scan.sh _target results
       - name: Build bounded dashboard summary
         if: always() && steps.target.outcome == 'success' && steps.trusted.outcome == 'success'
         id: summary
@@ -682,6 +697,8 @@ jobs:
           SHELLCHECK_OUTCOME: ${{ steps.shellcheck.outcome }}
           CHECKOV_OUTCOME: ${{ steps.checkov.outcome }}
           TRIVY_OUTCOME: ${{ steps.trivy.outcome }}
+          DEPSCAN_ENABLED: ${{ inputs['use-dep-scan'] }}
+          DEPSCAN_OUTCOME: ${{ steps.dep-scan.outcome }}
           DASHBOARD_REPOSITORY: ${{ github.repository }}
         run: node _trusted/scripts/build-dashboard-summary.js results results/summary.json
       - name: Retain bounded dashboard summary
@@ -703,7 +720,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Assert production boundary smoke outcomes
-        if: always() && inputs.validation_mode
+        if: always() && inputs['validation-mode']
         env:
           CASE: ${{ matrix.validation_case }}
           CHECKOUT: ${{ steps.checkout.outcome }}
@@ -771,8 +788,8 @@ jobs:
       - scan
     if: >-
       always() &&
-      inputs.validation_mode != true &&
-      inputs.dashboard_publication != 'deferred' &&
+      inputs['validation-mode'] != true &&
+      inputs['dashboard-publication'] != 'deferred' &&
       needs.plan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 20

@@ -134,9 +134,9 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/organization-scan.yml
     with:
-      validation_mode: true
-      repository_limit: "50"
-      max_parallel: "4"
+      validation-mode: true
+      repository-limit: "50"
+      max-parallel: "4"
   dependabot-auto-merge:
     if: >
       github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
