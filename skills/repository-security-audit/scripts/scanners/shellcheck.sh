@@ -36,7 +36,7 @@ if ((${#shell_files[@]} == 0)); then
   printf '%s\n' 0 > "$output/shellcheck-status.txt"
 else
   set +e
-  env -u SHELLCHECK_OPTS mise -C "$skill_root" exec -- "$skill_root/scripts/scanners/shellcheck.sh" \
+  env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- "$skill_root/scripts/scanners/shellcheck.sh" \
     --color=never --format=json1 --rcfile /dev/null \
     --severity=style -- "${shell_files[@]}" > "$output/shellcheck.json" 2> "$output/shellcheck.log"
   shellcheck_status=$?
@@ -49,7 +49,9 @@ fi
 
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 readonly skill_root
-MISE_CEILING_PATHS=$(dirname -- "$skill_root")
+repo_root=$(cd -- "$skill_root/../.." && pwd)
+readonly repo_root
+MISE_CEILING_PATHS=$(dirname -- "$repo_root")
 export MISE_CEILING_PATHS
 unset SHELLCHECK_OPTS
 
@@ -102,6 +104,6 @@ for input_file in "${input_files[@]}"; do
 done
 
 if [[ "$stdin_requested" == true ]]; then
-  exec env -u SHELLCHECK_OPTS mise -C "$skill_root" exec -- shellcheck "${shellcheck_args[@]}" < "$stdin_file"
+  exec env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- shellcheck "${shellcheck_args[@]}" < "$stdin_file"
 fi
-exec env -u SHELLCHECK_OPTS mise -C "$skill_root" exec -- shellcheck "${shellcheck_args[@]}"
+exec env -u SHELLCHECK_OPTS mise -C "$repo_root" exec -- shellcheck "${shellcheck_args[@]}"

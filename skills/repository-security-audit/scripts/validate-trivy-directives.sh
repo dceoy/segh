@@ -5,7 +5,9 @@ set -euo pipefail
 readonly target=${1:?target checkout is required}
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 readonly skill_root
-MISE_CEILING_PATHS=$(dirname -- "$skill_root")
+repo_root=$(cd -- "$skill_root/../.." && pwd)
+readonly repo_root
+MISE_CEILING_PATHS=$(dirname -- "$repo_root")
 export MISE_CEILING_PATHS
 index=$(mktemp)
 readonly index
@@ -46,7 +48,7 @@ while IFS= read -r -d '' entry; do
   # Parse syntax rather than matching source text (JSON keys may be escaped).
   case "$path" in
     *.tf|*.tofu)
-      if ! parsed=$(mise -C "$skill_root" exec -- hcl2json < "$target/$path"); then
+      if ! parsed=$(mise -C "$repo_root" exec -- hcl2json < "$target/$path"); then
         printf 'Unable to parse Trivy Terraform input: %s\n' "$path" >&2
         exit 2
       fi

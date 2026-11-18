@@ -6,13 +6,13 @@ The repository intentionally contains no application server, database, custom RE
 
 ## Scanners
 
-The production workflow installs checksum-verified tools with Aqua and runs:
+The shared, checksum-verified CLI toolchain is defined by repository-root `mise.toml` and `mise.lock`. Both the organization workflow and standalone skill use that trusted configuration. The production workflow runs:
 
 - OpenSSF Scorecard
 - zizmor
 - actionlint
 - ShellCheck
-- Checkov, an independent IaC misconfiguration scanner (running its full default framework set, so it also incidentally overlaps Trivy secret scanning and zizmor Actions scanning; every Checkov finding is still reported under the `finding:misconfiguration` label regardless of which framework produced it)
+- Checkov, an independent IaC misconfiguration scanner (all non-Kubernetes default frameworks; Argo Workflows, Helm, Kubernetes, and Kustomize are excluded). Findings remain labeled `finding:misconfiguration`.
 - Trivy vulnerability, secret, and misconfiguration scanners (one filesystem invocation)
 
 OpenSSF Scorecard is informational evidence. A successful execution with parseable native Scorecard JSON is reported as `pass` regardless of aggregate or individual check scores; only execution or evidence-integrity failures become scanner errors. `segh` does not translate Scorecard scores into findings, thresholds, or finding labels.
@@ -26,10 +26,10 @@ Scanner-native collection is used only when it preserves the preflighted target 
 - **zizmor:** keep explicit Git-index selection for workflow and action YAML. Native workflow/action collection honors target-owned `.gitignore`; disabling that behavior with `--collect=all` broadens the collected input kinds. Explicit selection also preserves a successful empty result when no matching files exist.
 - **actionlint:** keep explicit Git-index selection. Repository-native discovery recursively walks `.github/workflows` from the filesystem and treats an empty workflow set as a fatal error, so it is not coverage- or no-match-equivalent.
 - **ShellCheck:** keep explicit Git-index selection because ShellCheck has no repository-native collector matching segh's extension-plus-supported-shebang policy.
-- **Checkov:** keep native directory collection after preflight, running Checkov's full default framework set (no `framework:` allowlist). This intentionally overlaps Trivy's secret scanning and zizmor's GitHub Actions scanning rather than trying to keep Checkov confined to IaC misconfiguration alone; Checkov and Trivy each produce independent misconfiguration evidence; overlapping findings are not deduplicated. The workflow pins trusted Checkov configuration, disables Prisma Cloud downloads and result uploads, and does not load target-owned `.checkov.yml`, external checks, or remote policies. Two default frameworks have a known accepted parsing gap of the same shape: their runners silently drop files they cannot parse without incrementing `parsing_errors`, so a target can hide from that framework specifically with a deliberately malformed file. This is accepted as a residual risk rather than fixed, since matching either runner's private parser internals with a stable pre-check is not practical:
-  - **Serverless:** `serverless/parsers/parser.py::parse()` catches its custom YAML loader's parse errors and returns `None` for a malformed `serverless.yml`.
-  - **OpenAPI:** `openapi/runner.py::parse_format()` catches `ValueError` from its YAML/JSON parsing and returns `None` for a malformed OpenAPI document.
-- **Trivy:** keep native `filesystem` collection with `--scanners vuln,secret,misconfig` in a single invocation. It runs only after preflight has excluded untracked content and unsafe Git object types; target-owned Trivy configuration and ignore files are disabled with `/dev/null`, and `.git` is excluded. A shared validator rejects target-owned `trivy:`/`tfsec:` inline suppression directives before scanning, retaining a scanner error. This conservative check can also reject directive-shaped documentation or string literals. The validator also rejects all Terraform/OpenTofu module declarations, including local modules, in `.tf`, `.tofu`, `.tf.json`, and `.tofu.json` before Trivy can download target-chosen sources. Malformed configurations fail closed. Rejections leave all three combined Trivy categories as scanner errors rather than clean results.
+- **Checkov:** keep native directory collection after preflight, excluding Argo Workflows, Helm, Kubernetes, and Kustomize. Other default frameworks stay enabled. Trusted configuration disables downloads/uploads and excludes target-owned settings. Serverless and OpenAPI parsers can silently ignore malformed inputs without incrementing `parsing_errors`; this is a known residual coverage risk.
+- **Trivy:** keep native `filesystem` collection for vulnerabilities, secrets, and misconfigurations in one invocation. Misconfiguration scanning excludes Helm and Kubernetes while preserving other IaC types. The trusted validator rejects target-owned suppressions and all Terraform/OpenTofu module declarations before potential downloads. Rejections leave all three categories as errors, not clean results.
+
+Kubernetes workloads and Helm/Kustomize manifests are out of scope for IaC misconfiguration scanning. Generic secret, dependency, and source scanners may still inspect those files.
 
 The standalone `repository-security-audit` skill additionally runs
 OSV-Scanner, Semgrep OSS, and TruffleHog without verification or updates against the preflighted
@@ -129,7 +129,7 @@ Pull-request CI runs:
 - a small Shell/yq credential-boundary validator for segh-specific invariants;
 - shell tests for the target preflight boundary;
 - Node tests for summary normalization and issue publication, including Checkov findings versus scanner/parsing failures;
-- a per-framework Checkov IaC coverage regression gate and a complementary Trivy misconfiguration coverage run;
+- a non-Kubernetes Checkov framework coverage regression gate and a complementary Trivy misconfiguration coverage run;
 - actionlint, zizmor, and ShellCheck;
 - YAML/JSON parsing and Aqua checksum verification; and
 - the real organization scanner in deterministic `validation_mode`.

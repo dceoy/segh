@@ -1,2 +1,0 @@
-resources:
-  - https://github.com/kubernetes-sigs/kustomize/examples/multibases/dev?ref=v1.0.6

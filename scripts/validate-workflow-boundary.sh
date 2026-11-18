@@ -112,19 +112,20 @@ assert_present "$checkov_runner_text" '--config-file .github/checkov.yml' 'Check
 assert_present "$checkov_runner_text" '--skip-download' 'Checkov must disable remote policy/config downloads'
 assert_present "$checkov_runner_text" '--skip-results-upload' 'Checkov must not upload results'
 assert_present "$checkov_runner_text" 'CKV_PARSE_ERROR_FAIL=true' 'Checkov parsing errors must fail closed'
-assert_present "$checkov_runner_text" 'CHECKOV_HELM_ALLOWED_REMOTE_REPOS=none' \
-  'Checkov Helm scanning must block remote dependency repositories'
-assert_present "$checkov_runner_text" 'CHECKOV_KUSTOMIZE_ALLOWED_REMOTE_PREFIXES=none' \
-  'Checkov Kustomize scanning must block remote resources'
+for framework in argo_workflows helm kubernetes kustomize; do
+  grep -Fx "  - $framework" "$root/.github/checkov.yml" > /dev/null \
+    || fail "Checkov must skip Kubernetes-related framework: $framework"
+done
 assert_present "$checkov_runner_text" 'checkov.json' 'Checkov native JSON evidence must be retained'
 assert_present "$checkov_runner_text" 'checkov-status.txt' 'Checkov execution status must be retained'
 assert_absent "$checkov_runner_text" 'external-checks' 'external Checkov checks must not be loaded'
-assert_value '[.jobs.scan.steps[] | select(.id == "tools")][0].with.working_directory' '_trusted/skills/repository-security-audit' \
-  'mise must install the portable audit skill toolchain'
+assert_value '[.jobs.scan.steps[] | select(.id == "tools")][0].with.working_directory' '_trusted' \
+  'mise must install the trusted repository toolchain'
 assert_value '[.jobs.scan.steps[] | select(.id == "trivy")] | length' '1' \
   'one combined Trivy source scan is required'
 trivy_steps=$(yq -r '.jobs.scan.steps[] | select(.id == "trivy") | .run' "$scan")
 assert_present "$trivy_steps" '--scanners vuln,secret,misconfig' 'Trivy must run all three scanner kinds'
+assert_present "$trivy_steps" '--misconfig-scanners azure-arm,cloudformation,dockerfile,terraform,terraformplan-json,terraformplan-snapshot,ansible' 'Trivy must exclude Kubernetes and Helm misconfigurations'
 assert_present "$trivy_steps" '_trusted/skills/repository-security-audit/scripts/validate-trivy-directives.sh _target' \
   'Trivy must reject target-owned inline suppressions'
 

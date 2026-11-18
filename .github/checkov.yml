@@ -1,5 +1,10 @@
 ---
 skip-check: []
+skip-framework:
+  - argo_workflows
+  - helm
+  - kubernetes
+  - kustomize
 compact: true
 download-external-modules: false
 evaluate-variables: false

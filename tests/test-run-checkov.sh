@@ -8,9 +8,6 @@ readonly root
 trap 'rm -rf "$root"' EXIT
 
 command -v checkov > /dev/null
-command -v helm > /dev/null
-command -v kubectl > /dev/null
-command -v yq > /dev/null
 command -v hcl2json > /dev/null
 
 sentinel_bin="$root/sentinel-bin"
@@ -22,10 +19,7 @@ exit 0
 STUB
 chmod +x "$sentinel_bin/checkov"
 
-# Every hostile fixture below must be rejected before Checkov (or any
-# Helm/Kustomize renderer it would invoke) ever runs, regardless of which
-# reference form Checkov's own blocked-remote-repo detection would or would
-# not classify as remote.
+# Unsafe Terraform/Serverless sources must be rejected before Checkov runs.
 assert_blocked_before_checkov() {
   local fixture=$1 name=$2
   rm -f -- "$root/checkov-invoked.marker"
@@ -38,24 +32,6 @@ assert_blocked_before_checkov() {
   [[ "$(cat "$results/checkov-status.txt")" == 2 ]]
   [[ ! -e "$root/checkov-invoked.marker" ]]
 }
-
-assert_blocked_before_checkov tests/fixtures/iac-remote-helm remote-helm
-assert_blocked_before_checkov tests/fixtures/iac-remote-kustomize remote-kustomize
-assert_blocked_before_checkov tests/fixtures/iac-oci-helm oci-helm
-assert_blocked_before_checkov tests/fixtures/iac-escape-helm escape-helm
-assert_blocked_before_checkov tests/fixtures/iac-scp-kustomize scp-kustomize
-assert_blocked_before_checkov tests/fixtures/iac-absolute-kustomize absolute-kustomize
-assert_blocked_before_checkov tests/fixtures/iac-scp-kustomize-crds scp-kustomize-crds
-assert_blocked_before_checkov tests/fixtures/iac-absolute-kustomize-crds absolute-kustomize-crds
-
-# A local Helm chart that Checkov's own `helm template --dependency-update`
-# cannot render cleanly, and a local Kustomization that `kubectl kustomize`
-# cannot build, must both be caught before Checkov runs: Checkov itself
-# treats these as "no report" (Helm) or ignores the renderer's exit status
-# and stderr entirely (Kustomize), silently losing evidence rather than
-# reporting a scanner error.
-assert_blocked_before_checkov tests/fixtures/iac-invalid-helm invalid-helm
-assert_blocked_before_checkov tests/fixtures/iac-invalid-kustomize invalid-kustomize
 
 # Checkov's Terraform LocalPathLoader accepts any module source starting
 # with "./", "../", or "/" and is never skipped by download-external-modules:
@@ -97,6 +73,12 @@ results="$root/valid-fixtures"
 # silently scan zero files. Confirm the dummy key fixture is still detected.
 jq -e '[if type == "array" then .[] else . end
   | select(.check_type == "secrets") | .summary.failed] | add // 0 | . > 0' \
+  "$results/checkov-native.json" > /dev/null
+
+# Kubernetes-related frameworks remain excluded even when fixtures contain manifests.
+jq -e '[if type == "array" then .[] else . end
+  | select(.check_type == "argo_workflows" or .check_type == "helm" or
+           .check_type == "kubernetes" or .check_type == "kustomize")] | length == 0' \
   "$results/checkov-native.json" > /dev/null
 
 # A tracked GitHub Actions workflow must be scanned too (Checkov's
@@ -185,43 +167,6 @@ if ! timeout 20 "$runner" "$serverless_leak_dir" "$results" > "$root/serverless-
 fi
 [[ "$(cat "$results/checkov-status.txt")" == 0 ]]
 
-# Helm 4 validates values.schema.json by default and its JSON-schema
-# compiler resolves file:/http:/https: $ref loaders with no containment
-# check; Checkov invokes `helm template` itself, so this must be fixed for
-# both the pre-render check and Checkov's own invocation. Point a chart's
-# schema $ref at a FIFO outside the scan root: if either Helm invocation
-# actually resolves it, the read blocks forever and the run times out; with
-# --skip-schema-validation forced, schema resolution never happens and the
-# run completes normally.
-helm_schema_leak_dir="$root/helm-schema-leak"
-mkdir -p "$helm_schema_leak_dir/templates"
-schema_fifo="$root/helm-schema-leak.json"
-mkfifo "$schema_fifo"
-cat > "$helm_schema_leak_dir/Chart.yaml" <<EOF
-apiVersion: v2
-name: schema-leak
-version: 0.1.0
-EOF
-cat > "$helm_schema_leak_dir/values.schema.json" <<EOF
-{"\$ref": "file://$schema_fifo"}
-EOF
-cat > "$helm_schema_leak_dir/templates/pod.yaml" <<'EOF'
-apiVersion: v1
-kind: Pod
-metadata:
-  name: test
-EOF
-results="$root/helm-schema-leak-results"
-if ! timeout 20 "$runner" "$helm_schema_leak_dir" "$results" > "$root/helm-schema-leak.log" 2>&1; then
-  runner_status=$?
-  if ((runner_status == 124)); then
-    echo 'run-checkov.sh let Helm block resolving a values.schema.json ref outside the scan root' >&2
-    cat "$root/helm-schema-leak.log" >&2
-    exit 1
-  fi
-fi
-[[ "$(cat "$results/checkov-status.txt")" == 1 ]]
-
 stub_bin="$root/stub-bin"
 mkdir -p "$stub_bin"
 
@@ -251,5 +196,29 @@ if PATH="$stub_bin:$PATH" "$runner" tests/fixtures/iac "$results" > "$root/liter
   exit 1
 fi
 [[ "$(cat "$results/checkov-status.txt")" == 2 ]]
+
+# Preserve native Checkov diagnostics with both successful and failed scans.
+# The runner must not leak stderr into its caller log or lose it from evidence.
+for stub_exit in 0 2; do
+  cat > "$stub_bin/checkov" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' 'checkov-stderr-retention-marker' >&2
+printf '%s\n' '{"failed":0,"passed":0,"parsing_errors":0}'
+exit $stub_exit
+STUB
+  chmod +x "$stub_bin/checkov"
+  results="$root/stderr-exit-$stub_exit"
+  set +e
+  PATH="$stub_bin:$PATH" "$runner" tests/fixtures/iac "$results" > "$root/stderr-exit-$stub_exit.log" 2>&1
+  actual_status=$?
+  set -e
+  [[ "$actual_status" == "$stub_exit" ]]
+  [[ "$(cat "$results/checkov-status.txt")" == "$stub_exit" ]]
+  grep -Fx 'checkov-stderr-retention-marker' "$results/checkov.log" > /dev/null
+  if grep -Fq 'checkov-stderr-retention-marker' "$root/stderr-exit-$stub_exit.log"; then
+    echo 'Checkov stderr escaped the private scanner evidence log' >&2
+    exit 1
+  fi
+done
 
 printf 'run-checkov.sh fail-closed tests passed\n'

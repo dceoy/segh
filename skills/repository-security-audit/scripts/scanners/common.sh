@@ -8,7 +8,9 @@ checkout=$(cd -- "${1:?checkout is required}" && pwd)
 output=$(cd -- "${2:?output is required}" && pwd)
 skill_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 readonly checkout output skill_root
-MISE_CEILING_PATHS=$(dirname -- "$skill_root")
+repo_root=$(cd -- "$skill_root/../.." && pwd)
+readonly repo_root
+MISE_CEILING_PATHS=$(dirname -- "$repo_root")
 export MISE_CEILING_PATHS
 
 run_index_selection() {
