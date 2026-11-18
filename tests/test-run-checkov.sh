@@ -202,8 +202,8 @@ fi
 for stub_exit in 0 2; do
   cat > "$stub_bin/checkov" <<STUB
 #!/usr/bin/env bash
-printf '%s\\n' 'checkov-stderr-retention-marker' >&2
-printf '%s\\n' '{"failed":0,"passed":0,"parsing_errors":0}'
+printf '%s\n' 'checkov-stderr-retention-marker' >&2
+printf '%s\n' '{"failed":0,"passed":0,"parsing_errors":0}'
 exit $stub_exit
 STUB
   chmod +x "$stub_bin/checkov"
