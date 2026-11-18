@@ -8,8 +8,7 @@ on:
     branches:
       - main
   workflow_dispatch:
-permissions:
-  contents: read
+permissions: {}
 jobs:
   github-actions-lint-and-scan:
     permissions:
@@ -26,6 +25,8 @@ jobs:
       zizmor-min-confidence: high
       zizmor-advanced-security: false
   markdown-lint:
+    permissions:
+      contents: read
     uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@9e394d7c18b3a00fb853cd3c693cc4eeb5f0c825  # v2.3.0
     with:
       search-path: .

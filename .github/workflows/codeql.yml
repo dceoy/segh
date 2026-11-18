@@ -38,8 +38,7 @@ on:
       - '**/package-lock.json'
       - '**/yarn.lock'
   workflow_dispatch:
-permissions:
-  contents: read
+permissions: {}
 jobs:
   github-codeql-analysis:
     permissions:
