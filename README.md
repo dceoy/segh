@@ -34,7 +34,7 @@ Kubernetes workloads and Helm/Kustomize manifests are out of scope for IaC misco
 
 ### Optional OWASP dep-scan
 
-Set `use_dep_scan: true` in a private caller's reusable workflow invocation or through `workflow_dispatch`. The default is `false`; scheduled audits do not enable it automatically.
+Set `use-dep-scan: true` in a private caller's reusable workflow invocation or through `workflow_dispatch`. The default is `false`; scheduled audits do not enable it automatically.
 
 The optional runner exports a CycloneDX SBOM using Trivy and passes **only the SBOM**, not target source, Git history, or GitHub credentials, into a digest-pinned OWASP dep-scan v6 container. It writes native VDR/CSAF and logs into private raw scan artifacts. The dashboard reports a separate `dep-scan` scanner with `finding:vulnerability` labels where applicable. Missing or malformed evidence fails closed; a verified SBOM with no dependency components is `skipped`.
 
@@ -103,7 +103,7 @@ jobs:
       pull-requests: read
     uses: dceoy/segh/.github/workflows/organization-scan.yml@<full-commit-sha>
     with:
-      use_dep_scan: false # Set true for SBOM-based dependency analysis
+      use-dep-scan: false # Set true for SBOM-based dependency analysis
     secrets:
       SEGH_ORG_SCAN_APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
       SEGH_ORG_SCAN_APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
@@ -143,7 +143,7 @@ Pull-request CI runs:
 - a non-Kubernetes Checkov framework coverage regression gate and a complementary Trivy misconfiguration coverage run;
 - actionlint, zizmor, and ShellCheck;
 - YAML/JSON parsing and Aqua checksum verification; and
-- the real organization scanner in deterministic `validation_mode`.
+- the real organization scanner in deterministic `validation-mode`.
 
 Generic workflow correctness and action hardening are intentionally delegated to actionlint and zizmor rather than duplicated in custom validators.
 

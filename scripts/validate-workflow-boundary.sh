@@ -87,12 +87,12 @@ assert_value '[.jobs.scan.steps[] | select(.id == "checkout")][0].with.lfs' 'fal
 assert_value '[.jobs.scan.steps[] | select(.id == "checkout")][0].with.submodules' 'false' \
   'target checkout must not expand LFS or submodules'
 assert_value '[.jobs.scan.steps[] | select(.id == "checkout")][0].with.token' \
-  "\${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}" \
+  "\${{ inputs['validation-mode'] && github.token || steps.target-token.outputs.token }}" \
   'target checkout must use only the current target token'
 
 assert_value '[.jobs.scan.steps[] | select(.id == "scorecard")] | length' '1' 'Scorecard step is required'
 assert_value '[.jobs.scan.steps[] | select(.id == "scorecard")][0].env.SEGH_TARGET_SCORECARD_TOKEN' \
-  "\${{ inputs.validation_mode && github.token || steps.target-token.outputs.token }}" \
+  "\${{ inputs['validation-mode'] && github.token || steps.target-token.outputs.token }}" \
   'Scorecard must use only the target token'
 assert_value '.jobs.scan.env.SEGH_TARGET_SCORECARD_TOKEN // ""' '' \
   'target token must not be promoted to job environment'
