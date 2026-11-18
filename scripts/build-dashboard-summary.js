@@ -165,8 +165,10 @@ function parseTrivy(resultsDir, outcome) {
   }
 }
 
-function parseDepScan(resultsDir, outcome, enabled) {
-  if (!enabled) return result("dep-scan", "skipped");
+function parseDepScan(resultsDir, outcome, enabled, preflightOutcome) {
+  if (!enabled || (outcome === "skipped" && preflightOutcome !== "success")) {
+    return result("dep-scan", "skipped");
+  }
   if (outcome !== "success") return result("dep-scan", "error");
   const skipFile = path.join(resultsDir, "dep-scan-skipped.txt");
   if (exists(skipFile)) {
@@ -229,7 +231,7 @@ function buildSummary({resultsDir, env = process.env}) {
     parseShellcheck(resultsDir, outcomes.shellcheck),
     parseCheckov(resultsDir, outcomes.checkov),
     ...parseTrivy(resultsDir, outcomes.trivy),
-    parseDepScan(resultsDir, outcomes.depScan, env.DEPSCAN_ENABLED === "true"),
+    parseDepScan(resultsDir, outcomes.depScan, env.DEPSCAN_ENABLED === "true", outcomes.preflight),
   ];
 
   let overallStatus = "pass";

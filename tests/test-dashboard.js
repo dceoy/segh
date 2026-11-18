@@ -214,6 +214,8 @@ test("optional dep-scan classifies native VDR results and fails closed", () => {
     }).scanners.find((scanner) => scanner.name === "dep-scan");
     assert.deepEqual(selected({DEPSCAN_ENABLED: "false"}), {name: "dep-scan", status: "skipped", findings: 0});
     assert.equal(selected({DEPSCAN_OUTCOME: "failure"}).status, "error");
+    assert.equal(selected({DEPSCAN_OUTCOME: "skipped"}).status, "error");
+    assert.equal(selected({DEPSCAN_OUTCOME: "skipped", PREFLIGHT_OUTCOME: "failure"}).status, "skipped");
     assert.equal(selected().status, "error");
 
     const bom = {bomFormat: "CycloneDX", specVersion: "1.6", components: [{name: "dependency", version: "1.0"}]};
@@ -236,6 +238,34 @@ test("optional dep-scan classifies native VDR results and fails closed", () => {
     assert.deepEqual(selected(), {name: "dep-scan", status: "skipped", findings: 0});
     fs.writeFileSync(path.join(dir, "dep-scan-skipped.txt"), "unexpected\n");
     assert.equal(selected().status, "error");
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test("opt-in dep-scan preflight rejection preserves an incomplete dashboard", async () => {
+  const dir = tempDir();
+  try {
+    scannerFixture(dir);
+    const incomplete = buildSummary({resultsDir: dir, env: successEnv({
+      DEPSCAN_ENABLED: "true",
+      DEPSCAN_OUTCOME: "skipped",
+      PREFLIGHT_OUTCOME: "failure",
+      SCORECARD_OUTCOME: "skipped",
+      ZIZMOR_OUTCOME: "skipped",
+      ACTIONLINT_OUTCOME: "skipped",
+      SHELLCHECK_OUTCOME: "skipped",
+      CHECKOV_OUTCOME: "skipped",
+      TRIVY_OUTCOME: "skipped",
+    })});
+    assert.equal(incomplete.overall_status, "incomplete");
+    assert.ok(incomplete.scanners.every((scanner) => scanner.status === "skipped"));
+    writeInputs(dir, [TARGET], [[TARGET.id, incomplete]]);
+    const github = mockGitHub();
+    assert.deepEqual(await runPublisher(dir, github), [
+      {repository_id: TARGET.id, status: "incomplete", action: "created"},
+    ]);
+    assert.ok(github.calls.creates[0].labels.includes("scan:incomplete"));
   } finally {
     fs.rmSync(dir, {recursive: true, force: true});
   }
