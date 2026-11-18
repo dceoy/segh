@@ -47,7 +47,7 @@ else
         CHECKOV_SERVERLESS_DISABLE_VARS=true \
         checkov --directory "$scan_root" --config-file config/checkov.yml \
           --skip-download --skip-results-upload --output json
-    ) > "$results/checkov-native.json"
+    ) > "$results/checkov-native.json" 2>> "$results/checkov.log"
   status=$?
   set -e
 

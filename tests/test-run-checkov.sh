@@ -197,4 +197,28 @@ if PATH="$stub_bin:$PATH" "$runner" tests/fixtures/iac "$results" > "$root/liter
 fi
 [[ "$(cat "$results/checkov-status.txt")" == 2 ]]
 
+# Preserve native Checkov diagnostics with both successful and failed scans.
+# The runner must not leak stderr into its caller log or lose it from evidence.
+for stub_exit in 0 2; do
+  cat > "$stub_bin/checkov" <<STUB
+#!/usr/bin/env bash
+printf '%s\\n' 'checkov-stderr-retention-marker' >&2
+printf '%s\\n' '{"failed":0,"passed":0,"parsing_errors":0}'
+exit $stub_exit
+STUB
+  chmod +x "$stub_bin/checkov"
+  results="$root/stderr-exit-$stub_exit"
+  set +e
+  PATH="$stub_bin:$PATH" "$runner" tests/fixtures/iac "$results" > "$root/stderr-exit-$stub_exit.log" 2>&1
+  actual_status=$?
+  set -e
+  [[ "$actual_status" == "$stub_exit" ]]
+  [[ "$(cat "$results/checkov-status.txt")" == "$stub_exit" ]]
+  grep -Fx 'checkov-stderr-retention-marker' "$results/checkov.log" > /dev/null
+  if grep -Fq 'checkov-stderr-retention-marker' "$root/stderr-exit-$stub_exit.log"; then
+    echo 'Checkov stderr escaped the private scanner evidence log' >&2
+    exit 1
+  fi
+done
+
 printf 'run-checkov.sh fail-closed tests passed\n'
