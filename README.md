@@ -14,6 +14,7 @@ The shared, checksum-verified CLI toolchain is defined by repository-root `mise.
 - ShellCheck
 - Checkov, an independent IaC misconfiguration scanner (all non-Kubernetes default frameworks; Argo Workflows, Helm, Kubernetes, and Kustomize are excluded). Findings remain labeled `finding:misconfiguration`.
 - Trivy vulnerability, secret, and misconfiguration scanners (one filesystem invocation)
+- Optional OWASP dep-scan of a trusted Trivy-generated CycloneDX SBOM (disabled by default)
 
 OpenSSF Scorecard is informational evidence. A successful execution with parseable native Scorecard JSON is reported as `pass` regardless of aggregate or individual check scores; only execution or evidence-integrity failures become scanner errors. `segh` does not translate Scorecard scores into findings, thresholds, or finding labels.
 
@@ -30,6 +31,14 @@ Scanner-native collection is used only when it preserves the preflighted target 
 - **Trivy:** keep native `filesystem` collection for vulnerabilities, secrets, and misconfigurations in one invocation. Misconfiguration scanning excludes Helm and Kubernetes while preserving other IaC types. The trusted validator rejects target-owned suppressions and all Terraform/OpenTofu module declarations before potential downloads. Rejections leave all three categories as errors, not clean results.
 
 Kubernetes workloads and Helm/Kustomize manifests are out of scope for IaC misconfiguration scanning. Generic secret, dependency, and source scanners may still inspect those files.
+
+### Optional OWASP dep-scan
+
+Set `use_dep_scan: true` in a private caller's reusable workflow invocation or through `workflow_dispatch`. The default is `false`; scheduled audits do not enable it automatically.
+
+The optional runner exports a CycloneDX SBOM using Trivy and passes **only the SBOM**, not target source, Git history, or GitHub credentials, into a digest-pinned OWASP dep-scan v6 container. It writes native VDR/CSAF and logs into private raw scan artifacts. The dashboard reports a separate `dep-scan` scanner with `finding:vulnerability` labels where applicable. Missing or malformed evidence fails closed; a verified SBOM with no dependency components is `skipped`.
+
+This **SBOM-only mode does not perform source reachability analysis**. Vulnerability results may overlap Trivy. The separate Docker execution is intentional to preserve the prohibition on executing target-owned code. Docker is required on the organization scanner runner. The standalone `repository-security-audit` skill remains Docker-free and unchanged.
 
 The standalone `repository-security-audit` skill additionally runs
 OSV-Scanner, Semgrep OSS, and TruffleHog without verification or updates against the preflighted
@@ -93,6 +102,8 @@ jobs:
       issues: write
       pull-requests: read
     uses: dceoy/segh/.github/workflows/organization-scan.yml@<full-commit-sha>
+    with:
+      use_dep_scan: false # Set true for SBOM-based dependency analysis
     secrets:
       SEGH_ORG_SCAN_APP_ID: ${{ secrets.SEGH_ORG_SCAN_APP_ID }}
       SEGH_ORG_SCAN_APP_PRIVATE_KEY: ${{ secrets.SEGH_ORG_SCAN_APP_PRIVATE_KEY }}
@@ -102,7 +113,7 @@ The control repository must provide `SEGH_ORG_SCAN_APP_ID` and `SEGH_ORG_SCAN_AP
 
 ## Outputs
 
-Each target scan retains `repository-scan-<repository-id>` with immutable target metadata, scanner versions, preflight output, native scanner outputs/logs, and `summary.json`. Checkov contributes native `checkov.json`, stderr, and execution status evidence. Trivy retains a single `trivy.json` with vulnerability, secret, and misconfiguration results, which are summarized in separate scanner rows.
+Each target scan retains `repository-scan-<repository-id>` with immutable target metadata, scanner versions, preflight output, native scanner outputs/logs, and `summary.json`. Checkov contributes native `checkov.json`, stderr, and execution status evidence. Trivy retains a single `trivy.json` with vulnerability, secret, and misconfiguration results, which are summarized in separate scanner rows. When enabled, dep-scan additionally retains its CycloneDX SBOM input and VDR/CSAF evidence, with a separate dashboard row.
 
 A small `repository-summary-<repository-id>` artifact is used by the publisher in the same workflow run. The summary contains only repository identity needed to bind it to the current plan, the overall status, bounded scanner status/count rows, and the raw-evidence artifact name. Dashboard issues add current plan metadata and the private workflow-run link; raw source excerpts and scanner logs stay in artifacts.
 

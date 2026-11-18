@@ -26,6 +26,7 @@ const SCANNER_NAMES = [
   "trivy-vulnerability",
   "trivy-secret",
   "trivy-misconfiguration",
+  "dep-scan",
 ];
 
 function tempDir() {
@@ -198,6 +199,43 @@ test("combined Trivy evidence separates vulnerability, secret, and misconfigurat
       assert.equal(error.overall_status, "error");
       assert.ok(error.scanners.filter((s) => s.name.startsWith("trivy-")).every((s) => s.status === "error"));
     }
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test("optional dep-scan classifies native VDR results and fails closed", () => {
+  const dir = tempDir();
+  try {
+    scannerFixture(dir);
+    const selected = (overrides = {}) => buildSummary({
+      resultsDir: dir,
+      env: successEnv({DEPSCAN_ENABLED: "true", DEPSCAN_OUTCOME: "success", ...overrides}),
+    }).scanners.find((scanner) => scanner.name === "dep-scan");
+    assert.deepEqual(selected({DEPSCAN_ENABLED: "false"}), {name: "dep-scan", status: "skipped", findings: 0});
+    assert.equal(selected({DEPSCAN_OUTCOME: "failure"}).status, "error");
+    assert.equal(selected().status, "error");
+
+    const bom = {bomFormat: "CycloneDX", specVersion: "1.6", components: [{name: "dependency", version: "1.0"}]};
+    writeJson(path.join(dir, "dep-scan-input.cdx.json"), bom);
+    writeJson(path.join(dir, "dep-scan", "input.vdr.json"), {bomFormat: "CycloneDX", vulnerabilities: []});
+    assert.deepEqual(selected(), {name: "dep-scan", status: "pass", findings: 0});
+    writeJson(path.join(dir, "dep-scan", "input.vdr.json"), {
+      bomFormat: "CycloneDX", vulnerabilities: [{id: "CVE-fixture"}],
+    });
+    assert.deepEqual(selected(), {name: "dep-scan", status: "findings", findings: 1, category: "vulnerability"});
+    assert.equal(buildSummary({
+      resultsDir: dir, env: successEnv({DEPSCAN_ENABLED: "true", DEPSCAN_OUTCOME: "success"}),
+    }).overall_status, "findings");
+
+    writeJson(path.join(dir, "dep-scan", "input.vdr.json"), {bomFormat: "CycloneDX", vulnerabilities: "malformed"});
+    assert.equal(selected().status, "error");
+    fs.rmSync(path.join(dir, "dep-scan", "input.vdr.json"));
+    assert.equal(selected().status, "error");
+    fs.writeFileSync(path.join(dir, "dep-scan-skipped.txt"), "no-dependencies\n");
+    assert.deepEqual(selected(), {name: "dep-scan", status: "skipped", findings: 0});
+    fs.writeFileSync(path.join(dir, "dep-scan-skipped.txt"), "unexpected\n");
+    assert.equal(selected().status, "error");
   } finally {
     fs.rmSync(dir, {recursive: true, force: true});
   }

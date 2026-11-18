@@ -14,6 +14,11 @@ on:
         required: false
         type: string
         default: "4"
+      use_dep_scan:
+        description: Whether to perform optional SBOM-only OWASP dep-scan without executing target code
+        required: false
+        type: boolean
+        default: false
       dashboard_publication:
         description: Dashboard publication mode for reusable callers; use deferred when a final reconciler owns issue writes
         required: false
@@ -31,6 +36,11 @@ on:
         required: false
   workflow_dispatch:
     inputs:
+      use_dep_scan:
+        description: Whether to run SBOM-only OWASP dep-scan
+        required: false
+        type: boolean
+        default: false
       repository_limit:
         description: Maximum accepted GitHub App repository selection; larger selections fail closed
         required: false
@@ -668,6 +678,11 @@ jobs:
             --exit-code 1 --format json --output results/trivy.json \
             --skip-dirs _target/.git --skip-version-check --disable-telemetry _target \
             2> results/trivy.log
+      - name: Run OWASP dep-scan on generated SBOM
+        if: always() && steps.preflight.outcome == 'success' && inputs.use_dep_scan == true
+        id: dep-scan
+        continue-on-error: ${{ inputs.validation_mode }}
+        run: bash _trusted/scripts/run-dep-scan.sh _target results
       - name: Build bounded dashboard summary
         if: always() && steps.target.outcome == 'success' && steps.trusted.outcome == 'success'
         id: summary
@@ -682,6 +697,8 @@ jobs:
           SHELLCHECK_OUTCOME: ${{ steps.shellcheck.outcome }}
           CHECKOV_OUTCOME: ${{ steps.checkov.outcome }}
           TRIVY_OUTCOME: ${{ steps.trivy.outcome }}
+          DEPSCAN_ENABLED: ${{ inputs.use_dep_scan }}
+          DEPSCAN_OUTCOME: ${{ steps.dep-scan.outcome }}
           DASHBOARD_REPOSITORY: ${{ github.repository }}
         run: node _trusted/scripts/build-dashboard-summary.js results results/summary.json
       - name: Retain bounded dashboard summary

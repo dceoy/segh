@@ -165,6 +165,36 @@ function parseTrivy(resultsDir, outcome) {
   }
 }
 
+function parseDepScan(resultsDir, outcome, enabled) {
+  if (!enabled) return result("dep-scan", "skipped");
+  if (outcome !== "success") return result("dep-scan", "error");
+  const skipFile = path.join(resultsDir, "dep-scan-skipped.txt");
+  if (exists(skipFile)) {
+    try {
+      return fs.readFileSync(skipFile, "utf8") === "no-dependencies\n"
+        ? result("dep-scan", "skipped")
+        : result("dep-scan", "error");
+    } catch {
+      return result("dep-scan", "error");
+    }
+  }
+  try {
+    const bom = readJson(path.join(resultsDir, "dep-scan-input.cdx.json"));
+    const vdr = readJson(path.join(resultsDir, "dep-scan", "input.vdr.json"));
+    if (bom?.bomFormat !== "CycloneDX" || !Array.isArray(bom.components) ||
+        bom.components.length === 0 || vdr?.bomFormat !== "CycloneDX" ||
+        (vdr.vulnerabilities !== undefined && !Array.isArray(vdr.vulnerabilities))) {
+      return result("dep-scan", "error");
+    }
+    const findings = vdr.vulnerabilities?.length ?? 0;
+    return findings > 0
+      ? result("dep-scan", "findings", findings, "vulnerability")
+      : result("dep-scan", "pass");
+  } catch {
+    return result("dep-scan", "error");
+  }
+}
+
 function normalizeOutcome(value) {
   return ["success", "failure", "cancelled", "skipped"].includes(value) ? value : "skipped";
 }
@@ -189,6 +219,7 @@ function buildSummary({resultsDir, env = process.env}) {
     shellcheck: normalizeOutcome(env.SHELLCHECK_OUTCOME),
     checkov: normalizeOutcome(env.CHECKOV_OUTCOME),
     trivy: normalizeOutcome(env.TRIVY_OUTCOME),
+    depScan: normalizeOutcome(env.DEPSCAN_OUTCOME),
   };
 
   const scanners = [
@@ -198,6 +229,7 @@ function buildSummary({resultsDir, env = process.env}) {
     parseShellcheck(resultsDir, outcomes.shellcheck),
     parseCheckov(resultsDir, outcomes.checkov),
     ...parseTrivy(resultsDir, outcomes.trivy),
+    parseDepScan(resultsDir, outcomes.depScan, env.DEPSCAN_ENABLED === "true"),
   ];
 
   let overallStatus = "pass";
