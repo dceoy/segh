@@ -501,7 +501,7 @@ jobs:
         if: steps.checkout.outcome == 'success'
         id: tools
         continue-on-error: ${{ inputs['validation-mode'] }}
-        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           auto_update: true
           working_directory: _trusted
