@@ -101,29 +101,33 @@ url = "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanne
 url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/632251567"
 
 [[tools.scorecard]]
-version = "5.6.0"
+version = "5.7.0"
 backend = "aqua:ossf/scorecard"
 specifiers = ["latest"]
 
 [tools.scorecard."platforms.linux-arm64"]
-checksum = "sha256:3eacaceb3fdee6d0ba5df6ede45d1ada73321949029921bb63633802e8ec5951"
-url = "https://github.com/ossf/scorecard/releases/download/v5.6.0/scorecard_5.6.0_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/632187120"
+checksum = "sha256:4e1e472e629689aff5877ddf160e3df0d0bc9a94694342d91b17a5f3f83581e2"
+checksum_source = "mise-versions"
+url = "https://github.com/ossf/scorecard/releases/download/v5.7.0/scorecard_5.7.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/766054936"
 
 [tools.scorecard."platforms.linux-x64"]
-checksum = "sha256:19bde07129450cb65a95c6e3b9f34e034341579e6f0e241546ec3ae6efb2dd9a"
-url = "https://github.com/ossf/scorecard/releases/download/v5.6.0/scorecard_5.6.0_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/632187119"
+checksum = "sha256:3b08ec0a8681806c3e744ec9210742a502c7d66f06f25523b70f7128738235d3"
+checksum_source = "mise-versions"
+url = "https://github.com/ossf/scorecard/releases/download/v5.7.0/scorecard_5.7.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/766054941"
 
 [tools.scorecard."platforms.macos-arm64"]
-checksum = "sha256:1537183c0fcc6d8d1572aabc7a949091a36a2ee6be5bcb65f487cbb0a7b40381"
-url = "https://github.com/ossf/scorecard/releases/download/v5.6.0/scorecard_5.6.0_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/632187121"
+checksum = "sha256:5b9d68508787a16edadabc9559743d0ef8388b730dbccaaf3052788947050202"
+checksum_source = "mise-versions"
+url = "https://github.com/ossf/scorecard/releases/download/v5.7.0/scorecard_5.7.0_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/766054938"
 
 [tools.scorecard."platforms.macos-x64"]
-checksum = "sha256:6eb92048bc537810d383d7e28233b2f118e78b6fef9e47b2c427c4d01fc096ad"
-url = "https://github.com/ossf/scorecard/releases/download/v5.6.0/scorecard_5.6.0_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/632187117"
+checksum = "sha256:d996794804b497d8bb267b8e7c6d5d91416437218cfbae97ecf85c7030c103dc"
+checksum_source = "mise-versions"
+url = "https://github.com/ossf/scorecard/releases/download/v5.7.0/scorecard_5.7.0_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/766054939"
 
 [[tools.shellcheck]]
 version = "0.11.0"
