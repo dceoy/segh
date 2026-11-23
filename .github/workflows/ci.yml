@@ -15,7 +15,7 @@ jobs:
       contents: read
       actions: read
       security-events: write
-    uses: dceoy/gha-for-devops/.github/workflows/github-actions-lint-and-scan.yml@9e394d7c18b3a00fb853cd3c693cc4eeb5f0c825  # v2.3.0
+    uses: dceoy/gha-for-devops/.github/workflows/github-actions-lint-and-scan.yml@b7d9e0c64d9cd6d7198da715b11a4648373e9a23  # v2.3.4
     with:
       search-path: .github/workflows
       yamllint-search-path: .
@@ -27,14 +27,14 @@ jobs:
   markdown-lint:
     permissions:
       contents: read
-    uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@9e394d7c18b3a00fb853cd3c693cc4eeb5f0c825  # v2.3.0
+    uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@b7d9e0c64d9cd6d7198da715b11a4648373e9a23  # v2.3.4
     with:
       search-path: .
       use-oxfmt: false
   shell-lint:
     permissions:
       contents: read
-    uses: dceoy/gha-for-devops/.github/workflows/shell-lint.yml@9e394d7c18b3a00fb853cd3c693cc4eeb5f0c825  # v2.3.0
+    uses: dceoy/gha-for-devops/.github/workflows/shell-lint.yml@b7d9e0c64d9cd6d7198da715b11a4648373e9a23  # v2.3.4
     with:
       search-path: .
       file-names: |
@@ -58,7 +58,7 @@ jobs:
           lfs: false
           submodules: false
       - name: Install scanner tools
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
         with:
           auto_update: true
           working_directory: .
@@ -153,6 +153,6 @@ jobs:
       actions: read
       checks: read
       statuses: read
-    uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@9e394d7c18b3a00fb853cd3c693cc4eeb5f0c825  # v2.3.0
+    uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@b7d9e0c64d9cd6d7198da715b11a4648373e9a23  # v2.3.4
     with:
       unconditional: true
