@@ -180,33 +180,33 @@ url_api = "https://api.github.com/repos/aquasecurity/trivy/releases/assets/66225
 provenance = "cosign"
 
 [[tools.trufflehog]]
-version = "3.99.7"
+version = "3.100.0"
 backend = "aqua:trufflesecurity/trufflehog"
 specifiers = ["latest"]
 
 [tools.trufflehog."platforms.linux-arm64"]
-checksum = "sha256:3060f7c9f18c70afdc432984cacabdd1e9103729b5d5fee7fb6755a90d1c59d4"
+checksum = "sha256:aa61657049229ae523e8455fcbba87dff57b0a2ba6bdb391a38cf75e6d4016dd"
 checksum_source = "mise-versions"
-url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.7/trufflehog_3.99.7_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/671473558"
+url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.100.0/trufflehog_3.100.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/769530312"
 
 [tools.trufflehog."platforms.linux-x64"]
-checksum = "sha256:bdbea0508e439b144f49de14e775908de5f902f3d14ea7ae8354bae72b0b72ef"
+checksum = "sha256:b2d85eba59865e98f45c9fc9f77d2c6d62df529fdd5755af121304ea5a7cecbb"
 checksum_source = "mise-versions"
-url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.7/trufflehog_3.99.7_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/671473557"
+url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.100.0/trufflehog_3.100.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/769530307"
 
 [tools.trufflehog."platforms.macos-arm64"]
-checksum = "sha256:5540ef352fc88b1f580e91603689782c0107ca7d4a96c1aeb2714b3a98c766ce"
+checksum = "sha256:fb326527959216a858636640adcfb93720bb09a7d7e727237c1244cdb3af4ac3"
 checksum_source = "mise-versions"
-url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.7/trufflehog_3.99.7_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/671473559"
+url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.100.0/trufflehog_3.100.0_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/769530304"
 
 [tools.trufflehog."platforms.macos-x64"]
-checksum = "sha256:6bdbc7b0aaeefcb50275036b49be1a3561b3c2e5902879300339abf9c64914c0"
+checksum = "sha256:e69972286bf313d551ad976b75da5395dc660ff316e2db9660e841e328c96210"
 checksum_source = "mise-versions"
-url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.7/trufflehog_3.99.7_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/671473631"
+url = "https://github.com/trufflesecurity/trufflehog/releases/download/v3.100.0/trufflehog_3.100.0_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/assets/769530367"
 
 [[tools.uv]]
 version = "0.13.6"
